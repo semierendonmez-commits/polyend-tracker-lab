@@ -1,13 +1,152 @@
-# lab-gate simulator check (template): intro, main page, settings, sound.
-wait 3000
+# GRAF lab-gate check: boot, every page, patching on the matrix and the graph,
+# a module page, snapshots + song, MIDI in, play, sound, display budget.
+wait 3200
 budget
-peak-reset
-pad 5 down
-wait 300
-expect-sound 1000
-pad 5 up
-tap Config
+# Graph page (demo "First light" on a fresh card)
+tap F1
+tap Right
+tap Down
+tap EncPush            # empty cell -> Add page
+tap F4
+pad 3 tap              # pick a module type
+tap F8                 # add it
+tap F1
+budget
+# connect two modules by holding one pad and tapping another
+pad 0 down
+pad 2 tap
+pad 0 up
+# Matrix: tap a pin (patch), turn the amount, tap again (unpatch)
 tap F2
+pad 14 down
+enc 5
+pad 14 up
+pad 27 tap
+pad 27 tap
+tap Right
+tap Down
+tap Shift
+budget
+# Module page: knobs, parameter pads, keyboard pads
 tap F3
+pad 1 tap
+enc 3
+tap Right
+enc -2
+pad 30 down
+wait 200
+pad 30 up
+budget
+# Snapshots + song
+tap F5
+pad 0 tap
+pad 12 tap
+enc 1
+tap Down
+enc 1
 tap F8
 budget
+# Play page, keyboard
+tap F6
+pad 40 down
+wait 200
+pad 40 up
+tap F7
+budget
+# MIDI note into the MIDI-to-CV modules
+midi 0x90 60 100
+wait 100
+midi 0x80 60 0
+# Play: the demo patch's sequencer runs
+peak-reset
+tap Play
+wait 2500
+expect-sound 600
+tap F1
+wait 400
+tap F2
+wait 300
+tap F5
+pad 11 tap             # song on
+wait 1500
+expect-sound 600
+budget
+tap Play
+# Settings rows (Shell page) and back
+tap Config
+tap Down
+tap Config
+# 8-patch model demo and a RETICULUM demo
+tap F7
+pad 41 tap
+tap Insert
+peak-reset
+tap Play
+wait 2500
+expect-sound 300
+tap F1
+tap F8
+tap F2
+tap F6
+budget
+tap Play
+pad 37 tap
+tap Insert
+tap Play
+peak-reset
+wait 3000
+expect-sound 300
+tap F3
+budget
+tap Play
+# The MANUAL quick start, from an empty patch (it must keep working)
+tap F7
+tap Delete
+tap Delete
+tap F1
+# SEQ at pad 0
+pad 0 tap
+pad 0 tap
+pad 24 tap
+tap F8
+# VCO at pad 1
+pad 1 tap
+pad 1 tap
+pad 0 tap
+tap F8
+# ADSR at pad 13
+pad 13 tap
+pad 13 tap
+pad 16 tap
+tap F8
+# VCA at pad 2
+pad 2 tap
+pad 2 tap
+pad 10 tap
+tap F8
+# OUT at pad 3
+pad 3 tap
+pad 3 tap
+pad 34 tap
+tap F8
+# cables
+pad 0 down
+pad 1 tap
+pad 13 tap
+pad 0 up
+pad 1 down
+pad 2 tap
+pad 1 up
+pad 13 down
+pad 2 tap
+pad 13 up
+pad 2 down
+pad 3 tap
+pad 2 up
+peak-reset
+tap Play
+wait 2000
+expect-sound 1000
+tap F2
+budget
+tap Play

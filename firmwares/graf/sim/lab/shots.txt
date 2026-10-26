@@ -1,6 +1,82 @@
-wait 800
+# GRAF screenshots for MANUAL.md (make lab-shots).
+wait 1500
 panelshot docs/screenshots/intro.png
+wait 1800
+# First light demo, playing
+tap Play
+wait 1500
+panelshot docs/screenshots/graph.png
+tap F2
+pad 2 down
+wait 50
+panelshot docs/screenshots/matrix.png
+pad 2 up
+tap F1
+tap F3
+wait 300
+panelshot docs/screenshots/module-seq.png
+tap F4
+pad 47 tap
+panelshot docs/screenshots/add.png
+tap F5
+pad 11 tap
 wait 2500
-pad 5 down
-panelshot docs/screenshots/main.png
-pad 5 up
+panelshot docs/screenshots/snapshots.png
+tap F6
+pad 40 down
+wait 400
+panelshot docs/screenshots/play.png
+pad 40 up
+tap F7
+panelshot docs/screenshots/file.png
+tap Play
+# RETICULUM demo, its macro module page
+pad 37 tap
+tap Insert
+tap Play
+wait 2500
+tap F1
+panelshot docs/screenshots/graph-reticulum.png
+pad 2 tap
+tap F3
+wait 500
+panelshot docs/screenshots/module-rete.png
+tap Play
+# 8 patches demo
+tap F7
+pad 41 tap
+tap Insert
+tap F6
+tap Play
+wait 1500
+panelshot docs/screenshots/play-8patches.png
+tap Play
+# Settings: the GRAF rows at the end of the Shell's list
+tap Config
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Up
+tap Up
+tap Up
+tap Up
+tap Up
+panelshot docs/screenshots/settings.png
+tap Config
