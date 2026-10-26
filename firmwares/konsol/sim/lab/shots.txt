@@ -1,6 +1,59 @@
-wait 800
+# KONSOL screenshots for README / MANUAL (make lab-shots).
+wait 2300
 panelshot docs/screenshots/intro.png
+wait 1200
+# session: scene 4 running
+pad 44 tap
+wait 2600
+panelshot docs/screenshots/session.png
+# steps: track 1 (drums) scene 4, kick lane
+pad 36 tap
+tap Note
+wait 600
+panelshot docs/screenshots/steps.png
+# piano roll: track 4 (VAP chords) scene 4
+tap Pattern
+pad 39 tap
+tap Fx1
+wait 600
+panelshot docs/screenshots/piano_roll.png
+# player: track 3 acid, live
+tap Pattern
+pad 38 tap
+tap Fx2
+wait 1200
+panelshot docs/screenshots/player.png
+# sound: track 5 makam engine
+tap Pattern
+pad 40 tap
+tap Instr
+tap Down
+wait 300
+panelshot docs/screenshots/sound_makam.png
+# sound: track 3 ACD engine, filter section
+tap Pattern
+pad 38 tap
+tap Instr
+tap F2
+tap Down
+enc 3
+wait 300
+panelshot docs/screenshots/sound_acd.png
+# mixer
+tap Master
+wait 600
+panelshot docs/screenshots/mixer.png
+tap F2
+wait 300
+panelshot docs/screenshots/mixer_fx.png
+tap F1
+# arrangement, song playing
+tap Song
+tap F8
 wait 2500
-pad 5 down
-panelshot docs/screenshots/main.png
-pad 5 up
+panelshot docs/screenshots/song.png
+tap F3
+# project
+tap File
+wait 2500
+panelshot docs/screenshots/project.png

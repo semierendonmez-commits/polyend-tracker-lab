@@ -210,6 +210,11 @@ $(OUT)/lab_test: $(LAB_TESTS) $(LAB_SRCS) $(LAB_DEPS) lab/lab_test.h $(OUT)/libc
 lab-test: $(OUT)/lab_test
 	$<
 
+# KONSOL: the OpenTracker synth engines, effects, the generators and the synth UI tables.
+LAB_M4_EXTRA ?= $(wildcard $(SRC)/core/audio/engines/*.cpp) $(SRC)/core/audio/synth_params.cpp \
+                $(SRC)/core/audio/audio_tables.cpp $(SRC)/core/audio/effects.cpp $(SRC)/core/formats/patch_pb.cpp \
+                $(SRC)/core/ui/screen_synth_tables.cpp $(SRC)/core/ui/notes.cpp $(wildcard $(SRC)/core/gen/*.cpp) \
+                $(SRC)/core/model/fx.cpp
 LAB_M4_SRCS := lab/lab_bench.cpp $(LAB_SRCS) $(SRC)/core/formats/wav.cpp $(SRC)/core/formats/format_common.cpp \
                $(SRC)/core/fmath.cpp $(LAB_M4_EXTRA)
 $(BENCH_OUT)/lab_bench_m4.elf: $(LAB_M4_SRCS) $(LAB_DEPS) bench_m4/startup.c bench_m4/mps2.ld $(SRC)/hal/fast_mem.c

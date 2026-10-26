@@ -1,13 +1,197 @@
-# lab-gate simulator check (template): intro, main page, settings, sound.
-wait 3000
+# KONSOL lab-gate simulator check: boot, every page, clip / scene launching,
+# a generator written and run live, recording, MIDI, sound and the frame budget.
+wait 3200
 budget
+# session: launch scene 1 with the scene pad (col 9 = pad 8), play
 peak-reset
-pad 5 down
-wait 300
+pad 8 tap
+wait 2500
 expect-sound 1000
+# single clips: track 3 scene 2 (pad 14), track 1 scene 4 (pad 36)
+pad 14 tap
+pad 36 tap
+wait 2200
+# grid modes: mute (pad 21) latched, mute track 1, back to launch
+pad 21 tap
+pad 0 tap
+pad 21 tap
+pad 0 tap
+# performance pads (col 12): stutter + HP sweep held
+pad 11 down
+pad 23 down
+wait 400
+pad 11 up
+pad 23 up
+# scroll scenes down / up (col 11 rows 3, 2)
+pad 34 tap
+pad 22 tap
+enc 1
+enc -1
+budget
+# steps page: toggle steps, lock edits, length
+tap Note
+pad 1 tap
+pad 3 tap
+pad 5 down
+enc 3
 pad 5 up
-tap Config
 tap F2
-tap F3
+tap F7
+tap Right
+tap Left
+budget
+# piano roll: add notes, move, lengthen, quantise, undo
+tap Fx1
+tap EncPush
+tap Right
+tap Right
+tap Up
+tap EncPush
+tap F2
+enc 2
+tap F4
+enc 1
+tap F7
 tap F8
+tap Delete
+budget
+# player page: pick Acid on an empty clip, write, live on
+tap Pattern
+tap Right
+tap Right
+tap Down
+tap Down
+tap Down
+tap Down
+tap Fx2
+enc 1
+tap F1
+tap F3
+tap EncPush
+wait 2500
+tap F2
+tap F5
+budget
+# every player kind once
+tap Fx2
+tap Up
+tap Up
+enc 1
+tap F1
+enc 1
+tap F1
+enc 1
+tap F1
+enc 1
+tap F1
+enc 1
+tap F1
+enc 1
+tap F1
+enc 1
+tap F1
+enc 1
+tap F1
+enc 1
+tap F1
+budget
+# sound page: every engine of track 1, edit a parameter, play pads
+tap Instr
+tap Up
+enc 1
+pad 40 tap
+enc 1
+pad 41 tap
+enc 1
+pad 42 tap
+enc 1
+pad 43 tap
+enc 1
+pad 44 tap
+enc 1
+pad 45 tap
+enc 1
+pad 46 tap
+enc 1
+pad 47 tap
+enc 1
+pad 40 tap
+enc -9
+tap Down
+enc 3
+tap F2
+tap F2
+tap F5
+budget
+# mixer: strips, fader, sends, FX page
+tap Master
+enc -5
+tap Down
+enc 4
+tap Down
+enc 10
+tap F2
+tap Down
+enc 2
+tap F1
+pad 0 tap
+pad 0 tap
+budget
+# song page: append, play the song
+tap Song
+pad 1 down
+pad 1 up
+tap F4
+tap Right
+tap F3
+wait 1500
+tap F3
+budget
+# project page: tracks, save, open list, samples browser
+tap File
+tap F1
+tap Down
+enc 1
+tap F3
+tap F2
+tap F1
+tap SampleLoader
+tap F3
+tap F5
+budget
+# record into a playing clip from MIDI and pads
+tap Pattern
+tap Rec
+midi 0x90 60 100
+wait 200
+midi 0x80 60 0
+pad 40 tap
+tap Rec
+# keys overlay + help
+tap Aux
+pad 30 tap
+tap Aux
+tap Help
+tap Help
+# MIDI out on track 1
+tap Master
+tap Up
+tap Up
+tap Up
+tap Up
+tap Up
+tap F5
+tap Pattern
+pad 8 tap
+wait 2000
+expect-midi-notes 2
+peak-reset
+wait 1500
+expect-sound 1000
+budget
+# stop
+tap Play
+wait 800
+tap Play
+wait 500
 budget
