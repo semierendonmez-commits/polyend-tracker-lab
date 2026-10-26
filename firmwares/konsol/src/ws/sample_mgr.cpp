@@ -326,6 +326,31 @@ int Konsol::kitFromFolder(int t, const char* dir) {
     return n;
 }
 
+bool Konsol::padSample(int t, int pad, const char* path) {
+    KitPad* pads = kitPads(eng_[t].e[kEngKit]);
+    if (!pads || pad < 0 || pad >= kKitPads) return false;
+    const int s = poolLoad(path);
+    if (s < 0) return false;
+    KitPad& p = pads[pad];
+    const KitPad old = p;
+    p = KitPad();
+    p.slot = int16_t(s);
+    p.choke = old.choke;
+    const int nc = nameClass(path);
+    p.cls = uint8_t(nc >= 0 ? nc : (pool_.slot(s).nOn ? pool_.slot(s).cls[0] : kClsOther));
+    char stem[40];
+    std::snprintf(stem, sizeof stem, "%s", baseName(path));
+    char* dot = std::strrchr(stem, '.');
+    if (dot) *dot = 0;
+    for (char* q = stem; *q; ++q)
+        if (*q >= 'a' && *q <= 'z') *q = char(*q - 32);
+    std::snprintf(p.name, sizeof p.name, "%s", stem);
+    kitRefresh(eng_[t].e[kEngKit]);
+    gcSamples();
+    dirty_ = true;
+    return true;
+}
+
 // Kit record (shared by .kit files and the project's KIT chunk):
 //   char path[96]; u32 a, e; f32 tune, fine, gain, pan, decay, filter, res;
 //   u8 choke, rev, cls; char name[14]

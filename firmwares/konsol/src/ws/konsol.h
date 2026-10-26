@@ -221,6 +221,7 @@ private:
     void applyFxParams();
     int keyPitch(int pad) const;
     void openBrowser(int what);
+    void applyPick();
     void openKeyboard(int what);
 
     // ---- drawing (ui_draw.cpp) -------------------------------------------------

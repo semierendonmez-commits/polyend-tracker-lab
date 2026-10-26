@@ -152,25 +152,26 @@ sounds) and players (what plays) are chosen separately per track.
 
 ## DATAMATICS
 
-![DATAMATICS matrix](firmwares/datamatics/docs/screenshots/matrix.png)
+![DATAMATICS perform](firmwares/datamatics/docs/screenshots/perform.png)
 
-Data music in the spirit of Ryoji Ikeda's *datamatics* and *test pattern*:
-only sine tones, clicks, noise and single-sample impulses, on millisecond
-grids, played by data. Any file on the card becomes sequence data through
-seven reading modes (raw bytes, bits, image pixels from BMP/PGM, WAV, MIDI,
-text, or automatic); five built-in data sets play without a card.
+Data music in the spirit of Ryoji Ikeda's *datamatics* and *test pattern*: only sine tones,
+clicks, noise and single-sample impulses on millisecond grids, played by data. Any file on the
+card becomes sequence data through seven reading modes (raw bytes, bits, image pixels from
+BMP/PGM, WAV, MIDI, text, auto); five built-in data sets play without a card.
 
-- **8 streams** on 4 data slots, each with its own read order, a 1-2000 ms or
-  beat grid, threshold and sound; sines from 1 Hz to 21 kHz.
-- **Sample-accurate** starts and hard cuts, integer grid maths: no drift.
-- **Sections** in Ikeda's structure: PLAY, SCAN, DENSIFY, THIN, SILENCE, CUT,
-  FREEZE, arranged into a piece and cued from the pads or MIDI.
-- Black and white with one red accent; a full-screen waterfall view reacts to
-  the data and the sound.
+- **PERFORM** is the home page: stream mutes / solos, held fills, 8 throws (cut, freeze,
+  stutter, dense, thin, reverse, invert, octave), quantised section launches, 8 morphing
+  scenes, live scrubbing of a slot's data, and a performance recorder with replay.
+- **4 data slots, 8 streams**, each slot with its own colour everywhere (labels, matrix,
+  pads, mixer, visuals); patch a slot to streams with pads on the DATA page.
+- Sample-accurate starts and hard cuts; sections PLAY, SCAN, DENSIFY, THIN, SILENCE, CUT,
+  FREEZE as a live set or a chain.
+- Black and white with one red accent; five full-screen visual modes (stream waterfall,
+  barcode, transit, grid, spatial).
 
-| Waterfall view | Data browser |
+| Data slots and patching | Grid view |
 |---|---|
-| ![View](firmwares/datamatics/docs/screenshots/view.png) | ![Data](firmwares/datamatics/docs/screenshots/data.png) |
+| ![Data](firmwares/datamatics/docs/screenshots/data.png) | ![Grid](firmwares/datamatics/docs/screenshots/view-grid.png) |
 
 [Manual](firmwares/datamatics/MANUAL.md) · [Image](firmwares/datamatics/release/PolyendTrackerDATAMT.ptf)
 
