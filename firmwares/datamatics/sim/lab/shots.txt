@@ -1,6 +1,49 @@
-wait 800
+# DATAMATICS screenshots for MANUAL.md (make lab-shots). The card holds the
+# sample files of sim/lab/sd/Data (copied by the Makefile).
+wait 400
 panelshot docs/screenshots/intro.png
-wait 2500
-pad 5 down
-panelshot docs/screenshots/main.png
-pad 5 up
+wait 1600
+panelshot docs/screenshots/intro-name.png
+wait 1500
+# DATA: browse into Data/, load circle.bmp into slot 1
+tap F3
+tap Left
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap EncPush
+tap Down
+tap Down
+tap Down
+tap EncPush
+wait 400
+panelshot docs/screenshots/data.png
+# play the demo piece
+tap F1
+tap Play
+wait 4500
+panelshot docs/screenshots/matrix.png
+tap F2
+tap Down
+tap Down
+wait 300
+panelshot docs/screenshots/stream.png
+tap F4
+tap Right
+wait 1200
+panelshot docs/screenshots/sections.png
+tap F5
+wait 300
+panelshot docs/screenshots/mixer.png
+tap F1
+tap F8
+wait 5000
+panelshot docs/screenshots/view.png
+tap F8
+tap F6
+tap F7
+wait 300
+panelshot docs/screenshots/piece.png
+tap Play

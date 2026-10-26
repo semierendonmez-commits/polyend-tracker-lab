@@ -273,5 +273,6 @@ lab-gate: all
 lab-shots:
 	$(MAKE) -s -C sim lab LAB_FW=$(LAB_FW)
 	rm -rf build/sim/lab-shots-sd && mkdir -p build/sim/lab-shots-sd docs/screenshots
+	if [ -d sim/lab/sd ]; then cp -r sim/lab/sd/. build/sim/lab-shots-sd/; fi
 	build/sim/lab-sim --sd build/sim/lab-shots-sd --panel --script sim/lab/shots.txt
 .PHONY: lab-shots

@@ -11,7 +11,7 @@ finished WAV (sound sources, sequencing, arrangement, mixing, stems).
 | [FLIPPER](#flipper) | The song is a pinball machine: physics + Markov | [`PolyendTrackerFLIPPR.ptf`](firmwares/flipper/release/PolyendTrackerFLIPPR.ptf) | [MANUAL](firmwares/flipper/MANUAL.md) |
 | [BULUT](#bulut) | Granular clouds: live buffers, gestures, freeze | [`PolyendTrackerBULUTG.ptf`](firmwares/bulut/release/PolyendTrackerBULUTG.ptf) | [MANUAL](firmwares/bulut/MANUAL.md) |
 | [KONSOL](#konsol) | Clip/scene workstation: 8 tracks, 10 engines, generators | [`PolyendTrackerKONSOL.ptf`](firmwares/konsol/release/PolyendTrackerKONSOL.ptf) | [MANUAL](firmwares/konsol/MANUAL.md) |
-| DATAMATICS | Ryoji-Ikeda-style data music | in progress | |
+| [DATAMATICS](#datamatics) | Ryoji-Ikeda-style data music from any file on the card | [`PolyendTrackerDATAMT.ptf`](firmwares/datamatics/release/PolyendTrackerDATAMT.ptf) | [MANUAL](firmwares/datamatics/MANUAL.md) |
 | MAKAM | Turkish makam meets jungle | in progress | |
 | PLATFORM | Lua scripts and native apps from the SD card | in progress | |
 
@@ -146,6 +146,32 @@ sounds) and players (what plays) are chosen separately per track.
 | ![Piano roll](firmwares/konsol/docs/screenshots/piano_roll.png) | ![Mixer](firmwares/konsol/docs/screenshots/mixer.png) |
 
 [Manual](firmwares/konsol/MANUAL.md) · [Image](firmwares/konsol/release/PolyendTrackerKONSOL.ptf)
+
+---
+
+## DATAMATICS
+
+![DATAMATICS matrix](firmwares/datamatics/docs/screenshots/matrix.png)
+
+Data music in the spirit of Ryoji Ikeda's *datamatics* and *test pattern*:
+only sine tones, clicks, noise and single-sample impulses, on millisecond
+grids, played by data. Any file on the card becomes sequence data through
+seven reading modes (raw bytes, bits, image pixels from BMP/PGM, WAV, MIDI,
+text, or automatic); five built-in data sets play without a card.
+
+- **8 streams** on 4 data slots, each with its own read order, a 1-2000 ms or
+  beat grid, threshold and sound; sines from 1 Hz to 21 kHz.
+- **Sample-accurate** starts and hard cuts, integer grid maths: no drift.
+- **Sections** in Ikeda's structure: PLAY, SCAN, DENSIFY, THIN, SILENCE, CUT,
+  FREEZE, arranged into a piece and cued from the pads or MIDI.
+- Black and white with one red accent; a full-screen waterfall view reacts to
+  the data and the sound.
+
+| Waterfall view | Data browser |
+|---|---|
+| ![View](firmwares/datamatics/docs/screenshots/view.png) | ![Data](firmwares/datamatics/docs/screenshots/data.png) |
+
+[Manual](firmwares/datamatics/MANUAL.md) · [Image](firmwares/datamatics/release/PolyendTrackerDATAMT.ptf)
 
 ---
 

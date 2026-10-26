@@ -1,13 +1,104 @@
-# lab-gate simulator check (template): intro, main page, settings, sound.
-wait 3000
+# DATAMATICS lab-gate simulator check: boot, every page, load data files, play,
+# sound, MIDI out, budget. The gate's card is empty: the built-in data sets play.
+wait 3200
 budget
-peak-reset
-pad 5 down
-wait 300
-expect-sound 1000
-pad 5 up
-tap Config
+# every page, stopped
+tap F1
 tap F2
+tap Down
+enc 3
 tap F3
+wait 200
+tap F4
+tap Right
+enc 1
+tap F5
+enc -2
+tap F6
+tap Performance
+wait 200
+tap Performance
+budget
+# audition from the pads (stopped): sound
+peak-reset
+pad 0 tap 120
+pad 13 tap 120
+wait 200
+expect-sound 300
+# data page: load a built-in into slot 4 as bits, then raw
+tap F3
+tap Right
+tap Right
+tap Right
+tap F7
+tap F7
+tap Down
+tap EncPush
+wait 300
+tap F7
+tap F7
+tap F7
+tap F7
+tap F7
+tap F7
 tap F8
+wait 300
+# play the piece through the first sections
+peak-reset
+tap F1
+tap Play
+wait 4000
+expect-sound 1000
+budget
+tap F4
+wait 1500
+tap F7
+wait 2500
+tap F5
+wait 500
+tap F1
+tap F8
+wait 2500
+budget
+tap F8
+# section jump from the pads while playing
+pad 11 tap
+pad 23 tap
+wait 2000
+expect-sound 300
+# stop: silence after the tails
+tap Play
+wait 600
+peak-reset
+wait 400
+expect-silence 10
+# MIDI out of the streams (Config > MIDI out of the streams = one channel)
+tap Config
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+enc 1
+tap F8
+tap Play
+wait 2500
+tap Play
+expect-midi-notes 4
+# save the piece (F6 page, F7) and load it back
+tap F6
+tap F7
+wait 200
+tap F8
+wait 500
 budget
