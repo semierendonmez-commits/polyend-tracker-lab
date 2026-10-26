@@ -1,79 +1,184 @@
-# DATAMATICS lab-gate simulator check: boot, every page, load data files, play,
-# sound, MIDI out, budget. The gate's card is empty: the built-in data sets play.
+# DATAMATICS lab-gate simulator check. Only keys that exist on the original
+# Tracker (no Aux / Help / encoder push). The gate's card is empty: the
+# built-in data sets play; one WAV is made for the browser.
+mkdir Data
+mkwav Data/tone.wav 0.5 440
 wait 3200
 budget
-# every page, stopped
+# ---- every page (F1..F7 and the module keys), stopped ------------------------
 tap F1
 tap F2
-tap Down
 enc 3
 tap F3
-wait 200
+tap Down
+enc 2
 tap F4
-tap Right
-enc 1
+tap Down
 tap F5
 enc -2
 tap F6
-tap Performance
-wait 200
-tap Performance
+tap F7
+tap F7
+tap F7
+tap F7
+tap F7
+tap PERFORMANCE
+tap PATTERN
+tap SAMPLEEDITOR
+tap SAMPLELOADER
+tap SONG
+tap FILE
+tap SAMPLEPLAYBACK
+tap F1
 budget
-# audition from the pads (stopped): sound
+# ---- audition from the MATRIX pads (stopped): sound ----------------------------
+tap F2
 peak-reset
 pad 0 tap 120
 pad 13 tap 120
 wait 200
 expect-sound 300
-# data page: load a built-in into slot 4 as bits, then raw
-tap F3
-tap Right
-tap Right
-tap Right
-tap F7
-tap F7
-tap Down
-tap EncPush
+# ---- DATA: patch stream 6 to slot 3 with a pad, check it through the registry ---
+tap F4
+pad 29 tap
+expect-param s6.slot 2
+# slot 4 (@CHIRP) read as BITS (pad col 10 = next reading mode, twice: AUTO > RAW > BITS)
+pad 45 tap
+pad 45 tap
+wait 100
+budget
+# ---- the shared browser: open (F8), load the WAV into slot 1 -----------------
+tap Up
+tap Up
+tap Up
+tap F8
+expect-overlay browser
 wait 300
-tap F7
-tap F7
-tap F7
-tap F7
-tap F7
-tap F7
+budget
 tap F8
 wait 300
-# play the piece through the first sections
-peak-reset
+expect-overlay none
+wait 300
+# ---- PERFORM: hold slot 1 + press stream 8 = patch; play; mutes, fills, throws ---
 tap F1
+pad 8 down
+pad 7 down
+pad 7 up
+pad 8 up
+expect-param s8.slot 0
+peak-reset
 tap Play
-wait 4000
+wait 3000
 expect-sound 1000
 budget
-tap F4
-wait 1500
-tap F7
-wait 2500
-tap F5
-wait 500
-tap F1
-tap F8
+pad 0 tap
+expect-param s1.mute 1
+pad 0 tap
+pad 13 down
+pad 20 down
+wait 300
+budget
+pad 20 up
+pad 13 up
+pad 22 down
+pad 33 down
+wait 300
+pad 33 up
+pad 22 up
+# hold slot 3 + encoder = scrub its data
+pad 10 down
+enc 10
+pad 10 up
+expect-param pf.scrub3 0.1 0.02
+# section launch (quantised) and a scene recall
+pad 25 tap
+pad 38 tap
 wait 2500
 budget
+# ---- LABKIT views: PARAM pads, MAP, MACRO, MOD, HELP -------------------------
+tap INSTRPARAMS
+expect-overlay param
+wait 100
+budget
+tap INSTRPARAMS
+expect-overlay none
+press MASTER
+wait 700
+expect-overlay map
+budget
+release MASTER
+expect-overlay none
+press SHIFT
+tap INSTRPARAMS
+release SHIFT
+expect-overlay macro
+wait 100
+budget
+press SHIFT
+tap INSTRPARAMS
+release SHIFT
+press SHIFT
+tap MASTER
+release SHIFT
+expect-overlay mod
+wait 100
+budget
 tap F8
-# section jump from the pads while playing
-pad 11 tap
-pad 23 tap
-wait 2000
-expect-sound 300
-# stop: silence after the tails
+expect-overlay none
+press SHIFT
+tap CONFIG
+release SHIFT
+expect-overlay help
+wait 100
+budget
+tap F8
+expect-overlay none
+# ---- every page while playing, every VIEW mode -------------------------------
+tap F2
+wait 400
+tap F3
+wait 300
+tap F4
+wait 300
+tap F5
+wait 300
+tap F6
+wait 300
+tap F7
+wait 600
+tap F7
+wait 300
+tap F7
+wait 300
+tap F7
+wait 300
+tap F7
+wait 300
+budget
+# ---- stop: silence after the tails ---------------------------------------------
 tap Play
 wait 600
 peak-reset
 wait 400
 expect-silence 10
-# MIDI out of the streams (Config > MIDI out of the streams = one channel)
-tap Config
+# ---- performance recorder: Rec arms, Play records, stop keeps the take, F8 replay
+tap F1
+tap REC
+tap Play
+wait 500
+pad 1 tap
+pad 21 down
+wait 200
+pad 21 up
+wait 500
+tap Play
+wait 200
+tap F8
+tap Play
+wait 1500
+tap Play
+# ---- MIDI out of the streams (Config > MIDI out of the streams = one channel) ---
+tap CONFIG
 tap Down
 tap Down
 tap Down
@@ -95,9 +200,9 @@ tap Play
 wait 2500
 tap Play
 expect-midi-notes 4
-# save the piece (F6 page, F7) and load it back
-tap F6
-tap F7
+# ---- save the piece (FILE page: Insert) and load it back (F8) --------------------
+tap FILE
+tap INSERT
 wait 200
 tap F8
 wait 500

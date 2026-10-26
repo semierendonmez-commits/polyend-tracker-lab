@@ -41,6 +41,16 @@ float rateDivBeats(int idx);          // beats per step
 uint64_t beatsQ(uint32_t num, uint32_t den, float bpm);   // num/den beats in Q16 samples
 const char* rateDivName(int idx);     // "1/16"
 
+// Momentary performance throws (Engine::throws bits).
+enum Throw : uint32_t {
+    TH_CUT = 1, TH_FREEZE = 2, TH_STUTTER = 4, TH_DENSE = 8, TH_THIN = 16, TH_REVERSE = 32, TH_INVERT = 64, TH_OCT = 128
+};
+constexpr int kThrows = 8;
+const char* throwName(int i);   // "CUT", ...
+// Launch quantise (Engine::quant).
+enum Quant : uint8_t { Q_NOW, Q_BEAT, Q_BAR, Q_2BAR, Q_4BAR, Q_COUNT };
+const char* quantName(int q);
+
 // Sections.
 enum SecType : uint8_t { T_PLAY, T_SCAN, T_DENSIFY, T_THIN, T_SILENCE, T_CUT, T_FREEZE, T_COUNT };
 const char* secTypeName(int t);       // "SCAN"
@@ -108,7 +118,23 @@ public:
     int arrange = 1;        // follow the sections
     int endMode = 0;        // 0 loop, 1 stop at the end
     int midiMode = 0;       // 0 off, 1 one channel, 2 channel per stream
-    int jumpQuant = 0;      // 0 next bar, 1 immediately
+    int quant = Q_BAR;      // launch quantise (sections; the UI uses it for scenes)
+    int songMode = 0;       // 0 LIVE: a section repeats until another is launched, 1 CHAIN: in order
+
+    // performance (main writes; registry-bound ints are written before render)
+    volatile uint32_t throws = 0;     // TH_* bits held now
+    volatile uint32_t fillMask = 0;   // streams forced to play every unit
+    volatile uint32_t slotSolo = 0;   // slots soloed (only their streams sound)
+    float scrub[kSlots] = {};         // read offset per slot, 0..1 of the data
+    int stutterDiv = 3;               // rate division index of the stutter grid (1/32)
+    int freezeWin = 4;                // units a freeze loops
+    int throwDepth = 100;             // DENSE / THIN amount, %
+
+    // mod sources (audio writes, the LABKIT mod tick reads)
+    float srcData[kStreams] = {};     // last value read, 0..1
+    float srcDens = 0.0f;             // event density, 0..1
+    float srcSec = 0.0f;              // section progress, 0..1
+    float srcHit = 0.0f;              // 1 on any event, decays
 
     // feedback
     volatile int curSec = 0;
@@ -119,6 +145,8 @@ public:
     volatile bool wantStop = false;    // audio asks the main loop to stop (end of piece)
     volatile int jumpReq = -1;         // main: jump to section
     volatile int startSec = 0;         // section Play starts from
+    volatile int jumpQuantOnce = -1;   // main: quantise override for the next jump (replay)
+    volatile uint32_t playSerial = 0;  // +1 every time Play starts
     lab::SpscRing<EventRec, 256> events;
     volatile uint32_t eventsLost = 0;
 
@@ -126,6 +154,10 @@ public:
     uint64_t stepQ(int s, float bpm) const;
     bool streamAudible(int s) const;   // mute / solo
     bool anySolo() const;
+
+    // Sample clock (since Play) of the next launch boundary for quantise q.
+    uint32_t boundaryAfter(int q) const;
+    uint32_t unitsOffset(int s) const;   // slot scrub in units of the stream's slot
 
     // What the UI previews: the effective threshold and the scan offset now.
     int thrFor(int s) const;
@@ -168,6 +200,9 @@ private:
     uint64_t cutNextQ_ = 0;
     uint32_t cutK_ = 0;
     uint32_t freezeK_[kStreams] = {};
+    uint32_t thFreezeK_[kStreams] = {}, stutK_[kStreams] = {};
+    uint32_t lastThrows_ = 0;
+    uint32_t evBlock_ = 0;
     uint8_t lastNote_[kStreams] = {};
     uint8_t altPan_[kStreams] = {};
     bool wasPlaying_ = false;

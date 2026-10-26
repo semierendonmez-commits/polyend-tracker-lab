@@ -345,6 +345,7 @@ LAB_TEST(dm_pan_and_stems) {
 LAB_TEST(dm_sections_advance_and_silence) {
     Rig g;
     g.e.arrange = 1;
+    g.e.songMode = 1;   // CHAIN
     g.e.secCount = 3;
     g.e.sec[0] = Section{T_PLAY, 1, 0x01, 50};
     g.e.sec[1] = Section{T_SILENCE, 1, 0xFF, 0};
@@ -370,6 +371,7 @@ LAB_TEST(dm_sections_advance_and_silence) {
 LAB_TEST(dm_section_boundary_is_sample_exact) {
     Rig g;
     g.e.arrange = 1;
+    g.e.songMode = 1;
     g.e.secCount = 2;
     g.e.sec[0] = Section{T_SILENCE, 1, 0, 0};
     g.e.sec[1] = Section{T_PLAY, 1, 0x01, 50};
@@ -388,6 +390,7 @@ LAB_TEST(dm_section_boundary_is_sample_exact) {
 LAB_TEST(dm_densify_and_jump) {
     Rig g;
     g.e.arrange = 1;
+    g.e.songMode = 1;
     g.e.secCount = 2;
     g.e.sec[0] = Section{T_DENSIFY, 2, 0xFF, 100};
     g.e.sec[1] = Section{T_PLAY, 2, 0xFF, 50};
@@ -404,7 +407,7 @@ LAB_TEST(dm_densify_and_jump) {
     for (int s = 0; s < kStreams; ++s) allow += g.e.sectionAllows(s);
     CHECK(allow == 8);
     // immediate jump
-    g.e.jumpQuant = 1;
+    g.e.quant = Q_NOW;
     g.e.jumpReq = 1;
     g.run(2);
     CHECK(g.e.curSec == 1 && g.e.jumpReq == -1);
@@ -479,4 +482,184 @@ LAB_TEST(dm_workstation_files_on_card) {
     // power off writes last.dmx
     sh.powerOff();
     CHECK(fs.files.count("Lab/DATAMATICS/last.dmx") == 1);
+}
+
+// ---- round 2: performance, patch, scrub, LIVE song mode, scenes, recorder -----------------
+LAB_TEST(dm_live_mode_repeats_and_quantised_launch) {
+    Rig g;
+    g.e.arrange = 1;
+    g.e.songMode = 0;   // LIVE
+    g.e.secCount = 2;
+    g.e.sec[0] = Section{T_PLAY, 1, 0x01, 50};
+    g.e.sec[1] = Section{T_SILENCE, 1, 0xFF, 0};
+    g.run(int(3 * 88200 / 128));   // three bars: section 1 repeats
+    CHECK(g.e.curSec == 0);
+    // a launch with BAR quantise lands exactly on the next bar line
+    g.e.quant = Q_BAR;
+    g.e.jumpReq = 1;
+    const uint32_t now = g.e.clock;
+    const std::vector<uint32_t> h = g.run(int(88200 / 128) + 4);
+    const uint32_t bar = ((now + 88199u) / 88200u) * 88200u;
+    CHECK(g.e.curSec == 1);
+    bool after = false;
+    for (uint32_t x : h)
+        if (now + x >= bar) after = true;   // SILENCE: nothing at or after the bar line
+    CHECK(!after);
+    CHECK(g.e.boundaryAfter(Q_BAR) % 88200u == 0);
+}
+
+LAB_TEST(dm_throws) {
+    // CUT: no events while held
+    Rig c;
+    c.e.throws = TH_CUT;
+    CHECK(c.run(20).empty());
+    c.e.throws = 0;
+    CHECK(!c.run(20).empty());
+    // STUTTER: the read head stops (the same unit repeats)
+    Rig s;
+    s.run(60);
+    const uint32_t k = s.e.st[0].k;
+    s.e.throws = TH_STUTTER;
+    s.run(10);
+    CHECK(s.e.st[0].k == k);
+    // REVERSE: the read head runs backwards
+    s.e.throws = TH_REVERSE;
+    s.run(10);
+    CHECK(s.e.st[0].k < k);
+    // FREEZE: the head loops a window of freezeWin units
+    Rig f;
+    f.run(4);
+    f.e.freezeWin = 3;
+    f.e.throws = TH_FREEZE;
+    const uint32_t k0 = f.e.st[0].k;
+    for (int i = 0; i < 40; ++i) {
+        f.run(1);
+        CHECK(f.e.st[0].k >= k0 && f.e.st[0].k < k0 + 3);
+    }
+    // INVERT + threshold: only values under the threshold sound
+    Rig v;
+    for (int i = 0; i < 1024; ++i) v.e.slot[0].v[i] = (i & 1) ? 255 : 10;
+    v.e.st[0].p[P_THR] = 128;
+    v.e.throws = TH_INVERT;
+    const std::vector<uint32_t> h = v.run(40);
+    for (uint32_t x : h) CHECK(((x * 1000u) / 44100u) % 2 == 0);
+    // FILL: threshold 0 for the filled stream; DENSE: thresholds fall
+    Rig d;
+    d.e.st[0].p[P_THR] = 200;
+    d.e.fillMask = 1;
+    CHECK(d.e.thrFor(0) == 0);
+    d.e.fillMask = 0;
+    d.e.throwDepth = 50;
+    d.e.throws = TH_DENSE;
+    CHECK(d.e.thrFor(0) == 100);
+}
+
+LAB_TEST(dm_slot_scrub_and_solo) {
+    Rig g;
+    for (int i = 0; i < 1024; ++i) g.e.slot[0].v[i] = uint8_t(i & 255);
+    g.e.scrub[0] = 0.5f;
+    CHECK(g.e.unitsOffset(0) == 512);
+    CHECK(readIndex(g.e.st[0], g.e.slot[0], 0, g.e.scanOffset(0)) == 512);
+    g.e.slotSolo = 1u << 1;   // only streams on S2 sound: stream 0 reads S1
+    CHECK(!g.e.streamAudible(0));
+    CHECK(g.run(10).empty());
+}
+
+namespace {
+struct Booted {
+    MemStorage fs;
+    std::vector<uint8_t> mem = std::vector<uint8_t>(64u << 20);
+    lab::Shell sh;
+    Datamatics* w = nullptr;
+    Booted() {
+        lab::Hal h;
+        h.fs = &fs;
+        sh.init(h, mem.data(), uint32_t(mem.size()), "DATAMATICS");
+        w = static_cast<Datamatics*>(sh.workstation());
+    }
+    lab::kit::Registry& P() { return sh.context().params(); }
+    void play(int blocks) {
+        lab::Transport t;
+        t.playing = true;
+        t.bpm = 120.0f;
+        t.beatsPerSample = 120.0 / 60.0 / 44100.0;
+        float l[lab::kBlock], r[lab::kBlock];
+        sh.setPlaying(true);
+        for (int b = 0; b < blocks; ++b) {
+            for (uint32_t i = 0; i < lab::kBlock; ++i) l[i] = r[i] = 0.0f;
+            w->render(t, lab::AudioIn(), l, r);
+            w->update(uint32_t(b));
+        }
+    }
+};
+}  // namespace
+
+LAB_TEST(dm_registry_patch_and_scenes) {
+    Booted b;
+    Datamatics* w = b.w;
+    Engine& e = w->engine();
+    CHECK(b.P().count() > 200);
+    // the patch goes through the registry
+    w->assign(5, 2);
+    CHECK(e.st[5].p[P_SLOT] == 2);
+    CHECK(b.P().get(w->pid(5, P_SLOT)) == 2.0f);
+    // preset scenes exist; a scene stores and recalls (instant when stopped)
+    CHECK(w->sceneUsed(0) && w->sceneUsed(3));
+    b.P().set(w->pid(2, P_THR), 17.0f);
+    b.P().applyNow();
+    w->storeScene(6);
+    b.P().set(w->pid(2, P_THR), 200.0f);
+    b.P().applyNow();
+    w->recallScene(6, true);
+    b.P().applyNow();
+    CHECK(e.st[2].p[P_THR] == 17);
+    // the setter-bound duration lands in 0.1 ms units
+    b.P().set(w->pid(0, P_DUR), 2.5f);
+    b.P().applyNow();
+    CHECK(e.st[0].p[P_DUR] == 25);
+}
+
+LAB_TEST(dm_performance_record_replay_and_save) {
+    Booted b;
+    Datamatics* w = b.w;
+    Engine& e = w->engine();
+    w->setPerfArm(true);
+    b.play(10);   // Play started: the take begins
+    CHECK(w->perfRecording());
+    lab::Event ev;
+    ev.type = lab::Event::kPadDown;
+    ev.id = uint8_t(lab::padAt(0, 0));   // PERFORM: mute stream 1
+    w->onEvent(ev);
+    b.play(20);
+    ev.id = uint8_t(lab::padAt(8, 1));   // hold CUT
+    w->onEvent(ev);
+    CHECK(e.throws == TH_CUT);
+    ev.type = lab::Event::kPadUp;
+    w->onEvent(ev);
+    CHECK(e.throws == 0);
+    b.sh.setPlaying(false);
+    w->onTransport(false);
+    CHECK(!w->perfRecording());
+    CHECK(w->perfCount() >= 3);
+    // save the piece with the take, scenes and a macro route; load it into a fresh boot
+    b.P().set(w->pid(4, P_LEVEL), 33.0f);
+    b.sh.context().mod().route(lab::kit::kSrcMacro + 0, w->pid(4, P_THR), 0.5f);
+    CHECK(w->savePiece("Lab/DATAMATICS/Pieces/P.dmx"));
+    Booted c;
+    c.fs.files = b.fs.files;
+    CHECK(c.w->loadPiece("Lab/DATAMATICS/Pieces/P.dmx"));
+    c.w->finishLoadsNow();
+    CHECK(c.w->perfCount() == w->perfCount());
+    CHECK(c.w->engine().st[4].p[P_LEVEL] == 33);
+    CHECK(c.sh.context().mod().findRoute(lab::kit::kSrcMacro + 0, c.w->pid(4, P_THR)) >= 0);
+    CHECK(c.w->engine().st[0].p[P_MUTE] == 1);   // the mute was saved with the stream
+    // replay: Play restores the start snapshot (stream 1 unmuted), then the mute event follows
+    c.w->setPerfReplay(true);
+    c.w->engine().reset();
+    c.play(2);
+    c.P().applyNow();
+    CHECK(c.w->engine().st[0].p[P_MUTE] == 0);
+    c.play(60);
+    c.P().applyNow();
+    CHECK(c.w->engine().st[0].p[P_MUTE] == 1);
 }

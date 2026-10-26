@@ -43,6 +43,8 @@ const ParamInfo kParams[P_COUNT] = {
     {"SOLO", 0, 1, 0, kOffOn},
 };
 
+const char* const kThrowNames[kThrows] = {"CUT", "FREEZE", "STUTTER", "DENSE", "THIN", "REVERSE", "INVERT", "OCT+"};
+const char* const kQuantNames[Q_COUNT] = {"NOW", "BEAT", "BAR", "2 BARS", "4 BARS"};
 const char* const kSecNames[T_COUNT] = {"PLAY", "SCAN", "DENSIFY", "THIN", "SILENCE", "CUT", "FREEZE"};
 const char* const kSecShort[T_COUNT] = {"PLY", "SCN", "DNS", "THN", "SIL", "CUT", "FRZ"};
 
@@ -85,6 +87,8 @@ uint64_t beatsQ(uint32_t num, uint32_t den, float bpm) {
     return (uint64_t(num) * 60ull * 44100ull * 65536ull * 100ull) / (uint64_t(den) * b100);
 }
 const char* rateDivName(int i) { return kDivNames[i < 0 ? 0 : (i >= kRateDivs ? kRateDivs - 1 : i)]; }
+const char* throwName(int i) { return (i >= 0 && i < kThrows) ? kThrowNames[i] : "?"; }
+const char* quantName(int q) { return (q >= 0 && q < Q_COUNT) ? kQuantNames[q] : "?"; }
 const char* secTypeName(int t) { return (t >= 0 && t < T_COUNT) ? kSecNames[t] : "?"; }
 const char* secTypeShort(int t) { return (t >= 0 && t < T_COUNT) ? kSecShort[t] : "?"; }
 
@@ -200,14 +204,23 @@ void Engine::defaults() {
     set(7, {P_SLOT, 1, P_SYNC, 0, P_RATE_MS, 1, P_ORDER, O_HOP, P_SOUND, S_IMPULSE, P_THR, 128, P_PANMODE, PM_DATA,
             P_PAN, 80, P_LEVEL, 50, P_STEM, 0, P_MIDI, 0});
     const Section demo[] = {
-        {T_PLAY, 2, 0x05, 50},  {T_DENSIFY, 8, 0xFF, 60}, {T_SCAN, 4, 0x32, 100}, {T_CUT, 4, 0xFF, 50},
-        {T_SILENCE, 1, 0x00, 0}, {T_FREEZE, 2, 0xFF, 70}, {T_THIN, 8, 0xFF, 60},
+        {T_PLAY, 4, 0xFF, 50},  {T_DENSIFY, 8, 0xFF, 80}, {T_SCAN, 4, 0x32, 100}, {T_CUT, 4, 0xFF, 50},
+        {T_SILENCE, 1, 0x00, 0}, {T_FREEZE, 2, 0xFF, 70}, {T_THIN, 8, 0xFF, 60},  {T_PLAY, 4, 0x89, 50},
     };
     secCount = int(sizeof demo / sizeof demo[0]);
     for (int i = 0; i < kMaxSections; ++i) sec[i] = i < secCount ? demo[i] : Section();
     arrange = 1;
     endMode = 0;
     startSec = 0;
+    songMode = 0;
+    quant = Q_BAR;
+    for (int i = 0; i < kSlots; ++i) scrub[i] = 0.0f;
+    stutterDiv = 3;
+    freezeWin = 4;
+    throwDepth = 100;
+    throws = 0;
+    fillMask = 0;
+    slotSolo = 0;
 }
 
 bool Engine::anySolo() const {
@@ -218,6 +231,8 @@ bool Engine::anySolo() const {
 
 bool Engine::streamAudible(int s) const {
     if (st[s].p[P_MUTE]) return false;
+    const uint32_t ss = slotSolo;
+    if (ss && !((ss >> (st[s].p[P_SLOT] & 3)) & 1u)) return false;
     return anySolo() ? st[s].p[P_SOLO] != 0 : true;
 }
 
@@ -281,21 +296,47 @@ bool Engine::sectionAllows(int s) const {
 }
 
 int Engine::thrFor(int s) const {
+    if ((fillMask >> s) & 1u) return 0;
     int thr = st[s].p[P_THR];
-    if (!arrange) return thr;
-    const Section& c = sec[curSec];
-    const float d = float(c.depth) * 0.01f * secProgress;
-    if (c.type == T_DENSIFY) thr = int(float(thr) * (1.0f - d));
-    else if (c.type == T_THIN) thr = thr + int(float(256 - thr) * d);
+    if (arrange) {
+        const Section& c = sec[curSec];
+        const float d = float(c.depth) * 0.01f * secProgress;
+        if (c.type == T_DENSIFY) thr = int(float(thr) * (1.0f - d));
+        else if (c.type == T_THIN) thr = thr + int(float(256 - thr) * d);
+    }
+    const uint32_t th = throws;
+    const float td = float(throwDepth) * 0.01f;
+    if (th & TH_DENSE) thr = int(float(thr) * (1.0f - td));
+    if (th & TH_THIN) thr = thr + int(float(256 - thr) * td);
     return thr;
 }
 
+uint32_t Engine::unitsOffset(int s) const {
+    const Stream& x = st[s];
+    const int sl = x.p[P_SLOT] & 3;
+    float sc = scrub[sl];
+    if (!(sc > 0.0f)) return 0;
+    if (sc > 0.9999f) sc = 0.9999f;
+    const uint32_t total = unitCount(slot[sl], x.p[P_UNIT]);
+    return uint32_t(float(total) * sc);
+}
+
+uint32_t Engine::boundaryAfter(int q) const {
+    static const uint8_t num[Q_COUNT] = {0, 1, 4, 8, 16};
+    const uint32_t c = clock;
+    if (q <= Q_NOW || q >= Q_COUNT) return c;
+    const uint32_t len = uint32_t(beatsQ(num[q], 1, bpm_) >> 16);
+    if (!len) return c;
+    return ((c + len - 1) / len) * len;
+}
+
 uint32_t Engine::scanOffset(int s) const {
-    if (!arrange || sec[curSec].type != T_SCAN) return 0;
+    const uint32_t off = unitsOffset(s);
+    if (!arrange || sec[curSec].type != T_SCAN) return off;
     const Stream& x = st[s];
     const Slot& sl = slot[x.p[P_SLOT] & 3];
     const uint32_t total = unitCount(sl, x.p[P_UNIT]);
-    return uint32_t(float(total) * secProgress * float(sec[curSec].depth) * 0.01f);
+    return off + uint32_t(float(total) * secProgress * float(sec[curSec].depth) * 0.01f);
 }
 
 float Engine::panFor(int s, uint8_t val, uint8_t aux, uint32_t k) {
@@ -323,25 +364,39 @@ void Engine::fire(int s, int at, float velScale) {
         if (!audition) x.k = x.k + 1;
         return;
     }
+    const uint32_t th = audition ? 0u : throws;
     uint32_t k = x.k;
     if (audition) k = k + x.audOff;   // audition: the unit audOff steps ahead of the read head
+    else if (th & TH_STUTTER) k = stutK_[s];   // stutter: the same unit again
     const uint32_t idx = readIndex(x, sl, k, scanOffset(s));
     uint8_t val, aux;
     readValue(sl, p[P_UNIT], idx, val, aux);
-    if (!audition) {
-        uint32_t nk = k + 1;
+    if (!audition && !(th & TH_STUTTER)) {
+        uint32_t nk = (th & TH_REVERSE) ? k - 1u : k + 1u;
         if (arrange && sec[curSec].type == T_FREEZE) {
-            const uint32_t win = 1u + uint32_t(100 - sec[curSec].depth) / 6u;
-            nk = freezeK_[s] + ((nk - freezeK_[s]) % win);
+            const int32_t win = 1 + (100 - sec[curSec].depth) / 6;
+            int32_t d = int32_t(nk - freezeK_[s]) % win;
+            if (d < 0) d += win;
+            nk = freezeK_[s] + uint32_t(d);
+        }
+        if (th & TH_FREEZE) {
+            const int32_t win = freezeWin < 1 ? 1 : freezeWin;
+            int32_t d = int32_t(nk - thFreezeK_[s]) % win;
+            if (d < 0) d += win;
+            nk = thFreezeK_[s] + uint32_t(d);
         }
         x.k = nk;
     }
+    srcData[s] = float(val) * (1.0f / 255.0f);
     x.lastIdx = idx;
     x.lastVal = val;
     x.lastAux = aux;
     if (!audition) {
-        if (!sectionAllows(s) || !streamAudible(s)) return;
-        if (int(val) < thrFor(s) || (thrFor(s) > 0 && val == 0)) return;
+        if ((th & TH_CUT) || !sectionAllows(s) || !streamAudible(s)) return;
+        const int thr = thrFor(s);
+        bool hit = !(int(val) < thr || (thr > 0 && val == 0));
+        if (th & TH_INVERT) hit = !hit;
+        if (!hit) return;
     }
     // amplitude
     const float lvl = float(p[P_LEVEL]) * 0.01f;
@@ -359,7 +414,7 @@ void Engine::fire(int s, int at, float velScale) {
     pan = pan < -1.0f ? -1.0f : (pan > 1.0f ? 1.0f : pan);
     const uint32_t pph = uint32_t((pan + 1.0f) * 536870912.0f);   // 0..2^30 = 0..1/4 cycle, exact at the ends
     const float gl = sinPh(pph + 0x40000000u), gr = sinPh(pph);   // cos, sin
-    const float hz = mapFreq(p, val);
+    const float hz = mapFreq(p, val) * ((th & TH_OCT) ? 2.0f : 1.0f);
 
     Voice& v = v_[s][rr_[s]];
     rr_[s] = uint8_t((rr_[s] + 1) % kVoices);
@@ -387,6 +442,7 @@ void Engine::fire(int s, int at, float velScale) {
         v.env = 1.0f;
     }
     x.events = x.events + 1;
+    ++evBlock_;
     x.lastHz = hz;
     x.lastAmp = amp;
     EventRec e;
@@ -502,6 +558,7 @@ OT_FASTRUN_FN void Engine::renderVoices(int s, int a, int b) {
 }
 
 void Engine::startPlay() {
+    playSerial = playSerial + 1;
     now_ = 0;
     clock = 0;
     for (int s = 0; s < kStreams; ++s) {
@@ -569,13 +626,33 @@ OT_FASTRUN_FN void Engine::render(const lab::Transport& t, float* l, float* r, f
         }
     }
 
+    // throw edges: a CUT kills every voice on its first block, FREEZE and
+    // STUTTER remember where each read head was
+    const uint32_t th = throws;
+    const uint32_t rise = th & ~lastThrows_;
+    if (rise & TH_CUT) {
+        killAll();
+        for (int s = 0; s < kStreams; ++s) midiOff(s);
+    }
+    const uint32_t fall = lastThrows_ & ~th;
+    for (int s = 0; s < kStreams; ++s) {
+        if (rise & TH_FREEZE) thFreezeK_[s] = st[s].k;
+        if (rise & TH_STUTTER) stutK_[s] = st[s].k ? st[s].k - 1u : 0u;
+        // a stutter starts and ends at once: the stream's grid restarts at this block
+        if (((rise | fall) & TH_STUTTER) && wasPlaying_ && next_[s] > now_) next_[s] = now_;
+    }
+    lastThrows_ = th;
+    evBlock_ = 0;
+
     const uint64_t blockEnd = now_ + uint64_t(lab::kBlock) * kOne;
     const uint64_t barQ = beatsQ(4, 1, bpm_);
     const uint64_t sixteenthQ = barQ / 16;
     int pos = 0;
     if (playing) {
         uint64_t step[kStreams];
-        for (int s = 0; s < kStreams; ++s) step[s] = stepQ(s, bpm_);
+        int sd = stutterDiv < 0 ? 0 : (stutterDiv >= kRateDivs ? kRateDivs - 1 : stutterDiv);
+        const uint64_t stutQ = beatsQ(kDivNum[sd], kDivDen[sd], bpm_);
+        for (int s = 0; s < kStreams; ++s) step[s] = (th & TH_STUTTER) ? stutQ : stepQ(s, bpm_);
         for (int guard = 0; guard < 8192; ++guard) {
             // section progress (per segment start)
             const Section& c = sec[curSec];
@@ -588,10 +665,15 @@ OT_FASTRUN_FN void Engine::render(const lab::Transport& t, float* l, float* r, f
             uint64_t boundary = secEndQ_;
             const int jr = jumpReq;
             if (jr >= 0) {
-                if (jumpQuant) boundary = tq;
-                else {
-                    const uint64_t rel = tq - secStartQ_;
-                    const uint64_t nb = secStartQ_ + ((rel + barQ - 1) / barQ) * barQ;
+                static const uint8_t qBeats[Q_COUNT] = {0, 1, 4, 8, 16};
+                const int qo = jumpQuantOnce;
+                const int q0 = qo >= 0 ? qo : quant;
+                const int q = q0 < 0 ? 0 : (q0 >= Q_COUNT ? Q_COUNT - 1 : q0);
+                if (q == Q_NOW) {
+                    boundary = tq;
+                } else {
+                    const uint64_t qQ = beatsQ(qBeats[q], 1, bpm_);
+                    const uint64_t nb = ((tq + qQ - 1) / qQ) * qQ;   // grid from Play
                     boundary = nb < secEndQ_ ? nb : secEndQ_;
                 }
             }
@@ -614,6 +696,9 @@ OT_FASTRUN_FN void Engine::render(const lab::Transport& t, float* l, float* r, f
                 if (jr >= 0) {
                     nx = jr < secCount ? jr : 0;
                     jumpReq = -1;
+                    jumpQuantOnce = -1;
+                } else if (songMode == 0) {
+                    nx = curSec;   // LIVE: the section repeats until another is launched
                 } else {
                     nx = curSec + 1;
                     if (nx >= secCount) {
@@ -655,6 +740,7 @@ OT_FASTRUN_FN void Engine::render(const lab::Transport& t, float* l, float* r, f
         }
         now_ = blockEnd;
         clock = uint32_t(now_ >> 16);
+        srcSec = secProgress;
         // MIDI note-offs at the end of the event (block resolution)
         if (midiMode)
             for (int s = 0; s < kStreams; ++s) {
@@ -672,6 +758,10 @@ OT_FASTRUN_FN void Engine::render(const lab::Transport& t, float* l, float* r, f
             l[j] += stemL[i][j];
             r[j] += stemR[i][j];
         }
+    // mod sources
+    const float dTarget = evBlock_ >= 8 ? 1.0f : float(evBlock_) * 0.125f;
+    srcDens += (dTarget - srcDens) * 0.02f;
+    srcHit = evBlock_ ? 1.0f : srcHit * 0.9f;
 }
 
 }  // namespace dm
