@@ -1,6 +1,78 @@
-wait 800
+# PLATFORM screenshots for MANUAL.md (make lab-shots). Card from `make sim-card`.
+wait 1500
 panelshot docs/screenshots/intro.png
+wait 2000
+panelshot docs/screenshots/launcher.png
+# Hello
+pad 6 tap
+wait 400
+pad 20 down
+pad 30 down
+wait 500
+panelshot docs/screenshots/script-hello.png
+pad 20 up
+pad 30 up
+hold Aux 1200
+wait 300
+# Steps, playing
+pad 8 tap
+wait 300
+tap Play
+wait 2200
+panelshot docs/screenshots/script-steps.png
+press Shift
+tap Aux
+release Shift
+wait 300
+panelshot docs/screenshots/params.png
+press Shift
+tap Aux
+release Shift
+tap Play
+hold Aux 1200
+wait 300
+# Euclid
+pad 5 tap
 wait 2500
-pad 5 down
-panelshot docs/screenshots/main.png
-pad 5 up
+panelshot docs/screenshots/script-euclid.png
+hold Aux 1200
+wait 300
+# Drift
+pad 4 tap
+wait 9000
+panelshot docs/screenshots/script-drift.png
+hold Aux 1200
+wait 300
+# Arp
+pad 2 tap
+wait 300
+pad 24 down
+pad 28 down
+pad 31 down
+wait 1300
+panelshot docs/screenshots/script-arp.png
+pad 24 up
+pad 28 up
+pad 31 up
+hold Aux 1200
+wait 300
+# error page
+pad 3 tap
+wait 2500
+panelshot docs/screenshots/error.png
+tap F8
+wait 300
+# native app (SDK example)
+pad 0 tap
+wait 300
+pad 3 tap
+wait 1500
+panelshot docs/screenshots/app-drone.png
+hold Aux 1200
+wait 300
+pad 1 tap
+wait 300
+tap Play
+wait 1800
+panelshot docs/screenshots/app-stepseq.png
+tap Play

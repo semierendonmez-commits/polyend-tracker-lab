@@ -203,11 +203,15 @@ $(OUT)/usb_msc_driver_test: usb_msc_driver_test.cpp ../third_party/teensy3/usb_m
 LAB_SRCS     := $(shell find $(SRC)/lab $(SRC)/ws -name '*.cpp' 2>/dev/null)
 LAB_DEPS     := $(shell find $(SRC)/lab $(SRC)/ws -name '*.h' 2>/dev/null)
 LAB_TESTS    := $(filter-out lab/lab_bench.cpp,$(wildcard lab/*.cpp))
-LAB_CXXFLAGS := $(filter-out -Werror,$(CXXFLAGS)) -Ilab
+LAB_CXXFLAGS := $(filter-out -Werror,$(CXXFLAGS)) -Ilab -I../sdk/include
 $(OUT)/lab_test: $(LAB_TESTS) $(LAB_SRCS) $(LAB_DEPS) lab/lab_test.h $(OUT)/libcore.a
 	@mkdir -p $(dir $@)
-	$(CXX) $(LAB_CXXFLAGS) $(LAB_TESTS) $(LAB_SRCS) $(OUT)/libcore.a $(LDFLAGS) -o $@
+	$(CXX) $(LAB_CXXFLAGS) $(LAB_TESTS) $(LAB_SRCS) $(OUT)/libcore.a $(LDFLAGS) -ldl -o $@
+# PLATFORM: the tests load the SDK example (host .so) and the loader test .papp
 lab-test: $(OUT)/lab_test
+	$(MAKE) -s -C ../sdk host
+	$(MAKE) -s $(PAPP_OUT)/app.papp CROSS=$(CROSS)
+	python3 -I ../tools/embed_scripts.py --check
 	$<
 
 LAB_M4_SRCS := lab/lab_bench.cpp $(LAB_SRCS) $(SRC)/core/formats/wav.cpp $(SRC)/core/formats/format_common.cpp \
@@ -216,10 +220,41 @@ $(BENCH_OUT)/lab_bench_m4.elf: $(LAB_M4_SRCS) $(LAB_DEPS) bench_m4/startup.c ben
 	@mkdir -p $(dir $@)
 	$(M4_CC) $(M4_FLAGS) -c bench_m4/startup.c -o $(BENCH_OUT)/lab_startup_m4.o
 	$(M4_CC) $(M4_FLAGS) -std=gnu11 -c $(SRC)/hal/fast_mem.c -o $(BENCH_OUT)/lab_fast_mem_m4.o
-	$(M4_CXX) $(M4_FLAGS) -std=gnu++17 -fno-exceptions -fno-rtti -fno-use-cxa-atexit -DOT_BENCH_M4 -I$(SRC)/core -I$(SRC) -I. \
+	$(M4_CXX) $(M4_FLAGS) -std=gnu++17 -fno-exceptions -fno-rtti -fno-use-cxa-atexit -DOT_BENCH_M4 -I$(SRC)/core -I$(SRC) -I. -I../sdk/include \
 	    $(LAB_M4_SRCS) $(BENCH_OUT)/lab_startup_m4.o $(BENCH_OUT)/lab_fast_mem_m4.o -T bench_m4/mps2.ld -nostartfiles \
 	    --specs=nano.specs --specs=rdimon.specs -u _printf_float -Wl,--gc-sections -lm -o $@
 lab-bench-m4: $(BENCH_OUT)/lab_bench_m4.elf
 	qemu-system-arm -M mps2-an386 -nographic -icount shift=0 -semihosting-config enable=on,target=native \
 	    -kernel $<
 .PHONY: lab-test lab-bench-m4
+
+# ---------------------------------------------------------------------------
+# PLATFORM: native app loader test under QEMU (tests/papp/loader_qemu.cpp).
+# The SDK builds tests/papp into a .papp; the test embeds it, loads it into
+# the emulated PSRAM twice (two addresses), relocates, runs it, checks results.
+PAPP_OUT := ../build/sdk-test
+$(PAPP_OUT)/app.papp: papp/app/testapp.cpp ../sdk/include/platform_app.h ../sdk/include/platform_app.hpp ../tools/mkpapp.py \
+                       ../sdk/ld/papp.ld ../sdk/runtime/plat_rt.c ../sdk/runtime/plat_rt_cxx.cpp
+	$(MAKE) -s -C ../sdk APPS=$(abspath papp/app) OUT=$(abspath $(PAPP_OUT)) CROSS=$(CROSS)
+$(PAPP_OUT)/papp_data.c: $(PAPP_OUT)/app.papp ../tools/bin2c.py
+	python3 -I ../tools/bin2c.py $< gTestPapp $@
+PAPP_QEMU_SRCS := papp/loader_qemu.cpp $(SRC)/ws/native.cpp $(SRC)/ws/papp.cpp $(SRC)/lab/canvas.cpp $(SRC)/lab/shell.cpp \
+                  $(SRC)/core/formats/wav.cpp $(SRC)/core/formats/format_common.cpp $(SRC)/core/fmath.cpp
+# STATION=<path to a station .papp> adds a real workstation image to the test.
+STATION ?=
+$(BENCH_OUT)/papp_qemu.elf: $(PAPP_QEMU_SRCS) $(PAPP_OUT)/papp_data.c $(LAB_DEPS) bench_m4/startup.c bench_m4/mps2.ld $(STATION)
+	@mkdir -p $(dir $@)
+	$(M4_CC) $(M4_FLAGS) -c bench_m4/startup.c -o $(BENCH_OUT)/papp_startup_m4.o
+	$(M4_CC) $(M4_FLAGS) -c $(PAPP_OUT)/papp_data.c -o $(BENCH_OUT)/papp_data_m4.o
+	rm -f $(BENCH_OUT)/papp_station_m4.o
+	$(if $(STATION),python3 -I ../tools/bin2c.py $(STATION) gStationPapp $(PAPP_OUT)/station_data.c && \
+	    $(M4_CC) $(M4_FLAGS) -c $(PAPP_OUT)/station_data.c -o $(BENCH_OUT)/papp_station_m4.o)
+	$(M4_CXX) $(M4_FLAGS) -std=gnu++17 -fno-exceptions -fno-rtti -fno-use-cxa-atexit -DOT_BENCH_M4 -I$(SRC)/core -I$(SRC) -I. \
+	    -I../sdk/include $(PAPP_QEMU_SRCS) $(BENCH_OUT)/papp_data_m4.o $(if $(STATION),$(BENCH_OUT)/papp_station_m4.o) \
+	    $(BENCH_OUT)/papp_startup_m4.o -T bench_m4/mps2.ld \
+	    -nostartfiles --specs=nano.specs --specs=rdimon.specs -u _printf_float -Wl,--gc-sections -lm -o $@
+papp-qemu: $(BENCH_OUT)/papp_qemu.elf
+	qemu-system-arm -M mps2-an386 -nographic -icount shift=0 -semihosting-config enable=on,target=native \
+	    -kernel $< | tee $(BENCH_OUT)/papp_qemu.txt
+	@grep -q "papp-qemu: PASS" $(BENCH_OUT)/papp_qemu.txt
+.PHONY: papp-qemu

@@ -13,7 +13,7 @@ finished WAV (sound sources, sequencing, arrangement, mixing, stems).
 | [KONSOL](#konsol) | Clip/scene workstation: 8 tracks, 10 engines, generators | [`PolyendTrackerKONSOL.ptf`](firmwares/konsol/release/PolyendTrackerKONSOL.ptf) | [MANUAL](firmwares/konsol/MANUAL.md) |
 | [DATAMATICS](#datamatics) | Ryoji-Ikeda-style data music from any file on the card | [`PolyendTrackerDATAMT.ptf`](firmwares/datamatics/release/PolyendTrackerDATAMT.ptf) | [MANUAL](firmwares/datamatics/MANUAL.md) |
 | [MAKAM](#makam) | Turkish makam meets jungle: usul-cut breaks, microtonal bass and lead | [`PolyendTrackerMAKAMJ.ptf`](firmwares/makam/release/PolyendTrackerMAKAMJ.ptf) | [MANUAL](firmwares/makam/MANUAL.md) |
-| PLATFORM | Lua scripts and native apps from the SD card | in progress | |
+| [PLATFORM](#platform) | Lua scripts and native apps from the SD card (norns-style) | [`PolyendTrackerPLATFM.ptf`](firmwares/platform/release/PolyendTrackerPLATFM.ptf) | [MANUAL](firmwares/platform/MANUAL.md) |
 
 > **Status: v0.1, not yet tested on a real Tracker.** Every image passed the
 > lab gate (below) in the simulator and under QEMU. Keep a stock image in
@@ -202,6 +202,35 @@ cycle) is a clock dial, the **makam** a ring of perdes at their comma positions.
 | ![Makam](firmwares/makam/docs/screenshots/makam-ring.png) | ![Seyir](firmwares/makam/docs/screenshots/seyir.png) |
 
 [Manual](firmwares/makam/MANUAL.md) · [Image](firmwares/makam/release/PolyendTrackerMAKAMJ.ptf)
+
+---
+
+## PLATFORM
+
+![PLATFORM launcher](firmwares/platform/docs/screenshots/launcher.png)
+
+A platform instead of an instrument: it runs **Lua scripts** and **native
+apps** from the SD card, like monome norns runs scripts.
+
+- **Launcher:** cards for every script and app on the card. It reopens the
+  last one at power-on; hold any key during the countdown for a safe boot.
+- **Lua 5.4** with a norns-like API: `init`, `redraw`, `key`, `enc`, `pad`,
+  `screen.*`, `grid`, `clock.run/sync/sleep`, `midi`, `params`, `metro`,
+  `util`, `music`. A script error shows a readable error page, and an endless
+  loop is stopped. It never freezes the Tracker.
+- **Voice engine** for scripts: 16 voices (anti-aliased waves, noise, FM,
+  sample, grain, click), filter, envelopes, delay and reverb. Notes from Lua
+  clocks land on the exact sample.
+- **Native apps** (`.papp`): compiled C++ loaded from the card at full speed,
+  with an SDK and two examples (drone, step sequencer). Native apps have no
+  memory protection: a faulty one needs a power cycle (safe boot recovers).
+- **Five example scripts**: hello, steps, drift, euclid, arp.
+
+| Lua script running | Error page |
+|---|---|
+| ![Euclid](firmwares/platform/docs/screenshots/script-euclid.png) | ![Error](firmwares/platform/docs/screenshots/error.png) |
+
+[Manual](firmwares/platform/MANUAL.md) · [Image](firmwares/platform/release/PolyendTrackerPLATFM.ptf)
 
 ---
 

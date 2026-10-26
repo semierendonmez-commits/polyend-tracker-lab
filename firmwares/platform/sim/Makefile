@@ -12,9 +12,9 @@ ifeq ($(HAVE_ALSA),1)
 ALSA_CFLAGS := -DOT_SIM_ALSA $(shell pkg-config --cflags alsa)
 ALSA_LIBS   := $(shell pkg-config --libs alsa)
 endif
-CXXFLAGS := -std=c++17 -O2 -g -Wall -Wextra -Wno-format-truncation -MMD -I$(ROOT)/src/core -I$(ROOT)/src -Isrc \
+CXXFLAGS := -std=c++17 -O2 -g -Wall -Wextra -Wno-format-truncation -MMD -I$(ROOT)/src/core -I$(ROOT)/src -I$(ROOT)/sdk/include -Isrc \
             $(SDL_CFLAGS) $(ALSA_CFLAGS)
-LDLIBS   := $(SDL_LIBS) $(ALSA_LIBS) -lpthread
+LDLIBS   := $(SDL_LIBS) $(ALSA_LIBS) -lpthread -ldl
 
 CORE_SRCS := $(shell find $(ROOT)/src/core -name '*.cpp')
 CORE_OBJS := $(patsubst $(ROOT)/src/%.cpp,$(OUT)/obj/%.o,$(CORE_SRCS))
@@ -74,7 +74,7 @@ $(BIN): $(CORE_OBJS) $(SIM_OBJS)
 
 lab: $(LAB_BIN)
 $(LAB_BIN): $(CORE_OBJS) $(LAB_OBJS) $(LAB_SIM_OBJS)
-	$(CXX) $^ $(LDLIBS) -o $@
+	$(CXX) $^ $(LDLIBS) -rdynamic -o $@
 $(OUT)/obj/sim/lab_main.o: CXXFLAGS += -DLAB_FW_NAME=\"$(LAB_FW)\"
 
 fonts:
@@ -132,5 +132,5 @@ testsongs-check: $(BIN)
 clean:
 	rm -rf $(OUT)
 
--include $(CORE_OBJS:.o=.d) $(SIM_OBJS:.o=.d) $(JPEG_CHECK_OBJS:.o=.d) $(VISUAL_DIFF_OBJS:.o=.d)
+-include $(CORE_OBJS:.o=.d) $(SIM_OBJS:.o=.d) $(LAB_OBJS:.o=.d) $(OUT)/obj/sim/lab_main.d $(JPEG_CHECK_OBJS:.o=.d) $(VISUAL_DIFF_OBJS:.o=.d)
 .PHONY: all clean fonts check visual-diff testsongs-check lab

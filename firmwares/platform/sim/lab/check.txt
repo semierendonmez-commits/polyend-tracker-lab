@@ -1,13 +1,129 @@
-# lab-gate simulator check (template): intro, main page, settings, sound.
-wait 3000
+# PLATFORM lab-gate simulator check (make lab-gate). The card was filled by
+# `make sim-card`: examples/scripts, examples/test and the SDK apps (.so).
+# Launcher order: Drone, StepSeq (apps), then Arp Broken Drift Euclid Hello Spin Steps.
+wait 3500
 budget
+# ---- every example script opens, plays, sounds, stays in budget ----
+# Arp: hold three pads -> MIDI notes out + its voice
+pad 2 tap
+wait 400
 peak-reset
-pad 5 down
+pad 24 down
+pad 28 down
+pad 31 down
+wait 1500
+expect-sound 300
+expect-midi-notes 4
+pad 24 up
+pad 28 up
+pad 31 up
+budget
+press Shift
+tap Help
+release Shift
 wait 300
-expect-sound 1000
-pad 5 up
+# Drift: generative, sounds on its own
+pad 4 tap
+peak-reset
+wait 8000
+expect-sound 100
+budget
+hold Aux 1200
+wait 300
+# Euclid: runs without the transport
+pad 5 tap
+peak-reset
+wait 2500
+expect-sound 300
+budget
+press Shift
+tap Help
+release Shift
+wait 300
+# Hello: pads play sines
+pad 6 tap
+wait 400
+peak-reset
+pad 20 down
+wait 500
+expect-sound 300
+pad 20 up
+budget
+hold Aux 1200
+wait 300
+# Steps: needs Play
+pad 8 tap
+wait 300
+tap Play
+peak-reset
+wait 2500
+expect-sound 300
+budget
+# its params page
+press Shift
+tap Aux
+release Shift
+wait 200
+tap Down
+enc 3
+budget
+press Shift
+tap Aux
+release Shift
+tap Play
+press Shift
+tap Help
+release Shift
+wait 300
+# ---- native apps (SDK examples, loaded from the card) ----
+pad 0 tap
+wait 400
+peak-reset
+pad 3 tap
+wait 1500
+expect-sound 300
+budget
+hold Aux 1200
+wait 300
+pad 1 tap
+wait 300
+tap Play
+peak-reset
+wait 2000
+expect-sound 300
+tap Play
+budget
+press Shift
+tap Help
+release Shift
+wait 300
+# ---- failures stay contained ----
+# a runtime error -> error page, sound stops, back to the launcher
+pad 3 tap
+wait 2500
+budget
+tap F8
+wait 300
+# an endless loop -> stopped by the instruction limit
+pad 7 tap
+wait 300
+pad 0 tap
+wait 500
+budget
+tap F8
+wait 300
+# the launcher still works: open Hello again and play
+pad 6 tap
+wait 300
+peak-reset
+pad 10 down
+wait 500
+expect-sound 300
+pad 10 up
+# Config / settings pages over a running script
 tap Config
 tap F2
 tap F3
+tap F1
 tap F8
 budget

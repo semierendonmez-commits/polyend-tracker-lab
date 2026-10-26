@@ -84,7 +84,7 @@ DEFS      := -D__MK66FX1M0__ -DF_CPU=180000000 -DUSB_MIDI_SERIAL -DLAYOUT_US_ENG
              -DF_BUS=90000000 -DSERIAL5_TX_BUFFER_SIZE=512 -DSERIAL5_RX_BUFFER_SIZE=512 \
              -DTEENSYDUINO=159 -DARDUINO=10819 -DOT_VERSION=\"$(VERSION)\" -DOT_TARGET_DEVICE=1 \
              -DOT_SDRAM_CACHE=$(OT_SDRAM_CACHE) -DOT_GAMES=$(OT_GAMES) -DOT_FASTRUN=$(OT_FASTRUN) -DOT_USB_MSC=$(OT_USB_MSC) -DOT_FONTS_COMPRESSED=1 -DLAB_FW_NAME=\"$(LAB_FW)\" $(USB_ID) $(DEFS_EXTRA)
-INCS      := -I$(CORE) -Isrc -Isrc/core -Isrc/hal -Ithird_party/fatfs
+INCS      := -I$(CORE) -Isrc -Isrc/core -Isrc/hal -Ithird_party/fatfs -Isdk/include
 COMMON    := $(CPUFLAGS) $(DEFS) $(INCS) -O2 -g -ffunction-sections -fdata-sections -Wall -MMD
 CFLAGS    := $(COMMON) -std=gnu11
 CXXFLAGS  := $(COMMON) -std=gnu++17 -fno-exceptions -fno-rtti -felide-constructors -Wno-psabi
@@ -123,7 +123,7 @@ O2_KEEP   := src/core/app/app.cpp src/core/app/capture.cpp src/core/app/render.c
              src/core/games/session.cpp \
              src/hal/ft81x.cpp src/hal/sdhc.cpp src/hal/sdram_cache.cpp src/hal/audio_sgtl5000.cpp \
              src/hal/diag.cpp src/hal/board.cpp src/hal/usb_storage.cpp
-OS_SRCS   := $(filter-out $(O2_KEEP),$(filter $(OS_DIRS),$(APP_C) $(APP_CXX)))
+OS_SRCS   := $(filter-out $(O2_KEEP),$(filter $(OS_DIRS),$(APP_C) $(APP_CXX))) src/ws/lua_all.cpp
 $(patsubst %,$(BUILD)/%.o,$(OS_SRCS)): OPT := -Os
 # Float libm only (OP-4): the files that used the double libm warn on any
 # implicit float -> double promotion; the double libm must not come back
@@ -262,8 +262,10 @@ lab-gate: all
 	@mkdir -p build/perf
 	$(MAKE) -s -C tests lab-bench-m4 CROSS=$(CROSS) > build/perf/lab_bench_m4.txt
 	python3 tools/lab_gate.py build/perf/lab_bench_m4.txt
+	$(MAKE) -s -C tests papp-qemu CROSS=$(CROSS)
 	$(MAKE) -s -C sim lab LAB_FW=$(LAB_FW)
 	rm -rf build/sim/lab-check-sd && mkdir -p build/sim/lab-check-sd/Firmware
+	$(MAKE) -s sim-card SIM_SD=build/sim/lab-check-sd
 	build/sim/lab-sim --sd build/sim/lab-check-sd --script $(LAB_CHECK)
 	@echo "lab-gate: PASS ($(PTF))"
 .PHONY: lab-gate
@@ -273,5 +275,22 @@ lab-gate: all
 lab-shots:
 	$(MAKE) -s -C sim lab LAB_FW=$(LAB_FW)
 	rm -rf build/sim/lab-shots-sd && mkdir -p build/sim/lab-shots-sd docs/screenshots
+	$(MAKE) -s sim-card SIM_SD=build/sim/lab-shots-sd
 	build/sim/lab-sim --sd build/sim/lab-shots-sd --panel --script sim/lab/shots.txt
 .PHONY: lab-shots
+
+# PLATFORM: fill a simulator card -- the example scripts, the SDK example apps
+# built as host libraries (.so, what the simulator loads), and the test script
+# for the error page (examples/test/). SIM_SD=<folder>.
+SIM_SD ?= build/sim/platform-sd
+sim-card:
+	$(MAKE) -s -C sdk host
+	mkdir -p $(SIM_SD)/Lab/PLATFORM/Scripts $(SIM_SD)/Lab/PLATFORM/Apps
+	cp examples/scripts/*.lua examples/test/*.lua $(SIM_SD)/Lab/PLATFORM/Scripts/
+	cp build/sdk/*.so $(SIM_SD)/Lab/PLATFORM/Apps/
+.PHONY: sim-card
+
+# PLATFORM: the native app SDK (both example apps for the device and the sim).
+sdk:
+	$(MAKE) -C sdk CROSS=$(CROSS)
+.PHONY: sdk
