@@ -1,5 +1,5 @@
 # OpenTracker firmware for the original Polyend Tracker hardware (MK66FX1M0).
-# make            -> build/opentracker.hex and build/PolyendTrackerOTv<ver digits>.ptf (24 chars)
+# make            -> build/opentracker.hex and build/PolyendTrackerOTL<ver digits>.ptf (24 chars)
 # make SELFTEST=1 -> build/selftest/PolyendTracker_OTst<DIAG_N>.ptf (24 chars)
 # make host-test  -> build and run host-side unit tests
 # make perf-gate  -> bench-m4 instruction counts vs tests/perf_baseline.txt (+5 % max), engine
@@ -29,7 +29,7 @@ BUILD     := build/selftest
 DEFS_EXTRA := -DOT_FORCE_SELFTEST=1
 PTF_NAME  := PolyendTracker_OTst$(DIAG_N).ptf
 else
-PTF_NAME  := PolyendTrackerOTv$(VERNUM).ptf
+PTF_NAME  := PolyendTrackerOTL$(VERNUM).ptf
 endif
 # LMEM system cache for the SDRAM (src/hal/sdram_cache.h): 1 = on (boot self-test
 # can still turn it off), 0 = never enabled. Own build dir so objects never mix.
