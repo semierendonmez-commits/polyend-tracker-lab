@@ -1,13 +1,84 @@
-# lab-gate simulator check (template): intro, main page, settings, sound.
+# MAKAM lab-gate simulator check: boot (intro), every page, the transport,
+# sound from the built-in break with no WAV on the card, pads, MIDI out,
+# settings, save, and the display-list budget on every page.
 wait 3000
 budget
+# the play pads sound with the transport stopped (lead + bass in makam tuning)
 peak-reset
-pad 5 down
+pad 18 down
 wait 300
-expect-sound 1000
-pad 5 up
+expect-sound 800
+pad 18 up
+pad 37 down
+wait 300
+pad 37 up
+# Play: built-in break + bass + lead, the arrangement starts in the Intro
+peak-reset
+tap Play
+wait 2500
+expect-sound 3000
+budget
+# every page while playing
+tap F2
+wait 200
+enc 3
+wait 100
+budget
+tap F3
+wait 300
+pad 2 down
+pad 2 up
+pad 13 tap
+pad 36 down
+wait 400
+pad 36 up
+pad 44 down
+wait 400
+pad 44 up
+tap Push
+budget
+tap F4
+wait 200
+tap Push
+enc 2
+budget
+tap F5
+enc 1
+tap Down
+enc 1
+budget
+tap F6
+tap Right
+tap Right
+tap Song
+wait 500
+budget
+tap F7
+tap Right
+enc -5
+budget
+tap F8
+tap Right
+tap Left
+hold Shift 900
+budget
+# loop mode on the Drop section, louder: the mix still sounds
+peak-reset
+tap F1
+wait 1500
+expect-sound 3000
+# MIDI out: bass + lead notes with pitch bend
+expect-midi-notes 4
+# Config: settings rows of MAKAM, then back
 tap Config
+wait 200
+tap Down
 tap F2
 tap F3
+tap F1
 tap F8
+budget
+# stop
+tap Play
+wait 300
 budget

@@ -12,7 +12,7 @@ finished WAV (sound sources, sequencing, arrangement, mixing, stems).
 | [BULUT](#bulut) | Granular clouds: live buffers, gestures, freeze | [`PolyendTrackerBULUTG.ptf`](firmwares/bulut/release/PolyendTrackerBULUTG.ptf) | [MANUAL](firmwares/bulut/MANUAL.md) |
 | [KONSOL](#konsol) | Clip/scene workstation: 8 tracks, 10 engines, generators | [`PolyendTrackerKONSOL.ptf`](firmwares/konsol/release/PolyendTrackerKONSOL.ptf) | [MANUAL](firmwares/konsol/MANUAL.md) |
 | [DATAMATICS](#datamatics) | Ryoji-Ikeda-style data music from any file on the card | [`PolyendTrackerDATAMT.ptf`](firmwares/datamatics/release/PolyendTrackerDATAMT.ptf) | [MANUAL](firmwares/datamatics/MANUAL.md) |
-| MAKAM | Turkish makam meets jungle | in progress | |
+| [MAKAM](#makam) | Turkish makam meets jungle: usul-cut breaks, microtonal bass and lead | [`PolyendTrackerMAKAMJ.ptf`](firmwares/makam/release/PolyendTrackerMAKAMJ.ptf) | [MANUAL](firmwares/makam/MANUAL.md) |
 | PLATFORM | Lua scripts and native apps from the SD card | in progress | |
 
 > **Status: v0.1, not yet tested on a real Tracker.** Every image passed the
@@ -172,6 +172,36 @@ text, or automatic); five built-in data sets play without a card.
 | ![View](firmwares/datamatics/docs/screenshots/view.png) | ![Data](firmwares/datamatics/docs/screenshots/data.png) |
 
 [Manual](firmwares/datamatics/MANUAL.md) · [Image](firmwares/datamatics/release/PolyendTrackerDATAMT.ptf)
+
+---
+
+## MAKAM
+
+![MAKAM usul dial](firmwares/makam/docs/screenshots/usul-dial.png)
+
+MAKAM-JUNGLE: Turkish makam music at jungle tempo. The **usul** (rhythmic
+cycle) is a clock dial, the **makam** a ring of perdes at their comma positions.
+
+- **Tuning:** Arel-Ezgi-Uzdilek 24-tone by default, 53-TET as an option, ahenk
+  transpose.
+- **25 makams** (Rast, Uşşak, Hüzzam, Hicaz, Saba, Nihavend, Kürdi, Segah,
+  Karcığar, Hüseyni, Muhayyer, Hicazkar, Suzinak, ...) with karar, güçlü, yeden
+  and seyir.
+- **13 usuls** (Aksak 9/8, Curcuna 10/8, Devr-i Hindi 7/8, Sofyan, Düyek,
+  Yürük Semai, Aksak Semai, Devr-i Turan, ...): dum strokes cut kick slices,
+  tek snare slices, ke ghost notes.
+- **Breaks:** three built-in synthesised breaks (no card needed) or WAVs from
+  the card, with rolls, reverse, stutter and chaos edits.
+- **Bass** (Reese, Sub, Growl) and **lead** (Ney, Kanun, Saz, Zurna) at
+  microtonal pitch; MIDI out with pitch bend.
+- **Seyir generator:** phrases that start where the makam starts, rest on the
+  güçlü and cadence to the karar, live or written into an editable phrase.
+
+| Makam ring (Rast) | Seyir generator |
+|---|---|
+| ![Makam](firmwares/makam/docs/screenshots/makam-ring.png) | ![Seyir](firmwares/makam/docs/screenshots/seyir.png) |
+
+[Manual](firmwares/makam/MANUAL.md) · [Image](firmwares/makam/release/PolyendTrackerMAKAMJ.ptf)
 
 ---
 

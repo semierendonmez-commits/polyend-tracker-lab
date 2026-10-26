@@ -1,6 +1,38 @@
-wait 800
+# MAKAM screenshots for MANUAL.md (make lab-shots).
+wait 1400
 panelshot docs/screenshots/intro.png
-wait 2500
-pad 5 down
-panelshot docs/screenshots/main.png
-pad 5 up
+wait 2200
+tap Play
+wait 1800
+panelshot docs/screenshots/usul-dial.png
+tap F2
+pad 22 down
+wait 250
+panelshot docs/screenshots/makam-ring.png
+pad 22 up
+enc 3
+wait 100
+panelshot docs/screenshots/makam-hicaz.png
+enc -3
+tap F3
+wait 400
+tap Right
+tap Right
+tap Right
+tap Right
+panelshot docs/screenshots/break-slicer.png
+tap F4
+wait 300
+panelshot docs/screenshots/seyir.png
+tap F5
+wait 200
+panelshot docs/screenshots/synth.png
+tap F6
+wait 2000
+panelshot docs/screenshots/arrange.png
+tap F7
+wait 300
+panelshot docs/screenshots/mixer.png
+tap F8
+wait 100
+panelshot docs/screenshots/file.png

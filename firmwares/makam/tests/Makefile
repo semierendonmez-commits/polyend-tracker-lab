@@ -211,7 +211,7 @@ lab-test: $(OUT)/lab_test
 	$<
 
 LAB_M4_SRCS := lab/lab_bench.cpp $(LAB_SRCS) $(SRC)/core/formats/wav.cpp $(SRC)/core/formats/format_common.cpp \
-               $(SRC)/core/fmath.cpp $(LAB_M4_EXTRA)
+               $(SRC)/core/fmath.cpp $(SRC)/core/audio/effects.cpp $(SRC)/core/audio/audio_tables.cpp $(SRC)/core/formats/crc32.cpp $(LAB_M4_EXTRA)
 $(BENCH_OUT)/lab_bench_m4.elf: $(LAB_M4_SRCS) $(LAB_DEPS) bench_m4/startup.c bench_m4/mps2.ld $(SRC)/hal/fast_mem.c
 	@mkdir -p $(dir $@)
 	$(M4_CC) $(M4_FLAGS) -c bench_m4/startup.c -o $(BENCH_OUT)/lab_startup_m4.o
