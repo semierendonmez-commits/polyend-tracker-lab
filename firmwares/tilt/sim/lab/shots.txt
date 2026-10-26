@@ -1,0 +1,89 @@
+# TILT screenshots for MANUAL.md (make lab-shots): panel views with the pad LEDs.
+wait 1400
+panelshot docs/screenshots/intro.png
+wait 1600
+# GRAPH: the COMBOS factory pattern, a combo fired, multiball
+tap File
+pad 6 tap
+tap File
+tap Play
+wait 2600
+pad 38 tap
+pad 32 tap
+wait 700
+panelshot docs/screenshots/graph.png
+# COMBOS page while the balls play
+tap F6
+wait 1200
+panelshot docs/screenshots/combos.png
+# MATRIX: the RULES pattern (a random walk with rules)
+tap File
+pad 12 tap
+tap File
+wait 1500
+tap F2
+tap Down
+tap Down
+tap Down
+tap Right
+tap Right
+tap Right
+tap Right
+wait 300
+panelshot docs/screenshots/matrix.png
+# STEPS: PINGPONG, an acid line in melody mode
+tap File
+pad 1 tap
+tap File
+wait 1200
+tap F3
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Right
+tap Right
+tap Right
+wait 300
+panelshot docs/screenshots/steps.png
+# TABLE
+tap F4
+wait 300
+panelshot docs/screenshots/table.png
+# EVOLVE: MEMORY tires the edges the ball uses
+tap File
+pad 8 tap
+tap File
+tap F5
+wait 5000
+panelshot docs/screenshots/evolve.png
+# CHANNELS: the break, sliced by step
+tap F7
+pad 43 tap
+wait 300
+panelshot docs/screenshots/channels.png
+# MIX
+tap F8
+tap Right
+tap Down
+wait 600
+panelshot docs/screenshots/mix.png
+# FILE overlay
+tap File
+tap Down
+tap Down
+tap Down
+tap Down
+wait 300
+panelshot docs/screenshots/file.png
+tap File
+# the perform pads on the GRAPH page with Shift held (page actions)
+tap F1
+press Shift
+wait 300
+panelshot docs/screenshots/perform.png
+release Shift

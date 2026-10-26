@@ -1,6 +1,6 @@
 # polyend-tracker-lab
 
-Experimental firmwares for the **original Polyend Tracker**, built on
+Eight experimental firmwares for the **original Polyend Tracker**, built on
 [OpenTracker](https://github.com/sandlbn/polyend-tracker-re). None of them is a
 tracker: each one turns the Tracker into a different instrument, from idea to
 finished WAV (sound sources, sequencing, arrangement, mixing, stems).
@@ -13,6 +13,7 @@ finished WAV (sound sources, sequencing, arrangement, mixing, stems).
 | [KONSOL](#konsol) | Clip/scene workstation: 8 tracks, 10 engines, generators | [`PolyendTrackerKONSOL.ptf`](firmwares/konsol/release/PolyendTrackerKONSOL.ptf) | [MANUAL](firmwares/konsol/MANUAL.md) |
 | [DATAMATICS](#datamatics) | Ryoji-Ikeda-style data music from any file on the card | [`PolyendTrackerDATAMT.ptf`](firmwares/datamatics/release/PolyendTrackerDATAMT.ptf) | [MANUAL](firmwares/datamatics/MANUAL.md) |
 | [MAKAM](#makam) | Turkish makam meets jungle: usul-cut breaks, microtonal bass and lead | [`PolyendTrackerMAKAMJ.ptf`](firmwares/makam/release/PolyendTrackerMAKAMJ.ptf) | [MANUAL](firmwares/makam/MANUAL.md) |
+| [TILT](#tilt) | Pinball 2 Markov sequencer: 17x17 matrix, 8 sample/synth channels | [`PolyendTrackerTILTPB.ptf`](firmwares/tilt/release/PolyendTrackerTILTPB.ptf) | [MANUAL](firmwares/tilt/MANUAL.md) |
 | [PLATFORM](#platform) | Lua scripts and native apps from the SD card (norns-style); hosts all six as apps | [`PolyendTrackerPLATFM.ptf`](firmwares/platform/release/PolyendTrackerPLATFM.ptf) | [MANUAL](firmwares/platform/MANUAL.md) |
 
 > **Status: v0.1, not yet tested on a real Tracker.** Every image passed the
@@ -202,6 +203,34 @@ cycle) is a clock dial, the **makam** a ring of perdes at their comma positions.
 | ![Makam](firmwares/makam/docs/screenshots/makam-ring.png) | ![Seyir](firmwares/makam/docs/screenshots/seyir.png) |
 
 [Manual](firmwares/makam/MANUAL.md) · [Image](firmwares/makam/release/PolyendTrackerMAKAMJ.ptf)
+
+---
+
+## TILT
+
+![TILT graph](firmwares/tilt/docs/screenshots/graph.png)
+
+The renewed **Pinball 2** Markov sequencer as a whole instrument. Sixteen steps and a **17×17
+probability matrix**: the ball lands on a step, fires one of **8 channels** (each a sample or a
+synth), then bounces to the next step drawn from that step's row.
+
+- Around the walk, a table: flippers (pads / MIDI notes), bumpers (ratchets), ramps (fixed
+  licks inside the random walk), 4 combos (multiball, fill, note, CC, shake, scene), multiball,
+  tilt (freeze / shake), ball save, gravity, per-move edge properties (transpose, delay,
+  velocity).
+- Evolution: memory (fatigue / reinforcement), mutation, a 4×4 meta matrix over pages A–D,
+  melody mode (scale degrees, legato, octave-up), rules, matrix shapes and a randomizer with
+  locks.
+- Channels: samples from the card or built-in, Plaits analog/synthetic kick, snare and 808 hat,
+  a 303-style acid voice and a 2-op FM voice; mixer, choke groups, delay/reverb sends, stems.
+- Graph view with heat, trail, next-move odds and entropy; capture the last 1–8 bars and save
+  them as a MIDI file.
+
+| 17×17 matrix | Channels |
+|---|---|
+| ![Matrix](firmwares/tilt/docs/screenshots/matrix.png) | ![Channels](firmwares/tilt/docs/screenshots/channels.png) |
+
+[Manual](firmwares/tilt/MANUAL.md) · [Image](firmwares/tilt/release/PolyendTrackerTILTPB.ptf)
 
 ---
 
