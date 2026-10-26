@@ -1,0 +1,35 @@
+# polyend-tracker-lab: every firmware in firmwares/ through its lab gate
+# (image, flash / stack / libm, host tests, CPU bench under QEMU, simulator
+# check) with the same Arm GNU toolchain as upstream, and its .ptf as an artifact.
+name: lab
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        fw: [konsol, graf, bulut, datamatics, flipper, makam, platform]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: carlosperate/arm-none-eabi-gcc-action@49f4db4520f840e77ab1e99b24cfac2c540a21b1   # v1.14.1
+        with:
+          release: '14.2.Rel1'
+      - name: Host packages
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev pkg-config qemu-system-arm
+      - name: Lab gate
+        run: make -C firmwares/${{ matrix.fw }} -j"$(nproc)" lab-gate
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.fw }}-${{ github.sha }}
+          path: firmwares/${{ matrix.fw }}/build/*.ptf
+          if-no-files-found: error

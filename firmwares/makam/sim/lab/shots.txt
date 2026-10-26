@@ -1,0 +1,6 @@
+wait 800
+panelshot docs/screenshots/intro.png
+wait 2500
+pad 5 down
+panelshot docs/screenshots/main.png
+pad 5 up
