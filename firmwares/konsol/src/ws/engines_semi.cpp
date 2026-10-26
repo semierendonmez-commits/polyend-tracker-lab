@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <new>
 
 #include "ws/dspx.h"
 #include "ws/engine_table.h"
@@ -76,16 +77,16 @@ float foldTransfer(float u, float table) {
 }
 float percQuantize(float semis, int scale) {
     switch (scale) {
-        case 1: return floorf(semis * 2.0f + 0.5f) * 0.5f;
+        case 1: return dx::ffloor(semis * 2.0f + 0.5f) * 0.5f;
         case 2: {
             const float st = 12.0f / 19.0f;
-            return floorf(semis / st + 0.5f) * st;
+            return dx::ffloor(semis / st + 0.5f) * st;
         }
         case 3:
         case 4: {
             static const float mi[5] = {0, 3, 5, 7, 10}, ma[5] = {0, 2, 4, 7, 9};
             const float* d = scale == 3 ? mi : ma;
-            const float oct = floorf(semis / 12.0f);
+            const float oct = dx::ffloor(semis / 12.0f);
             float best = 0, dist = 1e9f;
             for (int o = -1; o <= 1; ++o)
                 for (int k = 0; k < 5; ++k) {
@@ -98,7 +99,7 @@ float percQuantize(float semis, int scale) {
                 }
             return best;
         }
-        default: return floorf(semis + 0.5f);
+        default: return dx::ffloor(semis + 0.5f);
     }
 }
 
@@ -172,10 +173,11 @@ public:
         }
     }
     int active() const override { return int(k_.on) + int(s_.on) + int(c_.on); }
+    // QEMU-measured (tests: eprobe): kick 39k, snare 30k, perc 11k per block
     int32_t cost() const override {
-        return (k_.on ? 15000 : 0) + (s_.on ? 9000 : 0) + (c_.on ? 7500 : 0) + (active() ? 700 : 0);
+        return (k_.on ? 39000 : 0) + (s_.on ? 30000 : 0) + (c_.on ? 11000 : 0) + (active() ? 700 : 0);
     }
-    int32_t noteCost() const override { return 15000; }
+    int32_t noteCost() const override { return 39000; }
     bool steal() override {
         if (c_.on) return !(c_.on = false);
         if (s_.on) return !(s_.on = false);
@@ -205,7 +207,8 @@ private:
     float dcA_ = 0.998f;
 
     void renderKick(float* out) {
-        K& k = k_;
+        K k = k_;   // locals: the output stores cannot alias the state
+        dx::Noise rng = rng_;
         const float* p = p_;
         const float ampK = dx::decayK(p[fKDecay]);
         const float pitchK = dx::tauK(p[fKPDec] * 0.001f);
@@ -215,30 +218,37 @@ private:
         const float baseHz = p[fKTune] * dx::semis(k.tone);
         const float shape = p[fKShape], fmR = p[fKFmRatio], fmI = p[fKFmIdx] * 1.6f, click = p[fKClick] * 0.5f;
         const float g1 = 1.0f + 5.0f * drive, g2 = 1.0f + 12.0f * drive * drive, bias = 0.35f * drive;
-        const float sb = dx::soft(bias);
+        const float sb = dx::soft(bias), odNorm = 1.0f / (1.0f + 0.6f * drive);
+        const float foldMix = 0.45f + 0.35f * drive, foldTab = p[fKFold];
+        const float pEnvOct = p[fKPEnv] * (1.0f / 12.0f);
+        const bool tri = shape > 0.001f;
         for (uint32_t i = uint32_t(k.wait); i < kBlock; ++i) {
-            const float hz = baseHz * dx::exp2fast(p[fKPEnv] * k.pe * (1.0f / 12.0f));
+            const float hz = baseHz * dx::exp2fast(pEnvOct * k.pe);
             float step = hz * (0.5f * kInvSr);
             if (step > 0.45f) step = 0.45f;
+            const bool fm = k.fe > 1e-4f, clk = k.ce > 1e-3f;
+            const float fmAmt = fmI * k.fe, clkAmt = k.ce * k.ce * click;
             float y = 0;
-            for (int s = 0; s < 2; ++s) {
-                k.fph += step * fmR;
-                k.fph -= floorf(k.fph);
-                const float mod = dx::sin2pi(k.fph) * fmI * k.fe;
+            for (int s2 = 0; s2 < 2; ++s2) {
                 k.ph += step;
-                k.ph -= floorf(k.ph);
-                const float fr = dx::wrap(k.ph + mod);
+                if (k.ph >= 1.0f) k.ph -= 1.0f;
+                float fr = k.ph;
+                if (fm) {
+                    k.fph += step * fmR;
+                    if (k.fph >= 1.0f) k.fph -= dx::ffloor(k.fph);
+                    fr = dx::wrap(k.ph + dx::sin2pi(k.fph) * fmAmt);
+                }
                 const float sine = dx::sin2pi(fr);
-                const float tri = 1.0f - 4.0f * fabsf(fr - 0.5f);
-                float x = (sine + (-tri - sine) * shape) * k.amp;
-                x += k.ce * k.ce * (0.6f * rng_.bi() + 0.8f) * click;
+                float x = sine;
+                if (tri) x += (-(1.0f - 4.0f * fabsf(fr - 0.5f)) - sine) * shape;
+                x *= k.amp;
+                if (clk) x += clkAmt * (0.6f * rng.bi() + 0.8f);
                 if (folder) {
                     float u = x * g1;
-                    u = 4.0f * fabsf(0.25f * u + 0.25f - floorf(0.25f * u + 0.75f) + 0.5f) - 1.0f;
-                    const float folded = foldTransfer(u, p[fKFold]) * k.amp;
-                    x = dx::soft(0.6f * x + (0.45f + 0.35f * drive) * folded);
+                    u = 4.0f * fabsf(0.25f * u + 0.25f - dx::ffloor(0.25f * u + 0.75f) + 0.5f) - 1.0f;
+                    x = dx::soft(0.6f * x + foldMix * foldTransfer(u, foldTab) * k.amp);
                 } else {
-                    x = (dx::soft(x * g2 + bias) - sb) / (1.0f + 0.6f * drive);
+                    x = (dx::soft(x * g2 + bias) - sb) * odNorm;
                 }
                 y += 0.5f * (x + k.lastX);
                 k.lastX = x;
@@ -256,9 +266,13 @@ private:
         }
         k.wait = 0;
         if (k.amp < 1e-4f) k.on = false;
+        k_ = k;
+        rng_ = rng;
     }
     void renderSnare(float* out) {
-        S& s = s_;
+        S s = s_;
+        dx::Noise rng = rng_;
+        float pb0 = pinkB0_, pb1 = pinkB1_, pb2 = pinkB2_;
         const float* p = p_;
         const float hz = clampf(p[fSHpf], 20.0f, 12000.0f);
         s.hp1.set(hz, 0.7071f);
@@ -277,15 +291,18 @@ private:
         const bool slope24 = p[fSSlope] > 0.5f;
         float pk0 = s.pk0, pk1 = s.pk1, pk2 = s.pk2;
         if (s.body >= 1.0f) pk0 = pk1 = pk2 = 1.0f;
+        const float inc0 = tune * ratio[0] * kInvSr, inc1 = tune * ratio[1] * kInvSr, inc2 = tune * ratio[2] * kInvSr;
+        const float snapBend = 0.5f * p[fSSnap];
         for (uint32_t i = uint32_t(s.wait); i < kBlock; ++i) {
-            const float bend = 1.0f + 0.5f * p[fSSnap] * s.snap;
-            float body = 0;
-            const float env[3] = {pk0, pk1, pk2};
-            for (int m = 0; m < 3; ++m) {
-                s.ph[m] += tune * ratio[m] * bend * kInvSr;
-                s.ph[m] -= floorf(s.ph[m]);
-                body += dx::sin2pi(s.ph[m]) * gain[m] * env[m];
-            }
+            const float bend = 1.0f + snapBend * s.snap;
+            s.ph[0] += inc0 * bend;
+            s.ph[1] += inc1 * bend;
+            s.ph[2] += inc2 * bend;
+            if (s.ph[0] >= 1.0f) s.ph[0] -= 1.0f;
+            if (s.ph[1] >= 1.0f) s.ph[1] -= 1.0f;
+            if (s.ph[2] >= 1.0f) s.ph[2] -= 1.0f;
+            float body = dx::sin2pi(s.ph[0]) * gain[0] * pk0;
+            if (pk1 > 1e-4f) body += dx::sin2pi(s.ph[1]) * gain[1] * pk1 + dx::sin2pi(s.ph[2]) * gain[2] * pk2;
             if (s.attacking) {
                 s.noise += attackStep;
                 if (s.noise >= 1.0f) {
@@ -295,15 +312,15 @@ private:
             } else {
                 s.noise *= noiseK;
             }
-            const float white = rng_.bi();
-            pinkB0_ = 0.99765f * pinkB0_ + white * 0.0990460f;
-            pinkB1_ = 0.96300f * pinkB1_ + white * 0.2965164f;
-            pinkB2_ = 0.57000f * pinkB2_ + white * 1.0526913f;
-            const float pink = clampf((pinkB0_ + pinkB1_ + pinkB2_ + white * 0.1848f) * 0.75f, -1.5f, 1.5f);
+            const float white = rng.bi();
+            pb0 = 0.99765f * pb0 + white * 0.0990460f;
+            pb1 = 0.96300f * pb1 + white * 0.2965164f;
+            pb2 = 0.57000f * pb2 + white * 1.0526913f;
+            const float pink = clampf((pb0 + pb1 + pb2 + white * 0.1848f) * 0.75f, -1.5f, 1.5f);
             float noise = white + (pink - white) * p[fSColor];
             noise = s.hp1.high(noise);
             if (slope24) noise = s.hp2.high(noise);
-            const float snap = s.snap * s.snap * rng_.bi() * p[fSSnap] * 0.6f;
+            const float snap = s.snap * s.snap * rng.bi() * p[fSSnap] * 0.6f;
             const float y = (body * bodyAmt * 0.7f + noise * s.noise * noiseAmt + snap) * s.vel;
             pk0 *= bodyK;
             pk1 *= k1;
@@ -320,9 +337,15 @@ private:
             s.on = false;
             s.pk0 = 0;
         }
+        s_ = s;
+        rng_ = rng;
+        pinkB0_ = pb0;
+        pinkB1_ = pb1;
+        pinkB2_ = pb2;
     }
     void renderPerc(float* out) {
-        P& c = c_;
+        P c = c_;
+        dx::Noise rng = rng_;
         const float* p = p_;
         const float semis = percQuantize(48.0f * p[fPPitch] + c.note, int(p[fPScale] + 0.5f));
         const float hz = clampf(110.0f * dx::semis(semis), 30.0f, kSr * 0.4f);
@@ -342,7 +365,7 @@ private:
         }
         const float makeUp = 1.0f + 6.0f * (1.0f - res);
         for (uint32_t i = uint32_t(c.wait); i < kBlock; ++i) {
-            const float x = c.impulse * 4.0f + c.burst * c.burst * rng_.bi() * 0.5f;
+            const float x = c.impulse * 4.0f + c.burst * c.burst * rng.bi() * 0.5f;
             c.impulse = 0;
             c.burst *= burstK;
             float y = c.bp2.band(dx::soft(c.bp1.band(x))) * makeUp;
@@ -353,16 +376,18 @@ private:
                 y = c.aa2.low(c.aa1.low(y));
                 c.crush += rate * kInvSr;
                 if (c.crush >= 1.0f) {
-                    c.crush -= floorf(c.crush);
+                    c.crush -= dx::ffloor(c.crush);
                     c.held = y;
                 }
                 z = c.held;
             }
-            if (bits < 15.99f) z = floorf(z * levels + 0.5f) / levels;
+            if (bits < 15.99f) z = dx::ffloor(z * levels + 0.5f) / levels;
             out[i] += z;
         }
         c.wait = 0;
         if (c.amp < 1e-4f) c.on = false;
+        c_ = c;
+        rng_ = rng;
     }
     float pinkB0_ = 0, pinkB1_ = 0, pinkB2_ = 0;
 };
@@ -460,26 +485,29 @@ public:
         const float dpre = 1.0f + 6.0f * drive, dpost = 1.0f / (1.0f + 2.0f * drive);
         const float ampDecK = expf(-1.0f / (kSr * 0.001f * 1230.0f * 0.25f));
         const float invSr2 = 0.5f * kInvSr;
+        float b0 = 0, k = 0, g = 1;
+        float ob[kBlock];   // a local output: the member state stays in registers
         for (uint32_t i = 0; i < kBlock; ++i) {
             freq_ = target_ + slideK * (freq_ - target_);
             // filter envelope: main decay + accent RC
             const float mainOut = mainEnv_;
             mainEnv_ *= mainK_;
             rc2_ = (accentGain_ > 0 ? mainOut : 0.0f) + rc2K_ * (rc2_ - (accentGain_ > 0 ? mainOut : 0.0f));
-            const float t1 = envScaler * (mainOut - envOffset);
-            const float t2 = accentGain_ * rc2_;
-            float fc = cut * dx::exp2fast(t1 + t2 + toneOct_);
-            fc = clampf(fc, 200.0f, 20000.0f);
-            // TB_303 coefficients (mystran & kunn) at the 2x rate
-            const float wc = dx::kTwoPi * fc * invSr2;
-            const float fx = wc * 0.70710678f / dx::kTwoPi;
-            const float b0 = (0.00045522346f + 6.1922189f * fx) / (1.0f + 12.358354f * fx + 4.4156345f * (fx * fx));
-            float k = fx * (fx * (fx * (fx * (fx * (fx + 7198.6997f) - 5837.7917f) - 476.47308f) + 614.95611f) + 213.87126f) +
-                      16.998792f;
-            float g = k * (1.0f / 17.0f);
-            g = (g - 1.0f) * rsk + 1.0f;
-            g = g * (1.0f + rsk);
-            k = k * rsk;
+            if ((i & 3) == 0) {   // filter coefficients at a quarter of the rate
+                const float t1 = envScaler * (mainOut - envOffset);
+                const float t2 = accentGain_ * rc2_;
+                float fc = cut * dx::exp2fast(t1 + t2 + toneOct_);
+                fc = clampf(fc, 200.0f, 20000.0f);
+                // TB_303 coefficients (mystran & kunn) at the 2x rate
+                const float fx = fc * invSr2 * 0.70710678f;
+                b0 = (0.00045522346f + 6.1922189f * fx) / (1.0f + 12.358354f * fx + 4.4156345f * (fx * fx));
+                k = fx * (fx * (fx * (fx * (fx * (fx + 7198.6997f) - 5837.7917f) - 476.47308f) + 614.95611f) + 213.87126f) +
+                    16.998792f;
+                g = k * (1.0f / 17.0f);
+                g = (g - 1.0f) * rsk + 1.0f;
+                g = g * (1.0f + rsk);
+                k = k * rsk;
+            }
             // amp envelope (attack 0, decay 1230 ms, sustain 0) + the main env push
             if (ampNoteOn_) {
                 amp_ = amp_ + (1.0f - amp_) * (ampPhase_ < 3 ? 1.0f : 0.0f);
@@ -497,12 +525,15 @@ public:
                 phase_ += dt;
                 if (phase_ >= 1.0f) phase_ -= 1.0f;
                 const float saw = dx::sawBlep(phase_, dt);
-                float sq = phase_ < 0.5f ? 1.0f : -1.0f;
-                sq += dx::blep(phase_, dt);
-                float q2 = phase_ - 0.5f;
-                if (q2 < 0) q2 += 1.0f;
-                sq -= dx::blep(q2, dt);
-                float x = -(saw + (sq - saw) * wave);
+                float x = -saw;
+                if (wave > 0.001f) {
+                    float sq = phase_ < 0.5f ? 1.0f : -1.0f;
+                    sq += dx::blep(phase_, dt);
+                    float q2 = phase_ - 0.5f;
+                    if (q2 < 0) q2 += 1.0f;
+                    sq -= dx::blep(q2, dt);
+                    x = -(saw + (sq - saw) * wave);
+                }
                 // pre-filter high-pass
                 const float h = hp1A_ * (hp1Y_ + x - hp1X_);
                 hp1X_ = x;
@@ -528,8 +559,11 @@ public:
             hp2Y_ = h2;
             float y = h2 * declick_ * vol;
             if (drive > 0.01f) y = dx::soft(y * dpre) * dpost;
-            l[i] += y;
-            r[i] += y;
+            ob[i] = y;
+        }
+        for (uint32_t i = 0; i < kBlock; ++i) {
+            l[i] += ob[i];
+            r[i] += ob[i];
         }
         if (!ampNoteOn_ && declick_ < 1e-4f && amp_ < 1e-4f) idle_ = true;
         if (fabsf(y4_) > 1e6f || !(y4_ == y4_)) {   // safety
@@ -537,8 +571,8 @@ public:
         }
     }
     int active() const override { return idle_ ? 0 : 1; }
-    int32_t cost() const override { return idle_ ? 0 : 23000; }
-    int32_t noteCost() const override { return idle_ ? 23000 : 0; }
+    int32_t cost() const override { return idle_ ? 0 : 30500; }   // QEMU: 29.7k (drive on)
+    int32_t noteCost() const override { return idle_ ? 30500 : 0; }
     bool steal() override {
         if (idle_) return false;
         idle_ = true;
@@ -624,12 +658,15 @@ public:
         const float eK = dx::tauK(p[nEnvDec] * 0.001f);
         const float sub = p[nSub], subDrive = p[nSubDrive], drive = p[nDrive];
         const float subMul = p[nSubOct] > 0.5f ? 0.5f : 1.0f;
+        const float subPre = 1.0f + 3.0f * subDrive, subNorm = 1.0f / dx::soft(subPre);
+        const float drvPre = 1.0f + 3.0f * drive, drvNorm = 1.0f / (1.0f + drive);
         const float gain = p[nGain] * vel_ * 0.5f;
+        float ob[kBlock];
         // control rate (every 16 samples): filters
         for (uint32_t i0 = 0; i0 < kBlock; i0 += 16) {
             f0_ = target_ + glideK * (f0_ - target_);
             lfo_ += lfoHz * 16.0f * kInvSr;
-            lfo_ -= floorf(lfo_);
+            lfo_ -= dx::ffloor(lfo_);
             const float lfoSin = dx::sin2pi(lfo_);
             const float lfoUni = 0.5f + 0.5f * lfoSin;
             const float f0 = f0_;
@@ -646,18 +683,20 @@ public:
                 subPh_ += dphi * subMul;
                 if (subPh_ >= 1.0f) subPh_ -= 1.0f;
                 float s = dx::sin2pi(subPh_);
-                if (subDrive > 0.01f) s = dx::soft(s * (1.0f + 3.0f * subDrive)) / dx::soft(1.0f + 3.0f * subDrive);
-                y = dx::soft(y * (1.0f + 3.0f * drive)) * (1.0f / (1.0f + drive));
-                const float out = (y * 0.8f + s * sub * 0.7f) * env_ * gain;
-                l[i] += out;
-                r[i] += out;
+                if (subDrive > 0.01f) s = dx::soft(s * subPre) * subNorm;
+                y = dx::soft(y * drvPre) * drvNorm;
+                ob[i] = (y * 0.8f + s * sub * 0.7f) * env_ * gain;
             }
+        }
+        for (uint32_t i = 0; i < kBlock; ++i) {
+            l[i] += ob[i];
+            r[i] += ob[i];
         }
         if (!gate_ && env_ < 1e-4f) on_ = false;
     }
     int active() const override { return on_ ? 1 : 0; }
-    int32_t cost() const override { return on_ ? 16000 : 0; }
-    int32_t noteCost() const override { return on_ ? 0 : 16000; }
+    int32_t cost() const override { return on_ ? modelCost() : 0; }
+    int32_t noteCost() const override { return on_ ? 0 : modelCost(); }
     bool steal() override {
         if (!on_) return false;
         on_ = false;
@@ -665,6 +704,12 @@ public:
     }
 
 private:
+    int32_t modelCost() const {
+        // QEMU-measured M4 instructions per block, per model (+ a margin)
+        static const int32_t kC[12] = {27400, 23600, 31300, 27000, 38500, 28300, 24800, 29500, 23800, 27700, 21200, 28100};
+        const int m = int(p_[nModel] + 0.5f);
+        return kC[m < 0 ? 0 : (m > 11 ? 11 : m)] + 1000;
+    }
     void setFilters(int m, float f0, float tone, float motion, float lfoUni) {
         switch (m) {
             case 0: f1_.set(f0 * (1.5f + 46.0f * tone * tone), 0.7f + 0.8f * motion); break;
@@ -752,7 +797,7 @@ private:
                 const float ratio = 1.0f + (1.0f + 7.0f * tone) * (0.35f + 0.65f * lfoUni);
                 p1_ += dphi * ratio;
                 if (phi < dphi) p1_ = phi * ratio;
-                else if (p1_ >= 1.0f) p1_ -= floorf(p1_);
+                else if (p1_ >= 1.0f) p1_ -= dx::ffloor(p1_);
                 const float x = 2.0f * p1_ - 1.0f;
                 const float h = f1_.high(x);
                 y = dx::soft((0.6f * h + 0.8f * f2_.band(h)) * (1.0f + 6.0f * (0.25f + grit)));
@@ -795,7 +840,7 @@ private:
                     hold_ = x;
                 }
                 const float steps = 8.0f + (1.0f - grit) * 120.0f;
-                y = floorf(hold_ * steps + 0.5f) / steps;
+                y = dx::ffloor(hold_ * steps + 0.5f) / steps;
                 break;
             }
         }
@@ -844,7 +889,7 @@ const SecDesc kQnSec[4] = {{"Emitter", 0, 4}, {"Particle", 4, 7}, {"Jitter", 11,
 
 class Quanta final : public TableEngine {
 public:
-    static constexpr int kParts = 24;
+    static constexpr int kParts = 12;
     static constexpr int kWin = 256;
     Quanta() {
         bind(kQnDesc, qQnN, kQnSec, 4);
@@ -901,36 +946,45 @@ public:
             }
         }
         const float gain = p[qGain] * vel_ * env_ * 0.6f;
-        for (auto& q : pt_) {
-            if (!q.on) continue;
+        float al[kBlock], ar[kBlock];
+        for (uint32_t i = 0; i < kBlock; ++i) al[i] = ar[i] = 0.0f;
+        for (auto& qq : pt_) {
+            if (!qq.on) continue;
+            Part q = qq;
             const float* wt = win_[q.win];
             const float invLen = float(kWin) / float(q.len);
-            for (uint32_t i = uint32_t(q.wait); i < kBlock; ++i) {
-                if (q.age >= q.len) {
-                    q.on = false;
-                    break;
-                }
-                const float wpos = float(q.age) * invLen;
+            const uint32_t i0 = uint32_t(q.wait);
+            int n = int(kBlock - i0);
+            if (n > q.len - q.age) n = q.len - q.age;
+            float wpos = float(q.age) * invLen;
+            const float g = q.amp * gain, gl = g * q.gl, gr = g * q.gr;
+            const bool glide = q.incMul != 1.0f;
+            for (int j = 0; j < n; ++j) {
                 const int wi = int(wpos);
-                const float w = wt[wi] + (wt[wi + 1 <= kWin ? wi + 1 : kWin] - wt[wi]) * (wpos - float(wi));
-                float s;
-                if (q.type == 3) {   // trainlet: band-limited impulse train with a tilt
-                    s = trainlet(q);
-                } else if (q.type == 4 && q.age >= q.pulseLen) {
-                    s = 0;
-                } else {
-                    s = osc(q);
-                }
+                const float w = wt[wi] + (wt[wi + 1] - wt[wi]) * (wpos - float(wi));
+                wpos += invLen;
+                float sm;
+                if (q.type == 3) sm = trainlet(q);
+                else if (q.type == 4 && q.age + j >= q.pulseLen) sm = 0;
+                else sm = osc(q);
                 q.phase += q.inc;
-                if (q.phase >= 1.0f) q.phase -= floorf(q.phase);
-                q.inc *= q.incMul;
-                if (q.inc > 0.45f) q.inc = 0.45f;
-                const float v = s * w * q.amp * gain;
-                l[i] += v * q.gl;
-                r[i] += v * q.gr;
-                ++q.age;
+                if (q.phase >= 1.0f) q.phase -= dx::ffloor(q.phase);
+                if (glide) {
+                    q.inc *= q.incMul;
+                    if (q.inc > 0.45f) q.inc = 0.45f;
+                }
+                const float v = sm * w;
+                al[i0 + uint32_t(j)] += v * gl;
+                ar[i0 + uint32_t(j)] += v * gr;
             }
+            q.age += n;
+            if (q.age >= q.len) q.on = false;
             q.wait = 0;
+            qq = q;
+        }
+        for (uint32_t i = 0; i < kBlock; ++i) {
+            l[i] += al[i];
+            r[i] += ar[i];
         }
     }
     int active() const override {
@@ -938,16 +992,23 @@ public:
         for (auto& q : pt_) n += q.on;
         return n + (on_ ? 1 : 0);
     }
+    // QEMU: per particle 7.4k (grain, glisson), 8k (grainlet), 20k (trainlet), 7k (pulsar)
+    int32_t partCost() const {
+        static const int32_t kC[5] = {7400, 7500, 8000, 20000, 7000};
+        const int t = int(p_[qType] + 0.5f);
+        return kC[t < 0 ? 0 : (t > 4 ? 4 : t)];
+    }
     int32_t cost() const override {
         int n = 0;
         for (auto& q : pt_) n += q.on;
-        return (on_ || n) ? 1500 + n * 2200 : 0;
+        return (on_ || n) ? 3000 + n * partCost() : 0;
     }
     int32_t noteCost() const override {
-        // overlapping particles: density x duration
+        // the whole cloud: density x duration particles overlap
         float ov = p_[qDensity] * p_[qDur] * 0.001f + 1.0f;
+        if (int(p_[qType] + 0.5f) == 4) ov = 1.0f;
         if (ov > kParts) ov = kParts;
-        return on_ ? 0 : int32_t(1500 + ov * 2200);
+        return on_ ? 0 : int32_t(3000.0f + ov * float(partCost()));
     }
     bool steal() override {
         for (auto& q : pt_)
@@ -1000,13 +1061,18 @@ private:
         }
     }
     float trainlet(Part& q) {
-        // sum of K cosines with a geometric tilt (Roads' trainlet), normalised
-        float s = 0, a = 1.0f;
-        for (int k = 1; k <= q.K && k <= 12; ++k) {
-            s += a * dx::sin2pi(dx::wrap(q.phase * float(k) + 0.25f));
+        // sum of K harmonics with a geometric tilt (Roads' trainlet), by the
+        // Chebyshev recurrence: one sine and one cosine per sample
+        const float c2 = 2.0f * dx::sin2pi(dx::wrap(q.phase + 0.25f));
+        float s1 = dx::sin2pi(q.phase), s0 = 0.0f, sum = s1, a = q.a;
+        for (int k = 2; k <= q.K; ++k) {
+            const float sk = c2 * s1 - s0;
+            s0 = s1;
+            s1 = sk;
+            sum += a * sk;
             a *= q.a;
         }
-        return s * q.norm;
+        return sum * q.norm;
     }
     void spawn(float period, int at) {
         const float* p = p_;
@@ -1044,7 +1110,7 @@ private:
             n.a = 0.3f + 0.65f * p[qChroma];
             n.K = int(0.45f * kSr / hz);
             if (n.K < 1) n.K = 1;
-            if (n.K > 12) n.K = 12;
+            if (n.K > 8) n.K = 8;
             float sum = 0, a = 1;
             for (int k = 0; k < n.K; ++k) {
                 sum += a;

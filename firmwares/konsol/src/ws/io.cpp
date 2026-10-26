@@ -14,11 +14,16 @@
 //     SONG  u8 count, loop; count x {u8 scene, u8 bars}
 //     MSTR  f32 master level
 //     PREF  u8 pad brightness
+//     TSMP  u8 track, bars, stretch mode, i8 pitch, u8 stretched (v2; the stretch re-runs on load)
+//     KIT   u8 track, 16 pad records (sample_mgr.cpp) (v2)
+//     LKIT  the LABKIT chunk: macros, modulation routes, MIDI learn, param values (v2)
 #include <cstdio>
 #include <cstring>
 
 #include "formats/wav.h"
+#include "ws/kit.h"
 #include "ws/konsol.h"
+#include "ws/stretch.h"
 
 namespace lab {
 namespace konsol {
@@ -27,7 +32,7 @@ void makamSetKey(Engine* e, int key);
 
 namespace {
 
-constexpr uint16_t kVersion = 1;
+constexpr uint16_t kVersion = 2;   // 2: stereo pool, SAMPLER params reordered, TSMP / KIT / LKIT chunks
 
 struct Writer {
     Writer(IStorage* f, IStorage::Handle hh) : fs(f), h(hh) {}
@@ -86,6 +91,7 @@ struct Reader {
 };
 
 float clampf(float v, float lo, float hi) { return !(v >= lo) ? lo : (v > hi ? hi : v); }
+int dx_clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
 }  // namespace
 
@@ -144,7 +150,12 @@ bool Konsol::saveProject(const char* name) {
         w.u8(tc.mix.solo);
         w.u8(tc.mix.stem);
         w.u8(tc.mix.midiOut);
-        w.put(smp_[t].path, 96);
+        {
+            char sp[96] = {};
+            const int src = ts_[t].src;
+            if (pool_.valid(src) && src != breakSlot_) std::snprintf(sp, sizeof sp, "%s", pool_.slot(src).path);
+            w.put(sp, 96);
+        }
         for (int k = 0; k < kEngCount; ++k) {
             Engine* e = eng_[t].e[k];
             const int n = e->paramCount();
@@ -154,6 +165,21 @@ bool Konsol::saveProject(const char* name) {
             w.u16(uint16_t(n));
             for (int i = 0; i < n; ++i) w.f32(e->get(i));
         }
+    }
+    // TSMP + KIT
+    for (int t = 0; t < kTracks; ++t) {
+        const TrackSample& ts = ts_[t];
+        w.chunk("TSMP", 5);
+        w.u8(uint8_t(t));
+        w.u8(ts.bars);
+        w.u8(ts.mode);
+        w.i8(ts.pitch);
+        w.u8(ts.stretched);
+        w.chunk("KIT ", 1 + kitBytes());
+        w.u8(uint8_t(t));
+        static uint8_t kb[4096];
+        kitWrite(t, kb);
+        w.put(kb, kitBytes());
     }
     // CLIP
     for (int t = 0; t < kTracks; ++t)
@@ -261,6 +287,8 @@ bool Konsol::loadProject(const char* name) {
     for (int t = 0; t < kTracks; ++t)
         for (int s = 0; s < kScenes; ++s) p.clip[t][s].lenSteps = 0;
     char samplePath[kTracks][96] = {};
+    TrackSample tsLoad[kTracks];
+    const uint8_t* kitChunk[kTracks] = {};
     while (r.ok && r.p + 8 <= r.e) {
         char tag[4];
         r.get(tag, 4);
@@ -318,6 +346,7 @@ bool Konsol::loadProject(const char* name) {
             const int t = c.u8(), k = c.u8();
             const int n = c.u16();
             if (t >= kTracks || k >= kEngCount) continue;
+            if (ver < 2 && k == kEngSampler) continue;   // v1 SAMPLER params had another order
             Engine* e = eng_[t].e[k];
             for (int i = 0; i < n && c.ok; ++i) {
                 const float v = c.f32();
@@ -358,6 +387,17 @@ bool Konsol::loadProject(const char* name) {
                 if (x.len < 1) x.len = 1;
                 if (x.start < maxTick) nb.add(x);
             }
+        } else if (!std::memcmp(tag, "TSMP", 4)) {
+            const int t = c.u8();
+            if (t >= kTracks) continue;
+            tsLoad[t].bars = uint8_t(c.u8() % 33);
+            tsLoad[t].mode = uint8_t(c.u8() % kStrModes);
+            tsLoad[t].pitch = int8_t(dx_clampi(c.i8(), -24, 24));
+            tsLoad[t].stretched = c.u8() ? 1 : 0;
+        } else if (!std::memcmp(tag, "KIT ", 4)) {
+            const int t = c.u8();
+            if (t >= kTracks || uint32_t(c.e - c.p) < kitBytes()) continue;
+            kitChunk[t] = c.p;
         } else if (!std::memcmp(tag, "SONG", 4)) {
             int n = c.u8();
             p.songLoop = c.u8() ? 1 : 0;
@@ -371,11 +411,23 @@ bool Konsol::loadProject(const char* name) {
             }
         }
     }
-    std::memset(stutter_, 0, uint32_t(kStutterMax) * 4u);
+    // samples and kits (the file buffer is still intact: kits read from it)
     for (int t = 0; t < kTracks; ++t) {
-        if (samplePath[t][0]) loadSample(t, samplePath[t]);
+        if (samplePath[t][0] && !loadSample(t, samplePath[t])) setTrackBreak(t);
+        TrackSample& ts = ts_[t];
+        ts.mode = tsLoad[t].mode;
+        ts.pitch = tsLoad[t].pitch;
+        if (tsLoad[t].bars) {
+            ts.bars = tsLoad[t].bars;
+            int bars = ts.bars;
+            if (pool_.valid(ts.src)) ts.srcBpm = ts.outBpm = loopBpm(pool_.slot(ts.src).frames, bars, p.bpm);
+        }
+        if (tsLoad[t].stretched) strPend_ = uint8_t(strPend_ | (1u << t));
+        if (kitChunk[t]) kitRead(t, kitChunk[t]);
         makamSetKey(eng_[t].e[kEngMakam], p.key);
     }
+    gcSamples();
+    std::memset(stutter_, 0, uint32_t(kStutterMax) * 4u);
     if (!p.name[0]) std::snprintf(p.name, sizeof p.name, "%s", name);
     std::snprintf(p.name, sizeof p.name, "%s", name);
     setLaunchQ_ = p.launchQ;
@@ -406,39 +458,6 @@ void Konsol::save() {
 // ---------------------------------------------------------------------------
 // samples
 // ---------------------------------------------------------------------------
-void Konsol::loadSample(int t, const char* path) {
-    SampleBuf& b = smp_[t];
-    b.len = 0;   // the audio sees no sample while it loads
-    if (!ctx_ || !ctx_->fs) {
-        buildBreak(b);
-        return;
-    }
-    ot::WavImportOptions opt;
-    ot::WavImportResult res;
-    // longer files: import the start that fits
-    {
-        const IStorage::Handle h = ctx_->fs->open(path, IStorage::kRead);
-        if (h >= 0) {
-            ot::WavInfo info;
-            ot::StorageReader rd(*ctx_->fs, h);
-            if (ot::wavParseHeader(rd, info) && ot::wavIsSupported(info)) {
-                const uint32_t frames = ot::wavResampledFrames(ot::wavSourceFrames(info), info.sampleRate);
-                if (frames > b.cap) opt.endMarker = uint16_t(uint64_t(65535) * b.cap / (frames + 1));
-            }
-            ctx_->fs->close(h);
-        }
-    }
-    const ot::FmtStatus st = ot::wavImportFile(*ctx_->fs, path, opt, b.data, b.cap, res);
-    if (st != ot::FmtStatus::Ok || res.frames < 64) {
-        buildBreak(b);
-        if (ctx_) ctx_->toast("Cannot read that WAV - using the built-in break");
-        return;
-    }
-    copyStr(b.path, sizeof b.path, path);
-    b.len = res.frames;
-    dirty_ = true;
-}
-
 namespace {
 struct ListCtx {
     char (*list)[40];

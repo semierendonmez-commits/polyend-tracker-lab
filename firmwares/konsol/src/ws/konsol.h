@@ -11,6 +11,7 @@
 #include "lab/lab.h"
 #include "ws/engines.h"
 #include "ws/model.h"
+#include "ws/samples.h"
 
 namespace ot {
 struct Pattern;
@@ -18,6 +19,8 @@ struct Pattern;
 
 namespace lab {
 namespace konsol {
+
+class Stretcher;
 
 enum Page : uint8_t {
     kPgSession = 0,
@@ -83,9 +86,10 @@ public:
     void onTransport(bool playing) override;
     int settings(SettingRow* rows, int cap) override;
     void save() override;
-    int benchScenarios() const override { return 6; }
+    int benchScenarios() const override { return 25; }
     const char* benchName(int i) const override;
     void benchSetup(int i) override;
+    void benchSetupNew(int i);
 
     // ---- used by the tests ---------------------------------------------------
     Project& project() { return *P_; }
@@ -132,6 +136,7 @@ private:
     void fire(int t, int pitch, int vel, int tone, int flags, int offset, uint32_t at, uint32_t lenSub);
     void schedule(int t, const Ev& e);
     bool admit(int t, int32_t extra);
+    int32_t engineBudget(int extraTrack) const;
     void trackNotes(int t, uint32_t pos, uint32_t end, float subPerSample);
     void songStep(uint32_t pos, uint32_t end, float subPerSample);
     void fxBlock(float* l, float* r);
@@ -158,8 +163,32 @@ private:
     void undoRestore();
     int rootNote(int t) const;
     uint16_t scaleMask(int t) const;
-    void loadSample(int t, const char* path);
-    void buildBreak(SampleBuf& b);
+    // ---- samples (sample_mgr.cpp) ----
+public:
+    bool loadSample(int t, const char* path);
+    bool stretchTrack(int t);                  // to the project tempo (job runs in update())
+    void unstretch(int t);
+    float stretchProgress() const;             // -1 idle
+    int kitFromSlices(int t, bool byClass);
+    int kitFromFolder(int t, const char* dir);
+    bool saveKit(int t, const char* name);
+    bool loadKit(int t, const char* path);
+    SamplePool& pool() { return pool_; }
+    TrackSample& trackSample(int t) { return ts_[t]; }
+    void stretchService(uint32_t budgetFrames);
+    void gcSamples();
+
+private:
+    void ensureBreak();
+    void setTrackBreak(int t);
+    int poolFind(const char* path) const;
+    int poolLoad(const char* path);
+    bool slotUsed(int s) const;
+    void compactPool();
+    const char* stretchState(int t) const;
+    void kitWrite(int t, uint8_t* out) const;
+    void kitRead(int t, const uint8_t* in);
+    static uint32_t kitBytes();
     void scanSamples();
     void scanProjects();
     void applyFxParams();
@@ -183,7 +212,13 @@ private:
     Theme theme_;
     Project* P_ = nullptr;
     TrackEngines eng_[kTracks];
-    SampleBuf smp_[kTracks];
+    SamplePool pool_;
+    TrackSample ts_[kTracks];
+    Stretcher* str_ = nullptr;
+    int16_t breakSlot_ = -1;
+    int strTrack_ = -1;
+    float strTarget_ = 120.0f;
+    uint8_t strPend_ = 0;               // tracks to re-stretch (after a project load)
     ot::Pattern* scratch_ = nullptr;   // generator target
     NoteBuf* src_ = nullptr;            // per-track live source (Genotype / Turnaround)
     void* acidPh_ = nullptr;            // per-track Acid live phrase (gen::MonoStep[128])

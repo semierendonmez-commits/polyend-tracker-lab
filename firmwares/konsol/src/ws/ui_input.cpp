@@ -1154,7 +1154,7 @@ void Konsol::fkey(int k, bool shift) {
                 }
                 case 2:
                     send(Cmd{Cmd::kPanic, 0, 0, 0});
-                    buildBreak(smp_[selT_]);
+                    setTrackBreak(selT_);
                     ctx_->toast("Built-in break loaded");
                     break;
                 case 3:

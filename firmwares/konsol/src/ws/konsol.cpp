@@ -10,23 +10,26 @@
 #include "audio/audio_tables.h"
 #include "gen/gen.h"
 #include "model/pattern.h"
+#include "ws/kit.h"
+#include "ws/stretch.h"
 
 namespace lab {
 namespace konsol {
 
-Engine* makeSampler(Arena& a, SampleBuf* b);
 void makamSetKey(Engine* e, int key);
 
 namespace {
 constexpr uint32_t kSubPerTick = 256;                     // global position unit
 constexpr uint32_t kSubPerBeat = kPpq * kSubPerTick;      // 12288
 constexpr uint32_t kSubPerStep = kTps * kSubPerTick;      // 3072
-constexpr uint32_t kSampleCap = 600u * 1024u;             // samples per track (13.9 s)
+constexpr uint32_t kPoolSamples = 5200u * 1024u;          // the shared sample pool (int16, ~10.6 MB)
 // Engines may use this many M4 instructions per block in total; the rest of
 // the 180k gate is mixer, sends, master and the shell.
 // Engine costs below are estimates calibrated against QEMU (tests/lab bench);
 // the fixed part (mixer, delay, reverb, compressor, limiter, shell) is ~55k.
-constexpr int32_t kEngineBudget = 92000;
+constexpr int32_t kEngineBudget = 100000;
+// Every other sounding track costs the mixer (gains, sends, meters, stems) about this much.
+constexpr int32_t kTrackOverhead = 3800;
 
 inline float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
 // Mixer law: fader 0..1.25 -> gain (cubic, 0.8 = unity).
@@ -68,12 +71,18 @@ bool Konsol::init(Context& c) {
         return false;
     delay_.init(dmem);
     reverb_->init(rmem);
-    for (int t = 0; t < kTracks; ++t) {
-        smp_[t].data = static_cast<int16_t*>(a.alloc(kSampleCap * sizeof(int16_t)));
-        smp_[t].cap = kSampleCap;
-        if (!smp_[t].data) return false;
-        if (!eng_[t].init(a, &smp_[t], t)) return false;
+    str_ = a.make<Stretcher>();
+    if (!str_ || !str_->init(a)) return false;
+    for (int t = 0; t < kTracks; ++t)
+        if (!eng_[t].init(a, &pool_, &ts_[t], t)) return false;
+    // the pool takes what is left, minus a reserve for the Shell (LABKIT) and later needs
+    {
+        const uint32_t freeB = a.free();
+        uint32_t want = kPoolSamples * 2u;
+        if (freeB < want + 512u * 1024u) want = freeB > 1024u * 1024u ? freeB - 512u * 1024u : freeB / 2u;
+        if (!pool_.init(a, want / 2u)) return false;
     }
+    ensureBreak();
     for (auto& p : padPitch_) p = -1;
     newProject(true);
     // last project on the card
@@ -100,52 +109,6 @@ bool Konsol::init(Context& c) {
     c.setBpm(P_->bpm);
     applyFxParams();
     return true;
-}
-
-// A synthetic 1-bar break (120 BPM, 2 s): the default sample of every track,
-// 16 equal slices = 16 steps.
-void Konsol::buildBreak(SampleBuf& b) {
-    const uint32_t n = 88200;
-    b.len = 0;
-    uint32_t seed = 0x1234567u;
-    auto noise = [&seed]() {
-        seed ^= seed << 13;
-        seed ^= seed >> 17;
-        seed ^= seed << 5;
-        return float(int32_t(seed)) * (1.0f / 2147483648.0f);
-    };
-    // kick K, snare S, ghost g, hats on every 8th
-    static const char kPat[16] = {'K', 0, 'h', 0, 'S', 0, 'h', 'g', 0, 'K', 'K', 0, 'S', 0, 'h', 'g'};
-    for (uint32_t i = 0; i < n; ++i) b.data[i] = 0;
-    const uint32_t step = n / 16;
-    float hpz = 0, hpx = 0;
-    for (int s = 0; s < 16; ++s) {
-        const char k = kPat[s];
-        const uint32_t at = uint32_t(s) * step;
-        const bool hat = (s % 2) == 0 || k == 'h';
-        for (uint32_t i = 0; i < step * 3 && at + i < n; ++i) {
-            const float tt = float(i) / 44100.0f;
-            float v = 0;
-            if (k == 'K') {
-                const float f = 50.0f + 120.0f * expf(-tt * 40.0f);
-                v += sinf(6.2831853f * f * tt + 3.0f * (1.0f - expf(-tt * 40.0f)) / 40.0f) * expf(-tt * 7.0f) * 0.95f;
-            }
-            if (k == 'S' || k == 'g') {
-                const float amp = k == 'S' ? 0.8f : 0.25f;
-                v += (sinf(6.2831853f * 190.0f * tt) * expf(-tt * 25.0f) * 0.5f + noise() * expf(-tt * 14.0f)) * amp;
-            }
-            if (hat && i < step) {
-                const float x = noise();
-                hpz = 0.6f * (hpz + x - hpx);
-                hpx = x;
-                v += hpz * expf(-tt * 90.0f) * 0.35f;
-            }
-            int32_t o = int32_t(b.data[at + i]) + int32_t(v * 20000.0f);
-            b.data[at + i] = int16_t(o > 32767 ? 32767 : (o < -32768 ? -32768 : o));
-        }
-    }
-    b.path[0] = 0;
-    b.len = n;
 }
 
 void Konsol::setEngine(int t, int kind) {
@@ -232,7 +195,8 @@ void Konsol::newProject(bool demo) {
         tc.mix = Mix();
         tc.mix.stem = uint8_t(t / 2);
         for (int k = 0; k < kEngCount; ++k) eng_[t].e[k]->preset(0);
-        if (!smp_[t].len || smp_[t].path[0]) buildBreak(smp_[t]);
+        setTrackBreak(t);
+        for (auto& p : *reinterpret_cast<KitPad(*)[kKitPads]>(kitPads(eng_[t].e[kEngKit]))) p = KitPad();
     }
     std::snprintf(p.name, sizeof p.name, demo ? "DEMO" : "SONG01");
     p.bpm = 122.0f;
@@ -412,12 +376,19 @@ void Konsol::midiFromAudio(int t, bool on, int pitch, int vel) {
     ctx_->midiOut(m);
 }
 
+int32_t Konsol::engineBudget(int extraTrack) const {
+    int act = 0;
+    for (int k = 0; k < kTracks; ++k) act += (engine(k)->active() || k == extraTrack) ? 1 : 0;
+    const int32_t b = kEngineBudget - kTrackOverhead * (act > 1 ? act - 1 : 0);
+    return int32_t(float(b) * budgetScale_);
+}
+
 bool Konsol::admit(int t, int32_t extra) {
     Engine* e = engine(t);
     int32_t total = 0;
     for (int k = 0; k < kTracks; ++k) total += engine(k)->cost();
     int guard = 0;
-    const int32_t budget = int32_t(float(kEngineBudget) * budgetScale_);
+    const int32_t budget = engineBudget(t);
     while (total + extra > budget && guard++ < 8) {
         // steal on this track first, then on the costliest other track
         Engine* victim = nullptr;
@@ -776,6 +747,26 @@ void Konsol::render(const Transport& tr, const AudioIn& in, float* l, float* r) 
     }
     posPub_ = playing ? end : 0;
 
+    // ---- governor: engines that grow by themselves (clouds) never pass the budget
+    {
+        int32_t total = 0;
+        for (int t = 0; t < kTracks; ++t) total += engine(t)->cost();
+        const int32_t budget = engineBudget(-1);
+        for (int guard = 0; total > budget && guard < 8; ++guard) {
+            Engine* victim = nullptr;
+            int32_t best = 0;
+            for (int t = 0; t < kTracks; ++t) {
+                const int32_t c = engine(t)->cost();
+                if (c > best) {
+                    best = c;
+                    victim = engine(t);
+                }
+            }
+            if (!victim || !victim->steal()) break;
+            total = 0;
+            for (int t = 0; t < kTracks; ++t) total += engine(t)->cost();
+        }
+    }
     // ---- engines -> mixer ----------------------------------------------------
     alignas(16) float tl[kBlock], trr[kBlock], sa[kBlock], sb[kBlock];
     alignas(16) float st[kStems][2][kBlock];
@@ -1018,8 +1009,13 @@ void Konsol::onTransport(bool playing) {
 // bench scenarios (make lab-gate)
 // ============================================================================
 const char* Konsol::benchName(int i) const {
-    static const char* const kN[6] = {"idle", "demo_scene4", "synth8_busy", "samples8", "gen_live", "worst_fx"};
-    return kN[i < 0 ? 0 : (i > 5 ? 5 : i)];
+    static const char* const kN[] = {"idle",     "demo_scene4", "synth8_busy", "samples8", "gen_live", "worst_fx",
+                                     "plaits8",  "semi8",       "kit_warp",
+                                     // solo engines (calibration of the governor's cost estimates)
+                                     "s_sampler", "s_grain", "s_drums", "s_ikeda", "s_makam", "s_acd", "s_vap", "s_fat",
+                                     "s_wtfm", "s_perc", "s_plaits", "s_floater", "s_tb303", "s_neuro", "s_quanta", "s_kit"};
+    const int n = int(sizeof kN / sizeof kN[0]);
+    return kN[i < 0 ? 0 : (i >= n ? n - 1 : i)];
 }
 
 void Konsol::benchSetup(int i) {
@@ -1043,6 +1039,10 @@ void Konsol::benchSetup(int i) {
         }
         P_->launchQ = 0;
         for (int t = 0; t < kTracks; ++t) rt_[t].queued = P_->clip[t][3].exists() ? 3 : -2;
+        return;
+    }
+    if (i >= 6) {
+        benchSetupNew(i);
         return;
     }
     // 8 tracks, every step busy, on the costliest engines
@@ -1100,6 +1100,83 @@ void Konsol::benchSetup(int i) {
     } else {
         hpHeld_ = dlyThrow_ = revThrow_ = false;
     }
+    fxDirty_ = true;
+}
+
+void Konsol::benchSetupNew(int i) {
+    // i = 6 plaits8, 7 semi8, 8 kit_warp, 9.. one engine alone on track 1 (all voices busy)
+    static const uint8_t kPl[kTracks] = {kEngPlaits, kEngPlaits, kEngPlaits, kEngPlaits,
+                                         kEngPlaits, kEngPlaits, kEngPlaits, kEngPlaits};
+    static const uint8_t kSemi[kTracks] = {kEngFloater, kEngTb303, kEngNeuro, kEngQuanta,
+                                           kEngFloater, kEngTb303, kEngNeuro, kEngQuanta};
+    static const uint8_t kKw[kTracks] = {kEngKit, kEngKit, kEngKit, kEngSampler,
+                                         kEngSampler, kEngSampler, kEngGrain, kEngGrain};
+    static const uint8_t kModels[kTracks] = {20, 12, 18, 19, 6, 11, 10, 1};   // the costliest Plaits models
+    const bool solo = i >= 9;
+    for (int t = 0; t < kTracks; ++t) {
+        Clip& c = P_->clip[t][0];
+        c.lenSteps = 16;
+        c.cur = 0;
+        c.pending = 0;
+        c.gen = kGenNotes;
+        c.live = 0;
+        c.buf[0].clear();
+        rt_[t].queued = -2;
+        if (solo && t > 0) continue;
+        const int kind = solo ? i - 9 : (i == 6 ? kPl[t] : (i == 7 ? kSemi[t] : kKw[t]));
+        setEngine(t, kind);
+        Engine* e = engine(t);
+        e->preset(0);
+        if (kind == kEngPlaits) e->set(0, float(solo ? 6 : kModels[t]));
+        if (kind == kEngWtfm) e->set(8, 1.0f);
+        if (kind >= kEngAcd && kind <= kEngWtfm) e->set(e->paramCount() - 1, 4.0f);
+        if (kind == kEngNeuro) e->set(0, float((t * 5 + 4) % 12));   // Hoover, Snarl, ...
+        if (kind == kEngQuanta) {
+            e->set(0, float(t % 5));
+            e->set(1, 120.0f);   // dense
+            e->set(3, 60.0f);
+        }
+        if (kind == kEngSampler) {
+            e->set(0, 1.0f);                               // loop
+            e->set(5, float(1 + (t % 2)));                 // warp Beats / Texture
+            e->set(10, 4.0f);
+        }
+        if (kind == kEngKit) kitFromSlices(t, t == 1);
+        NoteBuf& b = c.buf[0];
+        for (int s = 0; s < 16; ++s) {
+            Note n;
+            n.start = uint16_t(s * kTps);
+            n.len = uint16_t(kind == kEngSampler || kind == kEngGrain ? kTps * 16 : kTps * 4);
+            n.vel = 110;
+            switch (kind) {
+                case kEngFloater: n.pitch = uint8_t(s % 4 == 0 ? 36 : (s % 4 == 2 ? 38 : 60 + s)); break;
+                case kEngKit: n.pitch = uint8_t(36 + (s * 5) % 16); break;
+                case kEngPerc: n.pitch = uint8_t(60 + (s % 12)); break;
+                case kEngDrums: n.pitch = uint8_t(36 + s % 8); break;
+                default: n.pitch = uint8_t(36 + (s * 7) % 24); break;
+            }
+            if ((kind == kEngSampler || kind == kEngGrain) && s % 8) continue;   // long loops / clouds
+            if (kind == kEngTb303 && (s % 3) == 1) n.flags = kFlagSlide | kFlagAccent;
+            b.add(n);
+            if (kind == kEngKit || kind == kEngFloater) {   // + a second hit
+                n.pitch = uint8_t(kind == kEngKit ? 36 + (s * 3 + 7) % 16 : 42);
+                b.add(n);
+            }
+            if (solo && kind != kEngKit && kind != kEngFloater && kind != kEngTb303 && kind != kEngNeuro &&
+                kind != kEngPlaits && kind != kEngSampler && kind != kEngGrain) {
+                n.pitch = uint8_t(n.pitch + 7);
+                b.add(n);
+            }
+        }
+        Mix& m = P_->track[t].mix;
+        m.sendA = 0.5f;
+        m.sendB = 0.5f;
+        m.mute = m.solo = 0;
+        rt_[t].queued = 0;
+    }
+    P_->fx.compRatio = 0.6f;
+    P_->metronome = 0;
+    hpHeld_ = dlyThrow_ = revThrow_ = false;
     fxDirty_ = true;
 }
 

@@ -346,7 +346,13 @@ bool Konsol::runGenerator(int t, int s, uint32_t seed, char* msg, int cap) {
         tg.entropy = seed | 1u;
         uint16_t sl[64];
         int nsl = 16;
-        if (engine == kEngSampler) nsl = int(this->engine(t)->get(3) + 0.5f);
+        if (engine == kEngSampler) {
+            const TrackSample& tsm = ts_[t];
+            const bool trans = this->engine(t)->get(3) > 0.5f && pool_.valid(tsm.slot) && pool_.slot(tsm.slot).nOn > 1;
+            nsl = trans ? pool_.slot(tsm.slot).nOn : int(this->engine(t)->get(4) + 0.5f);
+            if (nsl > 64) nsl = 64;
+        }
+        if (engine == kEngKit) nsl = 16;
         if (engine == kEngDrums) nsl = 8;
         if (nsl < 2) nsl = 2;
         for (int i = 0; i < nsl; ++i) sl[i] = uint16_t(uint32_t(i) * 65536u / uint32_t(nsl));
@@ -355,7 +361,7 @@ bool Konsol::runGenerator(int t, int s, uint32_t seed, char* msg, int cap) {
         tg.slices.beatSlice = true;
         float beats = 4.0f;
         if (engine == kEngSampler || engine == kEngGrain) {
-            const uint32_t len = smp_[t].len;
+            const uint32_t len = pool_.valid(ts_[t].slot) ? pool_.slot(ts_[t].slot).frames : 0;
             const float sel = this->engine(t)->get(2) - this->engine(t)->get(1);
             if (len) beats = float(len) / 44100.0f * (bpm_ > 20.0f ? bpm_ : 120.0f) / 60.0f * (sel > 0.05f ? sel : 1.0f);
         } else {

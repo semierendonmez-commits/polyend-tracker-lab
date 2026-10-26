@@ -1,33 +1,49 @@
-// DATAMATICS -- workstation logic: input, pages, data loader, pieces (dm_ws.h).
-// Drawing lives in dm_draw.cpp.
+// DATAMATICS -- workstation logic: registry, input, pages, data loader, pieces.
+// Drawing: dm_draw.cpp (pages) and dm_vis.cpp (VIEW modes). Performance
+// (scenes, morph, recorder, PERFORM pads): dm_perf.cpp.
 #include "ws/dm_ws.h"
 
+#include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 
 namespace dm {
 
 using namespace lab;
+using kit::ParamId;
 
 namespace {
-const char* const kArr[] = {"Free run", "Sections"};
-const char* const kEnd[] = {"Loop", "Stop"};
-const char* const kMidiModes[] = {"Off", "One channel", "Channel per stream"};
-const char* const kJump[] = {"Next bar", "Immediate"};
-const char* const kSpeed[] = {"Slow", "Normal", "Fast"};
-const char* const kOffOn[] = {"Off", "On"};
+const char* const kOffOn[] = {"OFF", "ON"};
+const char* const kEndNames[] = {"LOOP", "STOP"};
+const char* const kMidiModes[] = {"OFF", "ONE CH", "CH/STREAM"};
+const char* const kArrNames[] = {"FREE", "SECTIONS"};
+const char* const kSongNames[] = {"LIVE", "CHAIN"};
+const char* const kQuantN[] = {"NOW", "BEAT", "BAR", "2 BARS", "4 BARS"};
+const char* const kVisNames[VM_COUNT] = {"STREAM", "BARCODE", "TRANSIT", "GRID", "SPATIAL"};
+const char* const kSpeedNames[] = {"SLOW", "NORMAL", "FAST"};
+const char* const kSetEnd[] = {"Loop", "Stop"};
+const char* const kSetMidi[] = {"Off", "One channel", "Channel per stream"};
+const char* const kSetArr[] = {"Free run", "Sections"};
+const char* const kSetOffOn[] = {"Off", "On"};
 
-// Stream page parameter order (what Up/Down walks).
-const uint8_t kStreamOrder[] = {P_SLOT, P_UNIT, P_ORDER, P_START, P_LEN, P_STRIDE, P_SYNC, P_RATE_MS, P_RATE_DIV,
-                                P_SOUND, P_THR, P_LO, P_HI, P_SCALE, P_DUR, P_DURMOD, P_SHAPE, P_LEVEL, P_VEL,
-                                P_PANMODE, P_PAN, P_STEM, P_MIDI};
+// STREAM page rows: every parameter of one stream, data first.
+const uint8_t kStreamOrder[] = {P_SLOT,  P_UNIT, P_ORDER,  P_START,  P_LEN,   P_STRIDE, P_THR,     P_SYNC,
+                                P_RATE_MS, P_RATE_DIV, P_SOUND, P_LO, P_HI, P_SCALE, P_DUR,   P_DURMOD,
+                                P_SHAPE, P_VEL, P_LEVEL, P_PANMODE, P_PAN, P_STEM, P_MIDI, P_MUTE, P_SOLO};
 constexpr int kStreamRows = int(sizeof kStreamOrder);
 
 int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
+int enumCount(int p) { return paramInfo(p).max - paramInfo(p).min + 1; }
 
-bool isFile(const char* name) { return name && name[0] && name[0] != '.'; }
+const Rgb kSlotRgb[kSlots] = {Rgb(0x3CC8FF), Rgb(0xFFB020), Rgb(0x7CFF5A), Rgb(0xD27CFF)};
+const uint8_t kSlot332[kSlots] = {0x3B, 0xF4, 0x7D, 0xCF};
+const uint8_t kSlot332Dim[kSlots] = {0x0A, 0x48, 0x2C, 0x46};
 }  // namespace
 
+const char* visName(int m) { return (m >= 0 && m < VM_COUNT) ? kVisNames[m] : "?"; }
+Rgb slotColor(int slot) { return kSlotRgb[slot & 3]; }
+uint8_t slotColor332(int slot, bool dim) { return dim ? kSlot332Dim[slot & 3] : kSlot332[slot & 3]; }
 int streamParamAt(int row) { return kStreamOrder[clampi(row, 0, kStreamRows - 1)]; }
 int streamParamRows() { return kStreamRows; }
 
@@ -45,29 +61,42 @@ bool Datamatics::init(Context& c) {
     Arena& a = *c.arena;
     if (!eng_.init(a)) return false;
     eng_.bindMidi(&c);
-    ent_ = a.make<Entry>(kMaxEntries);
     pieces_ = static_cast<char(*)[24]>(a.alloc(kMaxPieces * 24));
     stage_ = static_cast<uint8_t*>(a.alloc(kStageBytes, 32));
     midiScratch_ = static_cast<MidiEv*>(a.alloc(sizeof(MidiEv) * kMaxMidiEvents));
     wf_ = static_cast<uint8_t*>(a.alloc(kWfW * kWfH));
-    pv_ = static_cast<uint8_t*>(a.alloc(kPvW * kPvH));
+    bc_ = static_cast<uint8_t*>(a.alloc(kBcW * kBcH * kSlots));
     mx_ = static_cast<uint8_t*>(a.alloc(kMxW * kMxH));
     builtinBuf_ = static_cast<uint8_t*>(a.alloc(65536));
-    if (!ent_ || !pieces_ || !stage_ || !midiScratch_ || !wf_ || !pv_ || !mx_ || !builtinBuf_) return false;
+    scene_ = a.make<Scene>(kScenes + 1);
+    perf_ = static_cast<PerfEv*>(a.alloc(sizeof(PerfEv) * kPerfMax));
+    pieceBuf_ = static_cast<char*>(a.alloc(kPieceBuf));
+    if (!pieces_ || !stage_ || !midiScratch_ || !wf_ || !bc_ || !mx_ || !builtinBuf_ || !scene_ || !perf_ || !pieceBuf_)
+        return false;
     // built-in data in every slot: the demo piece plays without a card
     loadBuiltinNow(0, 1, kAuto);
     loadBuiltinNow(1, 0, kAuto);
     loadBuiltinNow(2, 2, kAuto);
     loadBuiltinNow(3, 3, kAuto);
-    copyStr(dir_, sizeof dir_, "");
     copyStr(pieceName_, sizeof pieceName_, "DEMO");
+
+    registerParams();
+    kit::Mod& M = c.mod();
+    static const char* const kSrc[kStreams] = {"D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"};
+    for (int s = 0; s < kStreams; ++s) M.addSource(kSrc[s], &eng_.srcData[s]);
+    M.addSource("DENS", &eng_.srcDens);
+    M.addSource("SEC", &eng_.srcSec);
+    M.addSource("HIT", &eng_.srcHit);
+    M.addSource("MORPH", &srcMorph_);
+    c.browser().reserve(256, 4.0f);
+    firstBootScenes();
+
     if (c.fs) {
         char p[96];
         std::snprintf(p, sizeof p, "%s/Pieces", c.home);
         c.fs->mkdir(p);
-        std::snprintf(p, sizeof p, "%s/Data", c.home);
-        c.fs->mkdir(p);
-        // UI settings (waterfall speed, reload at boot): "DMUI <speed> <autoload>"
+        c.fs->mkdir("Data");
+        // UI settings: "DMUI <waterfall speed> <autoload>"
         std::snprintf(p, sizeof p, "%s/ui.cfg", c.home);
         const int32_t h = c.fs->open(p, IStorage::kRead);
         if (h >= 0) {
@@ -75,21 +104,246 @@ bool Datamatics::init(Context& c) {
             const int32_t n = c.fs->read(h, b, sizeof b - 1);
             c.fs->close(h);
             if (n >= 8 && !std::strncmp(b, "DMUI ", 5) && b[5] >= '0' && b[5] <= '2' && (b[7] == '0' || b[7] == '1')) {
-                setSpeed_ = b[5] - '0';
+                wfSpeed_ = b[5] - '0';
                 setAutoload_ = b[7] - '0';
             }
         }
-        // the last piece comes back at boot
         std::snprintf(p, sizeof p, "%s/last.dmx", c.home);
         if (setAutoload_ && c.fs->exists(p)) loadPiece(p);
     }
-    setArrange_ = eng_.arrange;
-    setEnd_ = eng_.endMode;
-    setMidi_ = eng_.midiMode;
-    setJump_ = eng_.jumpQuant;
+    pushRegistry();
     return true;
 }
 
+// ---- registry ------------------------------------------------------------------------
+void Datamatics::registerParams() {
+    kit::Registry& P = ctx_->params();
+    // per-stream display names ("3 Thresh") live in the arena
+    char(*names)[16] = static_cast<char(*)[16]>(ctx_->arena->alloc(16 * 100));
+    int nn = 0;
+    auto nm = [&](int s, const char* what) -> const char* {
+        if (!names || nn >= 100) return what;
+        std::snprintf(names[nn], 16, "%d %s", s + 1, what);
+        return names[nn++];
+    };
+    static const char* const kGrp[kStreams] = {"ST1", "ST2", "ST3", "ST4", "ST5", "ST6", "ST7", "ST8"};
+    char key[24];
+    auto K = [&](int s, const char* k) -> const char* {
+        std::snprintf(key, sizeof key, "s%d.%s", s + 1, k);
+        return key;
+    };
+    for (int s = 0; s < kStreams; ++s)
+        for (int p = 0; p < P_COUNT; ++p) pid_[s][p] = kit::kNoParam;
+
+    // PERFORM: mutes, solos, the throw / morph settings, the slot scrubs
+    P.setPage(PG_PERFORM);
+    for (int s = 0; s < kStreams; ++s) {
+        P.setGroup(kGrp[s], slotColor(eng_.st[s].p[P_SLOT]));
+        pid_[s][P_MUTE] = P.add(K(s, "mute"), nm(s, "Mute"), &eng_.st[s].p[P_MUTE]).names(kOffOn, 2).pad(s);
+        pid_[s][P_SOLO] = P.add(K(s, "solo"), nm(s, "Solo"), &eng_.st[s].p[P_SOLO]).names(kOffOn, 2).pad(12 + s);
+    }
+    P.setGroup("PERFORM", Rgb(0xFF2A00));
+    quantId_ = P.add("pf.quant", "Quantise", &eng_.quant).names(kQuantN, Q_COUNT).pad(8);
+    morphId_ = P.add("pf.morph", "Morph", &morphBars_).range(0, 16).unit("bars").pad(9);
+    stutId_ = P.add("pf.stutter", "Stutter", &eng_.stutterDiv).names(paramInfo(P_RATE_DIV).names, kRateDivs).pad(10);
+    freezeId_ = P.add("pf.freeze", "Freeze", &eng_.freezeWin).range(1, 32).unit("units").pad(11);
+    depthId_ = P.add("pf.depth", "Throw depth", &eng_.throwDepth).range(0, 100).unit("%").pad(20);
+    for (int i = 0; i < kSlots; ++i) {
+        static const char* const kScrubN[kSlots] = {"S1 Scrub", "S2 Scrub", "S3 Scrub", "S4 Scrub"};
+        static const char* const kScrubK[kSlots] = {"pf.scrub1", "pf.scrub2", "pf.scrub3", "pf.scrub4"};
+        static const char* const kSG[kSlots] = {"SLOT1", "SLOT2", "SLOT3", "SLOT4"};
+        P.setGroup(kSG[i], slotColor(i));
+        scrubId_[i] = P.add(kScrubK[i], kScrubN[i], &eng_.scrub[i]).percent().pad(24 + i);
+    }
+    // MATRIX: how each stream reads (density, start, length, stride)
+    P.setPage(PG_MATRIX);
+    for (int s = 0; s < kStreams; ++s) {
+        P.setGroup(kGrp[s]);
+        pid_[s][P_THR] = P.add(K(s, "thr"), nm(s, "Thresh"), &eng_.st[s].p[P_THR]).range(0, 255).pad(s);
+        pid_[s][P_START] = P.add(K(s, "start"), nm(s, "Start"),
+                                 [](void* c, float v) { *static_cast<int*>(c) = int(v * 10.0f + 0.5f); },
+                                 &eng_.st[s].p[P_START], float(eng_.st[s].p[P_START]) * 0.1f)
+                               .range(0.0f, 99.9f)
+                               .step(0.1f)
+                               .unit("%")
+                               .def(0.0f)
+                               .pad(12 + s);
+        pid_[s][P_LEN] = P.add(K(s, "len"), nm(s, "Length"), &eng_.st[s].p[P_LEN])
+                             .names(paramInfo(P_LEN).names, enumCount(P_LEN))
+                             .pad(24 + s);
+    }
+    for (int s = 0; s < 4; ++s) {   // strides of 1-4 on the free pads, 5-8 after
+        P.setGroup(kGrp[s]);
+        pid_[s][P_STRIDE] = P.add(K(s, "stride"), nm(s, "Stride"), &eng_.st[s].p[P_STRIDE]).range(1, 64).pad(8 + s);
+    }
+    for (int s = 4; s < kStreams; ++s) {
+        P.setGroup(kGrp[s]);
+        pid_[s][P_STRIDE] = P.add(K(s, "stride"), nm(s, "Stride"), &eng_.st[s].p[P_STRIDE]).range(1, 64).pad(16 + s);
+    }
+    // MIXER
+    P.setPage(PG_MIXER);
+    for (int s = 0; s < kStreams; ++s) {
+        P.setGroup(kGrp[s]);
+        pid_[s][P_LEVEL] = P.add(K(s, "level"), nm(s, "Level"), &eng_.st[s].p[P_LEVEL]).range(0, 100).unit("%").pad(s);
+        pid_[s][P_PAN] = P.add(K(s, "pan"), nm(s, "Pan"), &eng_.st[s].p[P_PAN]).range(-100, 100).bipolar().pad(12 + s);
+        pid_[s][P_PANMODE] = P.add(K(s, "panmode"), nm(s, "Pan mode"), &eng_.st[s].p[P_PANMODE])
+                                 .names(paramInfo(P_PANMODE).names, enumCount(P_PANMODE))
+                                 .pad(24 + s);
+    }
+    for (int s = 0; s < kStreams; ++s) {
+        P.setGroup(kGrp[s]);
+        pid_[s][P_STEM] = P.add(K(s, "stem"), nm(s, "Stem"), &eng_.st[s].p[P_STEM]).names(paramInfo(P_STEM).names, 4).noMod();
+    }
+    // SONG
+    P.setPage(PG_SONG);
+    P.setGroup("SONG", Rgb(0xB0B0B0));
+    songId_ = P.add("song.mode", "Song mode", &eng_.songMode).names(kSongNames, 2).noMod();
+    P.add("song.arrange", "Arrangement", &eng_.arrange).names(kArrNames, 2).noMod();
+    P.add("song.end", "End", &eng_.endMode).names(kEndNames, 2).noMod();
+    P.add("song.midi", "MIDI out", &eng_.midiMode).names(kMidiModes, 3).noMod();
+    // STREAM pages: one per stream
+    for (int s = 0; s < kStreams; ++s) {
+        P.setPage(PG_ST0 + s);
+        P.setGroup(kGrp[s]);
+        auto en = [&](int p, const char* k, const char* n) {
+            pid_[s][p] = P.add(K(s, k), n, &eng_.st[s].p[p]).names(paramInfo(p).names, enumCount(p));
+        };
+        en(P_SLOT, "slot", "Slot");
+        en(P_UNIT, "unit", "Unit");
+        en(P_ORDER, "order", "Order");
+        en(P_SYNC, "grid", "Grid");
+        pid_[s][P_RATE_MS] = P.add(K(s, "rate"), "Rate", &eng_.st[s].p[P_RATE_MS]).range(1, 2000).exp().unit("ms");
+        en(P_RATE_DIV, "div", "Division");
+        en(P_SOUND, "sound", "Sound");
+        pid_[s][P_LO] = P.add(K(s, "lo"), "Low", &eng_.st[s].p[P_LO]).range(1, 21000).exp().unit("Hz");
+        pid_[s][P_HI] = P.add(K(s, "hi"), "High", &eng_.st[s].p[P_HI]).range(1, 21000).exp().unit("Hz");
+        en(P_SCALE, "scale", "Scale");
+        pid_[s][P_DUR] = P.add(K(s, "dur"), "Duration",
+                               [](void* c, float v) {
+                                   const int x = int(v * 10.0f + 0.5f);
+                                   *static_cast<int*>(c) = x < 1 ? 1 : x;
+                               },
+                               &eng_.st[s].p[P_DUR], float(eng_.st[s].p[P_DUR]) * 0.1f)
+                             .range(0.1f, 2000.0f)
+                             .exp()
+                             .unit("ms")
+                             .def(10.0f);
+        pid_[s][P_DURMOD] = P.add(K(s, "durmod"), "Dur mod", &eng_.st[s].p[P_DURMOD]).range(0, 100).unit("%");
+        en(P_SHAPE, "shape", "Shape");
+        pid_[s][P_VEL] = P.add(K(s, "vel"), "Velocity", &eng_.st[s].p[P_VEL]).range(0, 100).unit("%");
+        en(P_MIDI, "midi", "MIDI");
+    }
+    // VIEW
+    P.setPage(PG_VIEW);
+    P.setGroup("VIEW", Rgb(0xFFFFFF));
+    visId_ = P.add("view.mode", "Visual", &visMode_).names(kVisNames, VM_COUNT).noMod();
+    followId_ = P.add("view.follow", "Follow", &follow_).range(1, 8).noMod();
+    autoId_ = P.add("view.auto", "Auto cycle", &visAuto_).names(kOffOn, 2).noMod();
+    speedId_ = P.add("view.speed", "Waterfall", &wfSpeed_).names(kSpeedNames, 3).noMod();
+    P.setPage(0);
+
+    // the params a scene captures: everything about the streams + the scrubs
+    sceneN_ = 0;
+    for (int s = 0; s < kStreams; ++s)
+        for (int p = 0; p < P_COUNT; ++p)
+            if (pid_[s][p] != kit::kNoParam && p != P_STEM && sceneN_ < kSceneMax) sceneIds_[sceneN_++] = pid_[s][p];
+    for (int i = 0; i < kSlots; ++i)
+        if (sceneN_ < kSceneMax) sceneIds_[sceneN_++] = scrubId_[i];
+}
+
+void Datamatics::pushRegistry() {
+    // Fields written directly (defaults, an older piece, presets) -> registry base.
+    kit::Registry& P = ctx_->params();
+    for (int s = 0; s < kStreams; ++s)
+        for (int p = 0; p < P_COUNT; ++p) {
+            const ParamId id = pid_[s][p];
+            if (id == kit::kNoParam) continue;
+            const int v = eng_.st[s].p[p];
+            P.set(id, (p == P_DUR || p == P_START) ? float(v) * 0.1f : float(v), false);
+        }
+    for (int i = 0; i < kSlots; ++i) P.set(scrubId_[i], eng_.scrub[i], false);
+    P.sync();
+}
+
+void Datamatics::nudge(ParamId id, int delta, bool fine) {
+    kit::Registry& P = ctx_->params();
+    if (!P.valid(id)) return;
+    P.nudge(id, delta, fine);
+    perfLog(PE_PARAM, P.meta(id).key, uint16_t(P.norm(id) * 65535.0f + 0.5f));
+}
+
+void Datamatics::setParam(ParamId id, float v) {
+    kit::Registry& P = ctx_->params();
+    if (!P.valid(id)) return;
+    P.set(id, v);
+    perfLog(PE_PARAM, P.meta(id).key, uint16_t(P.norm(id) * 65535.0f + 0.5f));
+}
+
+void Datamatics::assign(int stream, int slot) {
+    if (stream < 0 || stream >= kStreams || slot < 0 || slot >= kSlots) return;
+    setParam(pid_[stream][P_SLOT], float(slot));
+    ctx_->params().applyNow();
+}
+
+// ---- LABKIT navigation ----------------------------------------------------------------------
+int Datamatics::navPages(kit::PageInfo* out, int cap) {
+    static const char* const kNames[PG_COUNT] = {"PERFORM", "MATRIX", "MIXER", "SONG", "ST1", "ST2", "ST3", "ST4",
+                                                 "ST5",     "ST6",    "ST7",   "ST8",  "VIEW", "DATA", "PIECE"};
+    static const char* const kStHelp = "One stream: what it reads (slot, unit, order), its grid, its sound and its mix.";
+    static const char* const kHelp[PG_COUNT] = {
+        "Live: mute / fill streams, launch sections, recall scenes, hold throws, scrub the data.",
+        "The barcode sequencer: what every stream will read next. Encoder = density.",
+        "Level, pan, pan mode and stem of the eight streams.",
+        "The section chain: LIVE repeats a section until you launch another, CHAIN plays them in order.",
+        kStHelp, kStHelp, kStHelp, kStHelp, kStHelp, kStHelp, kStHelp, kStHelp,
+        "Full-screen datamatics: waterfall, barcode, transit, grid, spatial. Arrows: mode / stream.",
+        "The four data slots and the patch: which stream reads which slot. F8 opens the browser.",
+        "Save and load pieces (.dmx). Insert = save as new, F8 = load."};
+    static const char* const kF8[PG_COUNT] = {
+        "F8: replay the recorded performance on / off (Rec arms recording)",
+        "F8: mute the selected stream",
+        "F8: mute (Shift: solo) the selected stream",
+        "F8: launch the selected section (Shift: LIVE / CHAIN)",
+        "F8: audition the stream", "F8: audition the stream", "F8: audition the stream", "F8: audition the stream",
+        "F8: audition the stream", "F8: audition the stream", "F8: audition the stream", "F8: audition the stream",
+        "F8: auto-cycle the visual modes",
+        "F8: load a file into the selected slot (browser)",
+        "F8: load the selected piece"};
+    int n = 0;
+    for (; n < PG_COUNT && n < cap; ++n) {
+        out[n].name = kNames[n];
+        out[n].help = kHelp[n];
+        out[n].color = isStreamPage(n) ? slotColor(eng_.st[n - PG_ST0].p[P_SLOT]) : Rgb(0xFFFFFF);
+        out[n].fkeys[0] = "F1: PERFORM";
+        out[n].fkeys[1] = "F2: MATRIX";
+        out[n].fkeys[2] = "F3: STREAM (the selected stream)";
+        out[n].fkeys[3] = "F4: DATA (slots and patch)";
+        out[n].fkeys[4] = "F5: MIXER";
+        out[n].fkeys[5] = "F6: SONG (sections)";
+        out[n].fkeys[6] = "F7: VIEW (again: next visual)";
+        out[n].fkeys[7] = kF8[n];
+    }
+    return n;
+}
+
+void Datamatics::navGoto(int page) {
+    if (page < 0 || page >= PG_COUNT) return;
+    if (isStreamPage(page)) sel_ = page - PG_ST0;
+    setPage(page);
+}
+
+void Datamatics::navFocus(ParamId id) {
+    for (int s = 0; s < kStreams; ++s)
+        for (int r = 0; r < kStreamRows; ++r)
+            if (pid_[s][kStreamOrder[r]] == id && isStreamPage(page_)) streamRow_ = r;
+}
+
+void Datamatics::navParamChanged(ParamId id) {
+    kit::Registry& P = ctx_->params();
+    if (P.valid(id)) perfLog(PE_PARAM, P.meta(id).key, uint16_t(P.norm(id) * 65535.0f + 0.5f));
+}
+
+// ---- data slots ----------------------------------------------------------------------------
 void Datamatics::loadBuiltinNow(int slot, int b, int mode) {
     // A built-in set read in AUTO keeps its own form; a forced mode reads its
     // values as a byte file through that mode (e.g. @LFSR as BITS).
@@ -102,7 +356,7 @@ void Datamatics::loadBuiltinNow(int slot, int b, int mode) {
         o.aux = sl.aux;
         makeBuiltin(b, o);
     } else {
-        o.v = builtinBuf_;   // own buffer: a card load may be using stage_
+        o.v = builtinBuf_;
         o.aux = nullptr;
         o.cap = 65536;
         const uint32_t n = makeBuiltin(b, o);
@@ -121,9 +375,33 @@ void Datamatics::loadBuiltinNow(int slot, int b, int mode) {
     copyStr(sl.path, sizeof sl.path, builtinName(b));
     __atomic_store_n(&sl.n, o.n, __ATOMIC_RELEASE);
     ++slotGen_[slot];
+    computeMeta(slot, 0);
 }
 
-// ---- loader: a file is read in chunks across main-loop passes, then decoded --------
+void Datamatics::computeMeta(int slot, uint32_t fileSize) {
+    const Slot& sl = eng_.slot[slot];
+    SlotMeta& m = meta_[slot];
+    m.fileSize = fileSize;
+    uint32_t hist[256] = {};
+    uint32_t h = 2166136261u, ones = 0;
+    const uint32_t n = sl.n;
+    for (uint32_t i = 0; i < n; ++i) {
+        const uint8_t v = sl.v[i];
+        ++hist[v];
+        h = (h ^ v) * 16777619u;
+        ones += uint32_t(__builtin_popcount(v));
+    }
+    m.hash = h;
+    m.ones = n ? float(ones) / float(n * 8u) : 0.0f;
+    float e = 0.0f;
+    for (int i = 0; i < 256; ++i)
+        if (hist[i]) {
+            const float p = float(hist[i]) / float(n);
+            e -= p * log2f(p);
+        }
+    m.entropy = e;
+}
+
 void Datamatics::requestLoad(int slot, const char* path, int mode) {
     if (slot < 0 || slot >= kSlots || !path || !path[0]) return;
     const int b = builtinIndex(path);
@@ -131,11 +409,23 @@ void Datamatics::requestLoad(int slot, const char* path, int mode) {
         loadBuiltinNow(slot, b, mode);
         return;
     }
+    for (int i = 0; i < jobCount_; ++i)   // a newer request for the same slot replaces the queued one
+        if (jobs_[i].slot == slot) {
+            copyStr(jobs_[i].path, sizeof jobs_[i].path, path);
+            jobs_[i].mode = mode;
+            return;
+        }
     if (jobCount_ >= kJobQ) return;
     LoadJob& j = jobs_[jobCount_++];
     copyStr(j.path, sizeof j.path, path);
     j.slot = slot;
     j.mode = mode;
+}
+
+void Datamatics::reloadSlot(int slot, int mode) {
+    Slot& sl = eng_.slot[slot & 3];
+    sl.wantMode = uint8_t(mode);
+    if (sl.path[0]) requestLoad(slot, sl.path, mode);
 }
 
 void Datamatics::pumpLoader() {
@@ -148,13 +438,13 @@ void Datamatics::pumpLoader() {
         copyStr(sl.path, sizeof sl.path, j.path);
         sl.wantMode = uint8_t(j.mode);
         if (!ctx_->fs) {
-            std::snprintf(status_, sizeof status_, "NO CARD: %s", j.path);
+            std::snprintf(status_, sizeof status_, "NO CARD: %.40s", j.path);
             statusUntil_ = nowMs_ + 3000;
             return;
         }
         const int32_t h = ctx_->fs->open(j.path, IStorage::kRead);
         if (h < 0) {
-            std::snprintf(status_, sizeof status_, "MISSING %s", j.path);
+            std::snprintf(status_, sizeof status_, "MISSING %.44s", j.path);
             statusUntil_ = nowMs_ + 3000;
             return;
         }
@@ -168,8 +458,7 @@ void Datamatics::pumpLoader() {
         job_.limit = job_.size < kStageBytes ? job_.size : kStageBytes;
         job_.pos = 0;
     }
-    // ~32 KB per pass keeps the UI and MIDI moving while a big file loads
-    uint32_t budget = 32768;
+    uint32_t budget = 32768;   // ~32 KB per pass keeps the UI and MIDI moving
     while (job_.pos < job_.limit && budget) {
         uint32_t want = job_.limit - job_.pos;
         if (want > budget) want = budget;
@@ -203,103 +492,33 @@ void Datamatics::finishJob() {
     sl.srcH = o.srcH;
     __atomic_store_n(&sl.n, o.n, __ATOMIC_RELEASE);
     ++slotGen_[job_.slot];
-    std::snprintf(status_, sizeof status_, "S%d < %.30s  %s %lu", job_.slot + 1, name, modeName(o.mode),
-                  static_cast<unsigned long>(o.n));
-    statusUntil_ = nowMs_ + 3000;
-    if (job_.size > kStageBytes) {
+    computeMeta(job_.slot, job_.size);
+    if (job_.size > kStageBytes)
         std::snprintf(status_, sizeof status_, "S%d < %.24s first 4 MB", job_.slot + 1, name);
-    }
+    else
+        std::snprintf(status_, sizeof status_, "S%d < %.30s  %s", job_.slot + 1, name, modeName(o.mode));
+    statusUntil_ = nowMs_ + 3000;
 }
 
 void Datamatics::finishLoadsNow() {
     for (int guard = 0; guard < 100000 && loadBusy(); ++guard) pumpLoader();
 }
 
-// ---- browser ---------------------------------------------------------------------
-void Datamatics::scanDir() {
-    entCount_ = 0;
-    // built-ins first at the card root
-    if (!dir_[0])
-        for (int b = 0; b < kBuiltinCount && entCount_ < kMaxEntries; ++b) {
-            Entry& e = ent_[entCount_++];
-            copyStr(e.name, sizeof e.name, builtinName(b));
-            e.size = 0;
-            e.dir = false;
-        }
-    else {
-        Entry& e = ent_[entCount_++];
-        copyStr(e.name, sizeof e.name, "..");
-        e.size = 0;
-        e.dir = true;
-    }
-    if (ctx_->fs) {
-        struct C {
-            Datamatics* w;
-        } c{this};
-        ctx_->fs->listDir(dir_[0] ? dir_ : "/",
-                          [](const IStorage::DirEntry& d, void* p) {
-                              Datamatics* w = static_cast<C*>(p)->w;
-                              if (!isFile(d.name)) return true;
-                              if (w->entCount_ >= kMaxEntries) return false;
-                              Entry& e = w->ent_[w->entCount_++];
-                              copyStr(e.name, sizeof e.name, d.name);
-                              e.size = d.size;
-                              e.dir = d.isDir;
-                              return true;
-                          },
-                          &c);
-    }
-    // folders first, then files; each alphabetical (insertion sort, <=160)
-    const int first = dir_[0] ? 1 : kBuiltinCount;
-    for (int i = first + 1; i < entCount_; ++i) {
-        Entry t = ent_[i];
-        int j = i - 1;
-        auto less = [](const Entry& a, const Entry& b) {
-            if (a.dir != b.dir) return a.dir;
-            for (int k = 0;; ++k) {
-                char x = a.name[k], y = b.name[k];
-                if (x >= 'a' && x <= 'z') x = char(x - 32);
-                if (y >= 'a' && y <= 'z') y = char(y - 32);
-                if (x != y) return x < y;
-                if (!x) return false;
-            }
-        };
-        while (j >= first && less(t, ent_[j])) {
-            ent_[j + 1] = ent_[j];
-            --j;
-        }
-        ent_[j + 1] = t;
-    }
-    if (entSel_ >= entCount_) entSel_ = entCount_ ? entCount_ - 1 : 0;
-}
-
-void Datamatics::enterEntry() {
-    if (entSel_ < 0 || entSel_ >= entCount_) return;
-    const Entry& e = ent_[entSel_];
-    if (e.dir) {
-        if (!std::strcmp(e.name, "..")) {
-            char* slash = std::strrchr(dir_, '/');
-            if (slash) *slash = 0;
-            else dir_[0] = 0;
-        } else {
-            char nd[128];
-            if (dir_[0]) std::snprintf(nd, sizeof nd, "%s/%s", dir_, e.name);
-            else std::snprintf(nd, sizeof nd, "%s", e.name);
-            copyStr(dir_, sizeof dir_, nd);
-        }
-        entSel_ = 0;
-        entTop_ = 0;
-        scanDir();
-        return;
-    }
-    if (e.name[0] == '@') {
-        requestLoad(target_, e.name, loadMode_);
-    } else {
-        char path[128];
-        if (dir_[0]) std::snprintf(path, sizeof path, "%s/%s", dir_, e.name);
-        else std::snprintf(path, sizeof path, "%s", e.name);
-        requestLoad(target_, path, loadMode_);
-    }
+void Datamatics::openBrowser(int slot) {
+    kit::BrowserRequest q;
+    static char title[32];
+    std::snprintf(title, sizeof title, "Load data into S%d", slot + 1);
+    q.title = title;
+    q.folder = "Data";
+    q.exts = "";   // any file is data
+    q.preview = true;
+    q.ctx = this;
+    pickSlot_ = slot;
+    q.onPick = [](void* c, const char* path) {
+        Datamatics* w = static_cast<Datamatics*>(c);
+        copyStr(w->pendingPick_, sizeof w->pendingPick_, path);   // loaded in update()
+    };
+    ctx_->browser().open(q);
 }
 
 // ---- pieces ------------------------------------------------------------------------
@@ -326,14 +545,86 @@ void Datamatics::scanPieces() {
     if (pieceSel_ >= pieceCount_) pieceSel_ = pieceCount_ ? pieceCount_ - 1 : 0;
 }
 
+namespace {
+struct Writer {
+    char* p;
+    uint32_t cap, n;
+    bool ok = true;
+    void put(const char* fmt, ...) __attribute__((format(printf, 2, 3)));
+};
+void Writer::put(const char* fmt, ...) {
+    if (!ok) return;
+    va_list ap;
+    va_start(ap, fmt);
+    const int w = std::vsnprintf(p + n, cap - n, fmt, ap);
+    va_end(ap);
+    if (w < 0 || uint32_t(w) >= cap - n) {
+        ok = false;
+        return;
+    }
+    n += uint32_t(w);
+}
+int hexv(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+uint32_t readHex(const char*& s, const char* e) {
+    while (s < e && *s == ' ') ++s;
+    uint32_t v = 0;
+    int d;
+    while (s < e && (d = hexv(*s)) >= 0) {
+        v = (v << 4) | uint32_t(d);
+        ++s;
+    }
+    return v;
+}
+}  // namespace
+
 bool Datamatics::savePiece(const char* path) {
     if (!ctx_->fs) return false;
-    static char buf[4096];
-    const uint32_t n = writePiece(eng_, ctx_->bpm(), buf, sizeof buf);
+    uint32_t n = writePiece(eng_, ctx_->bpm(), pieceBuf_, kPieceBuf);
     if (!n) return false;
+    Writer w{pieceBuf_, kPieceBuf, n};
+    kit::Registry& P = ctx_->params();
+    // scenes: key hash : normalized value x 65535, hex
+    for (int i = 0; i < kScenes; ++i) {
+        if (!scene_[i].used) continue;
+        w.put("scene %d", i);
+        for (int k = 0; k < sceneN_; ++k)
+            w.put(" %lx:%x", static_cast<unsigned long>(P.meta(sceneIds_[k]).key),
+                  unsigned(scene_[i].v[k] * 65535.0f + 0.5f));
+        w.put("\n");
+    }
+    // the recorded performance and its start snapshot
+    if (perfN_) {
+        w.put("perf %lu %d", static_cast<unsigned long>(perfLen_), perfStartSec_);
+        for (int k = 0; k < sceneN_; ++k)
+            w.put(" %lx:%x", static_cast<unsigned long>(P.meta(sceneIds_[k]).key),
+                  unsigned(scene_[kScenes].v[k] * 65535.0f + 0.5f));
+        w.put("\n");
+        for (int i = 0; i < perfN_; ++i)
+            w.put("pe %lx %d %lx %x %d\n", static_cast<unsigned long>(perf_[i].t), perf_[i].type,
+                  static_cast<unsigned long>(perf_[i].key), unsigned(perf_[i].val), perf_[i].a);
+    }
+    // LABKIT registry chunk (base values, macros, routes, MIDI learn), hex in 64-byte lines
+    const uint32_t cs = P.chunkSize();
+    if (cs && w.ok && w.n + cs * 2 + cs / 32 + 64 < kPieceBuf) {
+        uint8_t* chunk = stage_ + (kStageBytes - cs - 16);   // the loader is idle while we save
+        if (job_.active) chunk = nullptr;
+        const uint32_t m = chunk ? P.saveChunk(chunk, cs + 16) : 0;
+        for (uint32_t i = 0; i < m; i += 64) {
+            w.put("kit");
+            w.put(" ");
+            for (uint32_t j = i; j < m && j < i + 64; ++j) w.put("%02x", chunk[j]);
+            w.put("\n");
+        }
+    }
+    if (!w.ok) return false;
     const int32_t h = ctx_->fs->open(path, IStorage::kWrite);
     if (h < 0) return false;
-    const bool ok = ctx_->fs->write(h, buf, n) == int32_t(n);
+    const bool ok = ctx_->fs->write(h, pieceBuf_, w.n) == int32_t(w.n);
     ctx_->fs->close(h);
     return ok;
 }
@@ -342,16 +633,15 @@ bool Datamatics::loadPiece(const char* path) {
     if (!ctx_->fs) return false;
     const int32_t h = ctx_->fs->open(path, IStorage::kRead);
     if (h < 0) return false;
-    static char buf[8192];
     uint32_t n = 0;
     for (;;) {
-        const int32_t got = ctx_->fs->read(h, buf + n, uint32_t(sizeof buf - 1 - n));
+        const int32_t got = ctx_->fs->read(h, pieceBuf_ + n, uint32_t(kPieceBuf - 1 - n));
         if (got <= 0) break;
         n += uint32_t(got);
-        if (n >= sizeof buf - 1) break;
+        if (n >= kPieceBuf - 1) break;
     }
     ctx_->fs->close(h);
-    buf[n] = 0;
+    pieceBuf_[n] = 0;
     float bpm = ctx_->bpm();
     char oldPaths[kSlots][128];
     uint8_t oldModes[kSlots];
@@ -360,7 +650,7 @@ bool Datamatics::loadPiece(const char* path) {
         oldModes[i] = eng_.slot[i].wantMode;
         eng_.slot[i].path[0] = 0;
     }
-    if (!readPiece(eng_, buf, n, &bpm)) {
+    if (!readPiece(eng_, pieceBuf_, n, &bpm)) {
         for (int i = 0; i < kSlots; ++i) copyStr(eng_.slot[i].path, sizeof eng_.slot[i].path, oldPaths[i]);
         return false;
     }
@@ -372,15 +662,74 @@ bool Datamatics::loadPiece(const char* path) {
         if (!p[0]) {
             eng_.slot[i].n = 0;
             ++slotGen_[i];
+            computeMeta(i, 0);
             continue;
         }
         if (!std::strcmp(p, oldPaths[i]) && m == oldModes[i] && eng_.slot[i].n) continue;   // already in memory
         requestLoad(i, p, m);
     }
-    setArrange_ = eng_.arrange;
-    setEnd_ = eng_.endMode;
-    setMidi_ = eng_.midiMode;
-    setJump_ = eng_.jumpQuant;
+    pushRegistry();
+    // scenes, performance, registry chunk
+    kit::Registry& P = ctx_->params();
+    for (int i = 0; i <= kScenes; ++i) scene_[i].used = false;
+    perfN_ = 0;
+    perfLen_ = 0;
+    uint8_t* chunk = stage_ + (kStageBytes - 65536);
+    uint32_t chunkN = 0;
+    const char* s = pieceBuf_;
+    const char* end = pieceBuf_ + n;
+    auto readPairs = [&](const char*& q, const char* le, Scene& sc) {
+        captureScene(sc);   // keys missing in the file keep the current value
+        while (q < le) {
+            const uint32_t key = readHex(q, le);
+            if (q >= le || *q != ':') break;
+            ++q;
+            const uint32_t v = readHex(q, le);
+            const ParamId id = P.findHash(key);
+            for (int k = 0; k < sceneN_; ++k)
+                if (sceneIds_[k] == id) sc.v[k] = float(v > 65535 ? 65535 : v) * (1.0f / 65535.0f);
+        }
+        sc.used = true;
+    };
+    while (s < end) {
+        const char* eol = s;
+        while (eol < end && *eol != '\n') ++eol;
+        const char* le = eol;
+        if (le > s && le[-1] == '\r') --le;
+        if (le - s > 6 && !std::strncmp(s, "scene ", 6)) {
+            const char* q = s + 6;
+            const uint32_t i = readHex(q, le);
+            if (i < uint32_t(kScenes)) readPairs(q, le, scene_[i]);
+        } else if (le - s > 5 && !std::strncmp(s, "perf ", 5)) {
+            const char* q = s + 5;
+            int len = 0, sec = 0;
+            while (q < le && *q == ' ') ++q;
+            while (q < le && *q >= '0' && *q <= '9') len = len * 10 + (*q++ - '0');
+            while (q < le && *q == ' ') ++q;
+            while (q < le && *q >= '0' && *q <= '9') sec = sec * 10 + (*q++ - '0');
+            perfLen_ = uint32_t(len);
+            perfStartSec_ = sec;
+            readPairs(q, le, scene_[kScenes]);
+        } else if (le - s > 3 && !std::strncmp(s, "pe ", 3) && perfN_ < kPerfMax) {
+            const char* q = s + 3;
+            PerfEv& e = perf_[perfN_];
+            e.t = readHex(q, le);
+            e.type = uint8_t(readHex(q, le));
+            e.key = readHex(q, le);
+            e.val = uint16_t(readHex(q, le));
+            e.a = uint8_t(readHex(q, le));
+            if (e.type <= PE_SLOTSOLO) ++perfN_;
+        } else if (le - s > 4 && !std::strncmp(s, "kit ", 4)) {
+            for (const char* q = s + 4; q + 1 < le && chunkN < 65536; q += 2) {
+                const int a = hexv(q[0]), b = hexv(q[1]);
+                if (a < 0 || b < 0) break;
+                chunk[chunkN++] = uint8_t((a << 4) | b);
+            }
+        }
+        s = eol < end ? eol + 1 : end;
+    }
+    if (chunkN && !job_.active) P.loadChunk(chunk, chunkN);
+    P.applyNow();
     eng_.reset();
     return true;
 }
@@ -392,6 +741,10 @@ void Datamatics::newPiece() {
     loadBuiltinNow(2, 2, kAuto);
     loadBuiltinNow(3, 3, kAuto);
     copyStr(pieceName_, sizeof pieceName_, "DEMO");
+    pushRegistry();
+    ctx_->params().applyNow();
+    perfN_ = 0;
+    firstBootScenes();
 }
 
 void Datamatics::save() {
@@ -403,7 +756,7 @@ void Datamatics::save() {
     const int32_t h = ctx_->fs->open(p, IStorage::kWrite);
     if (h >= 0) {
         char b[16];
-        const int n = std::snprintf(b, sizeof b, "DMUI %d %d\n", setSpeed_, setAutoload_);
+        const int n = std::snprintf(b, sizeof b, "DMUI %d %d\n", wfSpeed_ < 0 || wfSpeed_ > 2 ? 1 : wfSpeed_, setAutoload_ ? 1 : 0);
         ctx_->fs->write(h, b, uint32_t(n));
         ctx_->fs->close(h);
     }
@@ -412,7 +765,7 @@ void Datamatics::save() {
 // ---- settings rows ----------------------------------------------------------------------
 int Datamatics::settings(SettingRow* rows, int cap) {
     int n = 0;
-    auto add = [&](const char* label, int* v, int mn, int mx, const char* const* names, void (*fn)(void*, int)) {
+    auto add = [&](const char* label, int* v, int mn, int mx, const char* const* names) {
         if (n >= cap) return;
         SettingRow& r = rows[n++];
         r.label = label;
@@ -420,23 +773,24 @@ int Datamatics::settings(SettingRow* rows, int cap) {
         r.min = mn;
         r.max = mx;
         r.names = names;
-        r.onChange = fn;
+        r.onChange = [](void* c, int) { static_cast<Datamatics*>(c)->ctx_->params().sync(); };
         r.ctx = this;
     };
-    add("Arrangement", &setArrange_, 0, 1, kArr, [](void* c, int v) { static_cast<Datamatics*>(c)->eng_.arrange = v; });
-    add("At the end of the piece", &setEnd_, 0, 1, kEnd,
-        [](void* c, int v) { static_cast<Datamatics*>(c)->eng_.endMode = v; });
-    add("MIDI out of the streams", &setMidi_, 0, 2, kMidiModes,
-        [](void* c, int v) { static_cast<Datamatics*>(c)->eng_.midiMode = v; });
-    add("Section jump", &setJump_, 0, 1, kJump, [](void* c, int v) { static_cast<Datamatics*>(c)->eng_.jumpQuant = v; });
-    add("Waterfall speed", &setSpeed_, 0, 2, kSpeed, nullptr);
-    add("Reload last piece at boot", &setAutoload_, 0, 1, kOffOn, nullptr);
+    add("Arrangement", &eng_.arrange, 0, 1, kSetArr);
+    add("At the end of the chain", &eng_.endMode, 0, 1, kSetEnd);
+    add("MIDI out of the streams", &eng_.midiMode, 0, 2, kSetMidi);
+    add("Reload last piece at boot", &setAutoload_, 0, 1, kSetOffOn);
     return n;
 }
 
 // ---- transport / audio --------------------------------------------------------------------
 void Datamatics::onTransport(bool playing) {
-    if (!playing) eng_.wantStop = false;
+    if (!playing) {
+        eng_.wantStop = false;
+        if (perfRec_) perfStop();
+        perfReplaying_ = false;
+        morphPending_ = -1;
+    }
 }
 
 void Datamatics::render(const Transport& t, const AudioIn&, float* l, float* r) {
@@ -445,57 +799,50 @@ void Datamatics::render(const Transport& t, const AudioIn&, float* l, float* r) 
 }
 
 void Datamatics::onMidi(const MidiMsg& m) {
-    // Notes 36..43 audition streams 1..8; 48.. jump to sections; CC 1..8 = stream levels.
+    // Notes 36..43 audition streams 1..8; 48.. launch sections; CC 1..8 = stream levels.
     if (m.type() == 0x90 && m.d2) {
         if (m.d1 >= 36 && m.d1 < 36 + kStreams) eng_.st[m.d1 - 36].audition = m.d2;
-        else if (m.d1 >= 48 && m.d1 < 48 + kMaxSections && m.d1 - 48 < eng_.secCount) {
-            if (ctx_->playing()) eng_.jumpReq = m.d1 - 48;
-            else eng_.startSec = m.d1 - 48;
-        }
+        else if (m.d1 >= 48 && m.d1 < 48 + kMaxSections && m.d1 - 48 < eng_.secCount) launchSection(m.d1 - 48);
     } else if (m.type() == 0xB0 && m.d1 >= 1 && m.d1 <= kStreams) {
-        eng_.st[m.d1 - 1].p[P_LEVEL] = m.d2 * 100 / 127;
+        setParam(pid_[m.d1 - 1][P_LEVEL], float(m.d2 * 100 / 127));
     }
 }
 
 void Datamatics::update(uint32_t ms) {
     nowMs_ = ms;
     pumpLoader();
+    if (pendingPick_[0]) {
+        requestLoad(pickSlot_, pendingPick_, eng_.slot[pickSlot_].wantMode);
+        pendingPick_[0] = 0;
+    }
     if (eng_.wantStop && ctx_->playing()) ctx_->setPlaying(false);
+    // stream groups follow their slot's colour (PARAM pads / MAP)
+    static int lastSlot[kStreams] = {-1, -1, -1, -1, -1, -1, -1, -1};
+    for (int s = 0; s < kStreams; ++s) {
+        const int sl = eng_.st[s].p[P_SLOT] & 3;
+        if (sl != lastSlot[s]) {
+            static const char* const kGrp[kStreams] = {"ST1", "ST2", "ST3", "ST4", "ST5", "ST6", "ST7", "ST8"};
+            ctx_->params().group(kGrp[s], slotColor(sl));
+            lastSlot[s] = sl;
+        }
+    }
+    stepMorph();
+    perfReplayStep();
     drainEvents(ms);
     uploadVisuals();
-    if (page_ == PG_DATA && !entCount_) scanDir();
 }
 
 // ---- input --------------------------------------------------------------------------------
 void Datamatics::setPage(int p) {
     if (p != page_) lastPage_ = page_;
     page_ = p;
+    if (isStreamPage(p)) sel_ = p - PG_ST0;
     delArm_ = false;
-    if (p == PG_DATA) {
-        target_ = eng_.st[sel_].p[P_SLOT] & 3;
-        scanDir();
-    }
     if (p == PG_PIECE) scanPieces();
     wfAllDirty_ = true;
-}
-
-void Datamatics::editParam(int s, int p, int delta, bool coarse) {
-    const ParamInfo& pi = paramInfo(p);
-    int step = 1;
-    int v = eng_.st[s].p[p];
-    if (!pi.names) {
-        if (p == P_LO || p == P_HI) {   // frequencies: proportional steps
-            step = v / (coarse ? 8 : 64);
-            if (step < 1) step = 1;
-        } else if (p == P_DUR || p == P_RATE_MS) {
-            step = v / (coarse ? 4 : 20);
-            if (step < 1) step = 1;
-        } else if (coarse) {
-            step = 10;
-        }
-    }
-    v = clampi(v + delta * step, pi.min, pi.max);
-    eng_.st[s].p[p] = v;
+    mxUploaded_ = false;
+    bcUploaded_ = false;
+    for (auto& g : bcGen_) g = 0xFFFFFFFFu;
 }
 
 void Datamatics::onEvent(const Event& e) {
@@ -504,66 +851,101 @@ void Datamatics::onEvent(const Event& e) {
         return;
     }
     if (e.type == Event::kPress) {
-        if (e.id <= btn::F6) {
-            static const uint8_t map[] = {PG_MATRIX, PG_STREAM, PG_DATA, PG_SECTIONS, PG_MIXER, PG_PIECE};
-            setPage(map[e.id]);
-            return;
+        switch (e.id) {
+            case btn::F1: setPage(PG_PERFORM); return;
+            case btn::F2: setPage(PG_MATRIX); return;
+            case btn::F3: setPage(PG_ST0 + sel_); return;
+            case btn::F4: setPage(PG_DATA); return;
+            case btn::F5: setPage(PG_MIXER); return;
+            case btn::F6: setPage(PG_SONG); return;
+            case btn::F7:
+                if (page_ == PG_VIEW) setParam(visId_, float((visMode_ + 1) % VM_COUNT));
+                else setPage(PG_VIEW);
+                return;
+            case btn::Performance: setPage(PG_PERFORM); return;
+            case btn::Pattern: setPage(PG_MATRIX); return;
+            case btn::SampleEditor: setPage(PG_ST0 + sel_); return;
+            case btn::SampleLoader: setPage(PG_DATA); return;
+            case btn::Song: setPage(PG_SONG); return;
+            case btn::File: setPage(PG_PIECE); return;
+            case btn::SamplePlayback: setPage(PG_VIEW); return;
+            case btn::Rec:   // Shift + Rec is the Shell's recorder
+                if (perfRec_) {
+                    perfStop();
+                } else {
+                    perfArm_ = !perfArm_;
+                    ctx_->toast(perfArm_ ? "Performance armed: Play records" : "Performance recording off");
+                }
+                return;
+            default: break;
         }
-        // module keys as shortcuts
-        if (e.id == btn::File || e.id == btn::SampleLoader) { setPage(PG_DATA); return; }
-        if (e.id == btn::Song) { setPage(PG_SECTIONS); return; }
-        if (e.id == btn::Master) { setPage(PG_MIXER); return; }
-        if (e.id == btn::Pattern) { setPage(PG_MATRIX); return; }
-        if (e.id == btn::InstrParams) { setPage(PG_STREAM); return; }
-        if (e.id == btn::Performance) { setPage(page_ == PG_VIEW ? lastPage_ : PG_VIEW); return; }
     }
-    switch (page_) {
+    switch (screenPage()) {
+        case PG_PERFORM: performEvent(e); break;
         case PG_MATRIX: matrixEvent(e); break;
-        case PG_STREAM: streamEvent(e); break;
+        case PG_ST0: streamEvent(e); break;
         case PG_DATA: dataEvent(e); break;
-        case PG_SECTIONS: sectionsEvent(e); break;
+        case PG_SONG: songEvent(e); break;
         case PG_MIXER: mixerEvent(e); break;
         case PG_PIECE: pieceEvent(e); break;
-        default:
-            if (e.type == Event::kPress && (e.id == btn::F8 || e.id == btn::F7)) setPage(lastPage_);
-            break;
+        default: viewEvent(e); break;
     }
 }
 
 void Datamatics::padEvent(const Event& e) {
-    // Pads (all pages): rows 0..3 = the 4 streams of the bank; cols 0..7 = the next
-    // 8 units of that stream's read head (press = audition that unit). Col 8 =
-    // mute, col 9 = solo, col 10 = select (+ open Stream page with Shift),
-    // col 11 = section launch (row 0..3 = section bank) / bank switch on Shift.
-    if (e.type != Event::kPadDown) return;
     const int row = padRow(e.id), col = padCol(e.id);
+    const bool down = e.type == Event::kPadDown;
+    switch (page_) {
+        case PG_MATRIX: matrixPad(row, col, down, e.velocity, e.shift); break;
+        case PG_DATA: dataPad(row, col, down, e.shift); break;
+        default: performPad(row, col, down, e.velocity, e.shift); break;
+    }
+}
+
+void Datamatics::matrixPad(int row, int col, bool down, uint8_t vel, bool shift) {
+    // rows = the 4 streams of the bank; cols 1-8: the next 8 units (audition),
+    // 9 mute, 10 solo, 11 select (Shift: STREAM page), 12 fill (Shift: bank)
     const int s = bank_ * 4 + row;
+    if (col == 11) {
+        if (shift && down) bank_ ^= 1;
+        else if (!shift) setFill(down ? (fill_ | (1u << s)) : (fill_ & ~(1u << s)));
+        return;
+    }
+    if (!down) return;
     if (col < 8) {
         eng_.st[s].audOff = uint16_t(col);
-        eng_.st[s].audition = uint8_t(e.velocity ? e.velocity : 100);
+        eng_.st[s].audition = uint8_t(vel ? vel : 100);
         sel_ = s;
         return;
     }
-    if (col == 8) { eng_.st[s].p[P_MUTE] ^= 1; return; }
-    if (col == 9) { eng_.st[s].p[P_SOLO] ^= 1; return; }
+    if (col == 8) setParam(pid_[s][P_MUTE], float(eng_.st[s].p[P_MUTE] ^ 1));
+    else if (col == 9) setParam(pid_[s][P_SOLO], float(eng_.st[s].p[P_SOLO] ^ 1));
+    else if (col == 10) {
+        sel_ = s;
+        if (shift) setPage(PG_ST0 + s);
+    }
+}
+
+void Datamatics::dataPad(int row, int col, bool down, bool shift) {
+    // rows = slots S1..S4; cols 1-8: patch the stream to this slot; 9 browse,
+    // 10 next reading mode, 11 solo the slot (held), 12 next built-in data set
+    const int sl = row;
     if (col == 10) {
-        sel_ = s;
-        if (e.shift) setPage(PG_STREAM);
+        setSlotSolo(down ? (slotSoloMask_ | (1u << sl)) : (slotSoloMask_ & ~(1u << sl)));
         return;
     }
-    if (col == 11) {
-        if (e.shift) {
-            bank_ ^= 1;
-            return;
-        }
-        // section launch: rows 0..3 = sections (secSel_ page of 4)
-        const int base = (secSel_ / 4) * 4;
-        const int target = base + row;
-        if (target < eng_.secCount) {
-            if (ctx_->playing()) eng_.jumpReq = target;
-            else eng_.startSec = target;
-            secSel_ = target;
-        }
+    if (!down) return;
+    dataSlot_ = sl;
+    if (col < 8) {
+        dataCol_ = col;
+        assign(col, sl);
+    } else if (col == 8) {
+        openBrowser(sl);
+    } else if (col == 9) {
+        reloadSlot(sl, (eng_.slot[sl].wantMode + (shift ? kModeCount - 1 : 1)) % kModeCount);
+    } else if (col == 11) {
+        const int b = builtinIndex(eng_.slot[sl].path);
+        loadBuiltinNow(sl, (b < 0 ? 0 : b + 1) % kBuiltinCount, eng_.slot[sl].wantMode);
     }
 }
 
@@ -572,80 +954,84 @@ void Datamatics::matrixEvent(const Event& e) {
         switch (e.id) {
             case btn::Up: sel_ = (sel_ + kStreams - 1) % kStreams; bank_ = sel_ / 4; break;
             case btn::Down: sel_ = (sel_ + 1) % kStreams; bank_ = sel_ / 4; break;
-            case btn::Left: editParam(sel_, P_START, -1, e.shift); break;
-            case btn::Right: editParam(sel_, P_START, 1, e.shift); break;
-            case btn::EncPush: setPage(PG_STREAM); break;
-            case btn::F7: eng_.st[sel_].p[P_MUTE] ^= 1; break;
-            case btn::F8: setPage(PG_VIEW); break;
+            case btn::Left: nudge(pid_[sel_][P_START], e.shift ? -1 : -10, false); break;   // 1 % (Shift: 0.1 %)
+            case btn::Right: nudge(pid_[sel_][P_START], e.shift ? 1 : 10, false); break;
+            case btn::Insert: setPage(PG_ST0 + sel_); break;
+            case btn::F8: setParam(pid_[sel_][P_MUTE], float(eng_.st[sel_].p[P_MUTE] ^ 1)); break;
             case btn::Delete: eng_.st[sel_].cue = 0; break;
             default: break;
         }
     } else if (e.type == Event::kEncoder) {
-        // encoder: density (threshold) of the selected stream; Shift + encoder: its rate
-        if (e.shift) editParam(sel_, eng_.st[sel_].p[P_SYNC] ? P_RATE_DIV : P_RATE_MS, e.delta, false);
-        else editParam(sel_, P_THR, -e.delta * 4, false);
+        // encoder: density (threshold down = more events); Shift: fine
+        nudge(pid_[sel_][P_THR], -e.delta * (e.shift ? 1 : 4), false);
     }
 }
 
 void Datamatics::streamEvent(const Event& e) {
+    const int s = sel_;
     if (e.type == Event::kPress) {
         switch (e.id) {
-            case btn::Up: streamParam_ = (streamParam_ + kStreamRows - 1) % kStreamRows; break;
-            case btn::Down: streamParam_ = (streamParam_ + 1) % kStreamRows; break;
-            case btn::Left: editParam(sel_, kStreamOrder[streamParam_], -1, e.shift); break;
-            case btn::Right: editParam(sel_, kStreamOrder[streamParam_], 1, e.shift); break;
-            case btn::F7: sel_ = (sel_ + kStreams - 1) % kStreams; bank_ = sel_ / 4; break;
-            case btn::F8: sel_ = (sel_ + 1) % kStreams; bank_ = sel_ / 4; break;
+            case btn::Up: streamRow_ = (streamRow_ + kStreamRows - 1) % kStreamRows; break;
+            case btn::Down: streamRow_ = (streamRow_ + 1) % kStreamRows; break;
+            case btn::Left: setPage(PG_ST0 + (s + kStreams - 1) % kStreams); break;
+            case btn::Right: setPage(PG_ST0 + (s + 1) % kStreams); break;
             case btn::Copy:
-                for (int p = 0; p < P_COUNT; ++p) clip_[p] = eng_.st[sel_].p[p];
+                for (int p = 0; p < P_COUNT; ++p) clip_[p] = eng_.st[s].p[p];
                 clipValid_ = true;
                 ctx_->toast("Stream copied");
                 break;
             case btn::Insert:
                 if (clipValid_) {
-                    for (int p = 0; p < P_COUNT; ++p) eng_.st[sel_].p[p] = clip_[p];
+                    for (int p = 0; p < P_COUNT; ++p)
+                        if (pid_[s][p] != kit::kNoParam)
+                            setParam(pid_[s][p], (p == P_DUR || p == P_START) ? float(clip_[p]) * 0.1f : float(clip_[p]));
                     ctx_->toast("Stream pasted");
                 }
                 break;
             case btn::Delete: {
-                const int p = kStreamOrder[streamParam_];
-                eng_.st[sel_].p[p] = paramInfo(p).def;
+                const ParamId id = pid_[s][kStreamOrder[streamRow_]];
+                ctx_->params().reset(id);
                 break;
             }
-            case btn::EncPush: eng_.st[sel_].audition = 110; break;
+            case btn::F8: eng_.st[s].audition = 110; break;
             default: break;
         }
     } else if (e.type == Event::kEncoder) {
-        editParam(sel_, kStreamOrder[streamParam_], e.delta, e.shift);
+        nudge(pid_[s][kStreamOrder[streamRow_]], e.delta, e.shift);
     }
 }
 
 void Datamatics::dataEvent(const Event& e) {
+    Slot& sl = eng_.slot[dataSlot_];
     if (e.type == Event::kPress) {
         switch (e.id) {
-            case btn::Up: entSel_ = entSel_ > 0 ? entSel_ - 1 : 0; break;
-            case btn::Down: entSel_ = entSel_ + 1 < entCount_ ? entSel_ + 1 : entSel_; break;
-            case btn::Left: target_ = (target_ + kSlots - 1) % kSlots; break;
-            case btn::Right: target_ = (target_ + 1) % kSlots; break;
-            case btn::EncPush:
-            case btn::F8: enterEntry(); break;
-            case btn::F7: loadMode_ = (loadMode_ + 1) % kModeCount; break;
-            case btn::Delete: {   // reload the slot with the current mode
-                Slot& sl = eng_.slot[target_];
-                if (sl.path[0]) requestLoad(target_, sl.path, loadMode_);
+            case btn::Up: dataSlot_ = (dataSlot_ + kSlots - 1) % kSlots; break;
+            case btn::Down: dataSlot_ = (dataSlot_ + 1) % kSlots; break;
+            case btn::Left: dataCol_ = (dataCol_ + kStreams - 1) % kStreams; break;
+            case btn::Right: dataCol_ = (dataCol_ + 1) % kStreams; break;
+            case btn::Insert:
+            case btn::Note: assign(dataCol_, dataSlot_); break;
+            case btn::F8: openBrowser(dataSlot_); break;
+            case btn::Delete:
+                __atomic_store_n(&sl.n, 0u, __ATOMIC_RELEASE);
+                sl.path[0] = 0;
+                ++slotGen_[dataSlot_];
+                computeMeta(dataSlot_, 0);
                 break;
-            }
             default: break;
         }
     } else if (e.type == Event::kEncoder) {
-        entSel_ = clampi(entSel_ + e.delta * (e.shift ? 8 : 1), 0, entCount_ ? entCount_ - 1 : 0);
+        if (e.shift) {   // built-in data sets
+            const int b = builtinIndex(sl.path);
+            const int nb = ((b < 0 ? (e.delta > 0 ? -1 : 0) : b) + e.delta + kBuiltinCount * 4) % kBuiltinCount;
+            loadBuiltinNow(dataSlot_, nb, sl.wantMode);
+        } else {         // reading mode of the slot (the file is read again)
+            reloadSlot(dataSlot_, (sl.wantMode + e.delta + kModeCount * 4) % kModeCount);
+        }
     }
-    const int vis = 12;
-    if (entSel_ < entTop_) entTop_ = entSel_;
-    if (entSel_ >= entTop_ + vis) entTop_ = entSel_ - vis + 1;
 }
 
-void Datamatics::sectionsEvent(const Event& e) {
+void Datamatics::songEvent(const Event& e) {
     Engine& g = eng_;
     Section& c = g.sec[secSel_ < g.secCount ? secSel_ : 0];
     if (e.type == Event::kPress) {
@@ -671,16 +1057,13 @@ void Datamatics::sectionsEvent(const Event& e) {
                     if (g.curSec >= g.secCount) g.jumpReq = 0;
                 }
                 break;
-            case btn::EncPush:
-            case btn::F7:
-                if (ctx_->playing()) g.jumpReq = secSel_;
-                else g.startSec = secSel_;
+            case btn::F8:
+                if (e.shift) setParam(songId_, float(g.songMode ^ 1));
+                else launchSection(secSel_);
                 break;
-            case btn::F8: {
-                g.arrange ^= 1;
-                setArrange_ = g.arrange;
+            case btn::Note:
+                if (secField_ == 2) c.mask ^= 1 << maskBit_;
                 break;
-            }
             default: break;
         }
     } else if (e.type == Event::kEncoder) {
@@ -688,19 +1071,17 @@ void Datamatics::sectionsEvent(const Event& e) {
         switch (secField_) {
             case 0: c.type = (c.type + T_COUNT + d) % T_COUNT; break;
             case 1: c.bars = clampi(c.bars + d * (e.shift ? 4 : 1), 1, 64); break;
-            case 2: {   // mask: encoder walks the bit, Shift+encoder toggles
+            case 2:   // mask: encoder walks the bit, Shift + encoder toggles it
                 if (e.shift) c.mask ^= 1 << maskBit_;
                 else maskBit_ = clampi(maskBit_ + d, 0, 7);
                 break;
-            }
             default: c.depth = clampi(c.depth + d * (e.shift ? 10 : 1), 0, 100); break;
         }
     }
-    if (e.type == Event::kPress && e.id == btn::Note && secField_ == 2) c.mask ^= 1 << maskBit_;
 }
 
 void Datamatics::mixerEvent(const Event& e) {
-    static const uint8_t fields[] = {P_LEVEL, P_PAN, P_PANMODE, P_STEM, P_MUTE, P_SOLO, P_MIDI};
+    static const uint8_t fields[] = {P_LEVEL, P_PAN, P_PANMODE, P_STEM, P_MIDI};
     constexpr int nf = int(sizeof fields);
     if (e.type == Event::kPress) {
         switch (e.id) {
@@ -708,13 +1089,31 @@ void Datamatics::mixerEvent(const Event& e) {
             case btn::Right: sel_ = (sel_ + 1) % kStreams; bank_ = sel_ / 4; break;
             case btn::Up: mixField_ = (mixField_ + nf - 1) % nf; break;
             case btn::Down: mixField_ = (mixField_ + 1) % nf; break;
-            case btn::F7: eng_.st[sel_].p[P_MUTE] ^= 1; break;
-            case btn::F8: eng_.st[sel_].p[P_SOLO] ^= 1; break;
-            case btn::EncPush: eng_.st[sel_].audition = 110; break;
+            case btn::F8:
+                if (e.shift) setParam(pid_[sel_][P_SOLO], float(eng_.st[sel_].p[P_SOLO] ^ 1));
+                else setParam(pid_[sel_][P_MUTE], float(eng_.st[sel_].p[P_MUTE] ^ 1));
+                break;
+            case btn::Insert: eng_.st[sel_].audition = 110; break;
+            case btn::Delete: ctx_->params().reset(pid_[sel_][fields[mixField_]]); break;
             default: break;
         }
     } else if (e.type == Event::kEncoder) {
-        editParam(sel_, fields[mixField_], e.delta, e.shift);
+        nudge(pid_[sel_][fields[mixField_]], e.delta, e.shift);
+    }
+}
+
+void Datamatics::viewEvent(const Event& e) {
+    if (e.type == Event::kPress) {
+        switch (e.id) {
+            case btn::Left: setParam(visId_, float((visMode_ + VM_COUNT - 1) % VM_COUNT)); break;
+            case btn::Right: setParam(visId_, float((visMode_ + 1) % VM_COUNT)); break;
+            case btn::Up: setParam(followId_, float(follow_ > 1 ? follow_ - 1 : 8)); break;
+            case btn::Down: setParam(followId_, float(follow_ < 8 ? follow_ + 1 : 1)); break;
+            case btn::F8: setParam(autoId_, float(visAuto_ ^ 1)); break;
+            default: break;
+        }
+    } else if (e.type == Event::kEncoder) {
+        setParam(visId_, float((visMode_ + e.delta + VM_COUNT * 8) % VM_COUNT));
     }
 }
 
@@ -724,7 +1123,12 @@ void Datamatics::pieceEvent(const Event& e) {
         switch (e.id) {
             case btn::Up: pieceSel_ = pieceSel_ > 0 ? pieceSel_ - 1 : 0; delArm_ = false; break;
             case btn::Down: pieceSel_ = pieceSel_ + 1 < pieceCount_ ? pieceSel_ + 1 : pieceSel_; delArm_ = false; break;
-            case btn::F7: {   // save as a new numbered piece
+            case btn::Insert: {
+                if (e.shift) {
+                    newPiece();
+                    ctx_->toast("New piece (demo data)");
+                    break;
+                }
                 if (!ctx_->fs) { ctx_->toast("No card"); break; }
                 int n = 1;
                 for (; n < 1000; ++n) {
@@ -743,7 +1147,6 @@ void Datamatics::pieceEvent(const Event& e) {
                 break;
             }
             case btn::F8:
-            case btn::EncPush:
                 if (pieceSel_ < pieceCount_) {
                     std::snprintf(path, sizeof path, "%s/Pieces/%s.dmx", ctx_->home, pieces_[pieceSel_]);
                     if (loadPiece(path)) {
@@ -776,10 +1179,6 @@ void Datamatics::pieceEvent(const Event& e) {
                     }
                 }
                 break;
-            case btn::Insert:
-                newPiece();
-                ctx_->toast("New piece (demo data)");
-                break;
             default: break;
         }
     } else if (e.type == Event::kEncoder) {
@@ -790,12 +1189,12 @@ void Datamatics::pieceEvent(const Event& e) {
 
 // ---- bench ------------------------------------------------------------------------------
 const char* Datamatics::benchName(int i) const {
-    static const char* const n[] = {"demo", "dense_sine", "ms_clicks", "noise_wall", "max_events"};
-    return (i >= 0 && i < 5) ? n[i] : "?";
+    static const char* const n[] = {"demo", "dense_sine", "ms_clicks", "noise_wall", "max_events", "perform_throws"};
+    return (i >= 0 && i < 6) ? n[i] : "?";
 }
 
 void Datamatics::benchSetup(int i) {
-    newPiece();
+    eng_.defaults();
     eng_.reset();
     eng_.midiMode = 0;
     if (i == 0) return;
@@ -813,16 +1212,16 @@ void Datamatics::benchSetup(int i) {
         p[P_SYNC] = 0;
         p[P_STEM] = s & 3;
         switch (i) {
-            case 1:   // 8 streams x 4 sine voices always sounding (long sines retriggered every 2 ms)
+            case 1:   // 8 streams x 4 sine voices always sounding
                 p[P_SOUND] = S_SINE; p[P_RATE_MS] = 2; p[P_DUR] = 20000; p[P_LO] = 40; p[P_HI] = 18000;
                 break;
-            case 2:   // 1 ms clicks on every stream (8 events per ms, 3 ms clicks)
+            case 2:   // 1 ms clicks on every stream
                 p[P_SOUND] = S_CLICK; p[P_RATE_MS] = 1; p[P_DUR] = 30; p[P_SHAPE] = SH_FADE;
                 break;
             case 3:   // noise everywhere, long
                 p[P_SOUND] = S_NOISE; p[P_RATE_MS] = 3; p[P_DUR] = 20000; p[P_LO] = 200; p[P_HI] = 20000;
                 break;
-            default:   // maximum event density: 1 ms grid, mixed sounds, cut section
+            default:   // maximum event density: 1 ms grid, mixed sounds
                 p[P_SOUND] = s & 3; p[P_RATE_MS] = 1; p[P_DUR] = 20000; p[P_DURMOD] = 100;
                 break;
         }
@@ -831,6 +1230,12 @@ void Datamatics::benchSetup(int i) {
         eng_.arrange = 1;
         eng_.secCount = 1;
         eng_.sec[0] = Section{T_CUT, 64, 0xFF, 10};
+    }
+    if (i == 5) {   // every throw that changes the read: stutter on a 1/128 grid, reverse, invert, octave
+        eng_.stutterDiv = 0;
+        eng_.throws = TH_STUTTER | TH_REVERSE | TH_INVERT | TH_OCT | TH_DENSE;
+        eng_.fillMask = 0xFF;
+        for (int s = 0; s < kStreams; ++s) eng_.scrub[s & 3] = 0.37f;
     }
 }
 

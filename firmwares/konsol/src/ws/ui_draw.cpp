@@ -672,9 +672,10 @@ void Konsol::drawSound(Canvas& g) {
     }
     if (P_->track[selT_].engine <= kEngGrain) {
         g.color(kDim);
-        const char* p = smp_[selT_].path[0] ? smp_[selT_].path : "built-in break";
+        const int sl = ts_[selT_].slot;
+        const char* p = pool_.valid(sl) && pool_.slot(sl).path[0] ? pool_.slot(sl).path : "built-in break";
         g.textf(10, 438, font::kTiny, Canvas::kCenterY, "Sample: %.60s  (%lu ms)", p,
-                static_cast<unsigned long>(smp_[selT_].len / 44));
+                static_cast<unsigned long>(pool_.valid(sl) ? pool_.slot(sl).frames / 44 : 0));
     } else {
         g.color(kDim);
         g.text(10, 438, font::kTiny, "Up/Down: row (top row = engine)  Left/Right: section  Encoder: value  Shift: x10", Canvas::kCenterY);
@@ -988,15 +989,16 @@ void Konsol::drawSamples(Canvas& g) {
         rv(g, listTop_ + i == listSel_ ? kPanel2 : kPanel, 10, 84 + i * 34, 560, 30);
     rv(g, kPanel, 580, 84, 210, 336);
     // waveform of the track's sample (64 columns)
-    const SampleBuf& b = smp_[selT_];
-    const uint32_t len = b.len;
+    const int bs = ts_[selT_].slot;
+    const uint32_t len = pool_.valid(bs) ? pool_.slot(bs).frames : 0;
+    const int16_t* bd = len ? pool_.left(bs) : nullptr;
     g.color(trackColor(selT_));
     if (len)
         for (int x = 0; x < 64; ++x) {
             const uint32_t a = uint32_t(uint64_t(len) * uint32_t(x) / 64u), e = uint32_t(uint64_t(len) * uint32_t(x + 1) / 64u);
             int pk = 0;
             for (uint32_t i = a; i < e; i += 37) {
-                const int v = b.data[i] < 0 ? -b.data[i] : b.data[i];
+                const int v = bd[i] < 0 ? -bd[i] : bd[i];
                 pk = v > pk ? v : pk;
             }
             const int h = pk * 60 / 32768 + 1;
@@ -1017,7 +1019,7 @@ void Konsol::drawSamples(Canvas& g) {
     g.color(kText);
     g.text(590, 104, font::kSmall, "Track sample", Canvas::kCenterY);
     g.color(kDim);
-    g.textf(590, 124, font::kTiny, Canvas::kCenterY, "%.28s", b.path[0] ? b.path : "built-in break");
+    g.textf(590, 124, font::kTiny, Canvas::kCenterY, "%.28s", len && pool_.slot(bs).path[0] ? pool_.slot(bs).path : "built-in break");
     g.textf(590, 140, font::kTiny, Canvas::kCenterY, "%lu.%02lu s", static_cast<unsigned long>(len / 44100),
             static_cast<unsigned long>((len % 44100) / 441));
     g.text(590, 404, font::kTiny, "Mono, 44.1 kHz, max 13.9 s", Canvas::kCenterY);

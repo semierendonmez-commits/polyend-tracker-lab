@@ -25,12 +25,17 @@ inline float sin2pi(float t) {
     const float ay = y < 0 ? -y : y;
     return 0.225f * (y * ay - y) + y;
 }
+// floor without a libm call (the M4 FPU has no VRINT): |x| < 2^31
+inline float ffloor(float x) {
+    const float t = float(int32_t(x));
+    return t > x ? t - 1.0f : t;
+}
 // Wraps any phase into [0, 1).
-inline float wrap(float p) { return p - floorf(p); }
+inline float wrap(float p) { return p - ffloor(p); }
 
 // 2^x, |x| < 30, 0.01 % (exponent bits + cubic).
 inline float exp2fast(float x) {
-    const float fl = floorf(x);
+    const float fl = ffloor(x);
     const float f = x - fl;
     const float p = 1.0f + f * (0.6951786f + f * (0.2261871f + f * (0.0782354f)));
     union {

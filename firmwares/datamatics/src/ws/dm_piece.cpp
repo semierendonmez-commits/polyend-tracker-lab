@@ -70,7 +70,7 @@ uint32_t writePiece(const Engine& e, float bpm, char* out, uint32_t cap) {
     o.put("DATAMATICS %d\n", kPieceVersion);
     const int b10 = int(bpm * 10.0f + 0.5f);
     o.put("bpm %d.%d\n", b10 / 10, b10 % 10);
-    o.put("opt %d %d %d %d\n", e.arrange, e.endMode, e.midiMode, e.jumpQuant);
+    o.put("opt %d %d %d %d %d\n", e.arrange, e.endMode, e.midiMode, e.quant, e.songMode);
     for (int i = 0; i < kSlots; ++i)
         o.put("slot %d %d %s\n", i, int(e.slot[i].wantMode), e.slot[i].path[0] ? e.slot[i].path : "-");
     for (int s = 0; s < kStreams; ++s) {
@@ -87,12 +87,14 @@ uint32_t writePiece(const Engine& e, float bpm, char* out, uint32_t cap) {
 bool readPiece(Engine& e, const char* text, uint32_t len, float* bpmOut) {
     const char* s = text;
     const char* end = text + len;
+    int version = 1;
     // header
     if (len < 12 || std::strncmp(text, "DATAMATICS ", 11) != 0) return false;
     {
         const char* q = text + 11;
         int ver = 0;
         if (!nextInt(q, end, ver) || ver < 1) return false;
+        version = ver;
     }
     int nsec = 0;
     Section secs[kMaxSections];
@@ -117,7 +119,12 @@ bool readPiece(Engine& e, const char* text, uint32_t len, float* bpmOut) {
             if (nextInt(q, le, v)) e.arrange = clampi(v, 0, 1);
             if (nextInt(q, le, v)) e.endMode = clampi(v, 0, 1);
             if (nextInt(q, le, v)) e.midiMode = clampi(v, 0, 2);
-            if (nextInt(q, le, v)) e.jumpQuant = clampi(v, 0, 1);
+            if (nextInt(q, le, v)) {
+                if (version < 2) e.quant = v ? Q_NOW : Q_BAR;   // v1: 0 next bar, 1 immediate
+                else e.quant = clampi(v, 0, Q_COUNT - 1);
+            }
+            if (nextInt(q, le, v)) e.songMode = clampi(v, 0, 1);
+            else if (version < 2) e.songMode = 1;   // v1 pieces played their sections in order
         } else if (startsWith(s, le, "slot")) {
             q = s + 4;
             int i = 0, m = 0;
