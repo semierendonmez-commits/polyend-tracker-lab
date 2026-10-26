@@ -13,7 +13,7 @@ finished WAV (sound sources, sequencing, arrangement, mixing, stems).
 | [KONSOL](#konsol) | Clip/scene workstation: 8 tracks, 10 engines, generators | [`PolyendTrackerKONSOL.ptf`](firmwares/konsol/release/PolyendTrackerKONSOL.ptf) | [MANUAL](firmwares/konsol/MANUAL.md) |
 | [DATAMATICS](#datamatics) | Ryoji-Ikeda-style data music from any file on the card | [`PolyendTrackerDATAMT.ptf`](firmwares/datamatics/release/PolyendTrackerDATAMT.ptf) | [MANUAL](firmwares/datamatics/MANUAL.md) |
 | [MAKAM](#makam) | Turkish makam meets jungle: usul-cut breaks, microtonal bass and lead | [`PolyendTrackerMAKAMJ.ptf`](firmwares/makam/release/PolyendTrackerMAKAMJ.ptf) | [MANUAL](firmwares/makam/MANUAL.md) |
-| [PLATFORM](#platform) | Lua scripts and native apps from the SD card (norns-style) | [`PolyendTrackerPLATFM.ptf`](firmwares/platform/release/PolyendTrackerPLATFM.ptf) | [MANUAL](firmwares/platform/MANUAL.md) |
+| [PLATFORM](#platform) | Lua scripts and native apps from the SD card (norns-style); hosts all six as apps | [`PolyendTrackerPLATFM.ptf`](firmwares/platform/release/PolyendTrackerPLATFM.ptf) | [MANUAL](firmwares/platform/MANUAL.md) |
 
 > **Status: v0.1, not yet tested on a real Tracker.** Every image passed the
 > lab gate (below) in the simulator and under QEMU. Keep a stock image in
@@ -225,10 +225,16 @@ apps** from the SD card, like monome norns runs scripts.
   with an SDK and two examples (drone, step sequencer). Native apps have no
   memory protection: a faulty one needs a power cycle (safe boot recovers).
 - **Five example scripts**: hello, steps, drift, euclid, arp.
+- **Stations:** the six workstations above also run *inside* PLATFORM as
+  native apps, built unchanged from their own source
+  ([`release/Apps/`](firmwares/platform/release/Apps)). Copy `release/` to
+  `/Firmware` on the card; PLATFORM installs the apps at boot. Every station
+  passed its own CPU scenarios while hosted (worst: BULUT 174,520 of 180,000
+  instructions).
 
-| Lua script running | Error page |
+| Lua script running | GRAF as a station inside PLATFORM |
 |---|---|
-| ![Euclid](firmwares/platform/docs/screenshots/script-euclid.png) | ![Error](firmwares/platform/docs/screenshots/error.png) |
+| ![Euclid](firmwares/platform/docs/screenshots/script-euclid.png) | ![GRAF station](firmwares/platform/docs/screenshots/station-graf.png) |
 
 [Manual](firmwares/platform/MANUAL.md) · [Image](firmwares/platform/release/PolyendTrackerPLATFM.ptf)
 

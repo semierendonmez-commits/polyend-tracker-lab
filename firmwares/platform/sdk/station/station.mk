@@ -30,13 +30,14 @@ ARM     := -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16 -O2 -ffunc
            -fno-common -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-rtti \
            -fno-threadsafe-statics -fno-use-cxa-atexit -std=gnu++17 -DPLAT_DEVICE=1 -Wno-psabi \
            -DOT_TARGET_DEVICE=1 -DOT_FASTRUN=1 -DOT_SDRAM_CACHE=1
-ARM_LD  := -nostartfiles -nodefaultlibs -Wl,--emit-relocs -Wl,--gc-sections -Wl,--no-warn-rwx-segments \
+WRAP    := -Wl,--wrap=_ZN3lab10drawHeaderERNS_6CanvasERKNS_5ThemeERNS_5ShellEPKc
+ARM_LD  := $(WRAP) -nostartfiles -nodefaultlibs -Wl,--emit-relocs -Wl,--gc-sections -Wl,--no-warn-rwx-segments \
            -T $(ROOT)/sdk/ld/papp.ld --specs=nano.specs -u _printf_float \
            -Wl,--start-group -lm -lc_nano -lgcc -Wl,--end-group
 HOST    := -O2 -fPIC -fvisibility=hidden -std=c++17 -fno-exceptions -fno-rtti
 SRCS    := $(WS_SRCS) $(LAB) $(CORE) $(GLUE)
 
-all: $(OUT)/$(APP).papp $(OUT)/$(APP).so
+all: $(OUT)/$(APP).papp $(OUT)/$(APP).so $(OUT)/$(APP).info
 
 # rebuild when the parameters change (NAME / MEMKB / sources are compiled in)
 STAMP := $(OUT)/$(APP).params
@@ -54,8 +55,19 @@ $(OUT)/$(APP).elf: $(STAMP) $(lastword $(MAKEFILE_LIST)) $(ROOT)/sdk/ld/papp.ld 
 	$(CROSS)g++ $(ARM) $(OUT)/obj-$(APP)/*.o $(ARM_LD) -o $@
 $(OUT)/$(APP).papp: $(OUT)/$(APP).elf $(ROOT)/tools/mkpapp.py
 	python3 -I $(ROOT)/tools/mkpapp.py $< $@
+	rm -f $(OUT)/$(APP).info
+
+# The station's own tagline and theme accent into both launcher records.
+$(OUT)/station_info: $(ROOT)/tools/station_info.cpp
+	g++ -O1 $< -ldl -o $@
+$(OUT)/$(APP).info: $(OUT)/$(APP).papp $(OUT)/$(APP).so $(OUT)/station_info $(ROOT)/tools/patch_info.py
+	$(OUT)/station_info $(OUT)/$(APP).so > $@.tmp
+	python3 -I $(ROOT)/tools/patch_info.py $(OUT)/$(APP).papp --desc "$$(sed -n 1p $@.tmp)" --color "$$(sed -n 2p $@.tmp)"
+	python3 -I $(ROOT)/tools/patch_info.py $(OUT)/$(APP).so --desc "$$(sed -n 1p $@.tmp)" --color "$$(sed -n 2p $@.tmp)"
+	mv $@.tmp $@
 $(OUT)/$(APP).so: $(STAMP) $(SRCS)
 	@mkdir -p $(OUT)
-	g++ $(HOST) $(INCS) $(DEFS) -shared $(filter-out $(STAMP),$^) -o $@
+	g++ $(HOST) $(INCS) $(DEFS) -shared $(WRAP) $(filter-out $(STAMP),$^) -o $@
+	rm -f $(OUT)/$(APP).info
 
 .PHONY: all

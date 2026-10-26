@@ -517,3 +517,27 @@ LAB_TEST(platform_exit_combos_return_to_the_launcher) {
     r.run(400);   // hold 1.2 s
     CHECK(r.ws->mode() == plat::Platform::kLauncher);
 }
+
+// ---- apps shipped next to the image: /Firmware/Apps -> /Lab/PLATFORM/Apps at boot ----
+LAB_TEST(platform_installs_apps_from_firmware_folder) {
+    const std::string so = slurp("../build/sdk/drone.so");
+    if (so.empty()) return;
+    Rig r;
+    r.fs.files["Firmware/Apps/drone.so"].assign(so.begin(), so.end());
+    r.fs.files["Firmware/Apps/notes.txt"] = {1, 2, 3};   // not an app: ignored
+    r.boot();
+    if (!r.ok) return;
+    CHECK(r.fs.files.count("Lab/PLATFORM/Apps/drone.so") == 1);
+    CHECK(r.fs.files["Lab/PLATFORM/Apps/drone.so"].size() == so.size());
+    CHECK(r.fs.files.count("Lab/PLATFORM/Apps/notes.txt") == 0);
+    CHECK(r.fs.files.count("Lab/PLATFORM/Apps/drone.so.part") == 0);
+    bool listed = false;
+    for (int i = 0; i < r.ws->entryCount(); ++i) listed |= !std::strcmp(r.ws->entry(i).name, "Drone");
+    CHECK(listed);
+    // a second boot with the same file copies nothing (same size)
+    r.fs.files["Lab/PLATFORM/Apps/drone.so"][0] ^= 0;   // untouched
+    Rig r2;
+    r2.fs = r.fs;
+    r2.boot();
+    CHECK(r2.fs.files["Lab/PLATFORM/Apps/drone.so"] == r.fs.files["Lab/PLATFORM/Apps/drone.so"]);
+}

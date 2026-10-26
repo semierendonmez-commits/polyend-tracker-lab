@@ -258,3 +258,31 @@ papp-qemu: $(BENCH_OUT)/papp_qemu.elf
 	    -kernel $< | tee $(BENCH_OUT)/papp_qemu.txt
 	@grep -q "papp-qemu: PASS" $(BENCH_OUT)/papp_qemu.txt
 .PHONY: papp-qemu
+
+# ---------------------------------------------------------------------------
+# PLATFORM: hosted bench -- every station (build/stations/*.papp, built by
+# tools/build_stations.sh) inside PLATFORM under QEMU, with its own bench
+# scenarios (tests/papp/hosted_bench.cpp). Output: ../build/perf/lab_hosted.txt.
+STATIONS ?= bulut datamatics flipper graf konsol makam
+HOSTED_SRCS := papp/hosted_bench.cpp $(LAB_SRCS) $(SRC)/core/formats/wav.cpp $(SRC)/core/formats/format_common.cpp \
+               $(SRC)/core/fmath.cpp
+$(BENCH_OUT)/hosted_bench.elf: $(HOSTED_SRCS) $(LAB_DEPS) bench_m4/startup.c bench_m4/mps2.ld $(SRC)/hal/fast_mem.c
+	@mkdir -p $(dir $@)
+	$(M4_CC) $(M4_FLAGS) -c bench_m4/startup.c -o $(BENCH_OUT)/hosted_startup_m4.o
+	$(M4_CC) $(M4_FLAGS) -std=gnu11 -c $(SRC)/hal/fast_mem.c -o $(BENCH_OUT)/hosted_fast_mem_m4.o
+	$(M4_CXX) $(M4_FLAGS) -std=gnu++17 -fno-exceptions -fno-rtti -fno-use-cxa-atexit -DOT_BENCH_M4 -I$(SRC)/core -I$(SRC) -I. \
+	    -I../sdk/include $(HOSTED_SRCS) $(BENCH_OUT)/hosted_startup_m4.o $(BENCH_OUT)/hosted_fast_mem_m4.o -T bench_m4/mps2.ld \
+	    -nostartfiles --specs=nano.specs --specs=rdimon.specs -u _printf_float -Wl,--gc-sections -lm -o $@
+hosted-bench: $(BENCH_OUT)/hosted_bench.elf
+	@mkdir -p ../build/perf
+	@rm -f ../build/perf/lab_hosted.txt
+	@set -e; for st in $(STATIONS); do \
+	    test -f ../build/stations/$$st.papp || { echo "hosted-bench: FAIL build/stations/$$st.papp missing (tools/build_stations.sh)"; exit 1; }; \
+	    cp ../build/stations/$$st.papp ../build/perf/hosted_station.papp; \
+	    (cd .. && qemu-system-arm -M mps2-an386 -nographic -icount shift=0 -semihosting-config enable=on,target=native \
+	        -kernel build/bench/hosted_bench.elf) > ../build/perf/hosted_$$st.txt; \
+	    cat ../build/perf/hosted_$$st.txt >> ../build/perf/lab_hosted.txt; \
+	    grep -q '^lab\.' ../build/perf/hosted_$$st.txt || { cat ../build/perf/hosted_$$st.txt; echo "hosted-bench: FAIL $$st"; exit 1; }; \
+	done
+	@grep '^hosted-bench:' ../build/perf/lab_hosted.txt
+.PHONY: hosted-bench

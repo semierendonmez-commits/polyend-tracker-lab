@@ -27,7 +27,7 @@
 
 namespace plat {
 
-constexpr uint32_t kPappVersion = 1;
+constexpr uint32_t kPappVersion = 2;   // 2: PlatInfo has a colour (180 B)
 
 struct PappHeader {
     char magic[4];          // "PAPP"
@@ -47,8 +47,8 @@ struct PappHeader {
     uint32_t reserved[3];
     PlatInfo info;
 };
-static_assert(sizeof(PlatInfo) == 176, "PlatInfo layout");
-static_assert(sizeof(PappHeader) == 64 + 176, "PappHeader layout");
+static_assert(sizeof(PlatInfo) == 180, "PlatInfo layout");
+static_assert(sizeof(PappHeader) == 64 + 180, "PappHeader layout");
 
 enum class PappStatus : uint8_t {
     Ok = 0,

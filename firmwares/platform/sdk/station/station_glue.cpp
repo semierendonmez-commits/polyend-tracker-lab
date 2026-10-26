@@ -127,8 +127,66 @@ int settings(void*, PlatSetting* rows, int cap) {
 }
 void save(void*) { gS.ws->save(); }
 void close(void*) {}
+int benchScenarios(void*) { return gS.ws->benchScenarios(); }
+const char* benchName(void*, int i) { return gS.ws->benchName(i); }
+void benchSetup(void*, int i) { gS.ws->benchSetup(i); }
 
 }  // namespace
+
+// The lab header (lab::drawHeader) shows the firmware name from the Shell --
+// the host's, "PLATFORM". Station builds link with
+// -Wl,--wrap=<drawHeader> so the workstation's calls land here and show the
+// station's own name; the rest is drawHeader as in src/lab/shell.cpp.
+extern "C" void __wrap__ZN3lab10drawHeaderERNS_6CanvasERKNS_5ThemeERNS_5ShellEPKc(lab::Canvas& g, const lab::Theme& t,
+                                                                                 lab::Shell& sh, const char* title) {
+    g.color(t.panel);
+    g.fill(0, 0, lab::kScreenW, 30);
+    g.color(t.accent);
+    g.text(10, 15, lab::font::kBody, PLAT_STATION_NAME, lab::Canvas::kCenterY);
+    g.color(t.fg);
+    if (title) g.text(150, 15, lab::font::kBody, title, lab::Canvas::kCenterY);
+    g.color(t.dim);
+    g.textf(560, 15, lab::font::kSmall, lab::Canvas::kCenterY, "CPU %u%%", unsigned(sh.cpuPermille() / 10));
+    g.color(t.fg);
+    g.textf(650, 15, lab::font::kBody, lab::Canvas::kCenterY, "%.1f", double(sh.bpm()));
+    if (sh.playing()) {
+        g.color(t.ok);
+        g.beginStrip();
+        g.vtx(735, 8);
+        g.vtx(749, 15);
+        g.vtx(735, 22);
+        g.vtx(735, 8);
+        g.endBatch();
+    } else {
+        g.color(t.dim);
+        g.fill(736, 9, 12, 12);
+    }
+    if (sh.recording()) {
+        g.color(t.warn);
+        g.point(778, 15, 7);
+    } else {
+        g.color(t.dim);
+        g.ring(778, 15, 6, 12);
+    }
+}
+
+#if !defined(PLAT_DEVICE)
+// Simulator library only: the workstation's tagline and theme accent for the
+// launcher entry (tools/station_info + tools/patch_info.py at build time).
+// Boots the station in a Shell of its own with no hardware (like the lab host
+// tests do), because workstations set their theme in init().
+extern "C" __attribute__((visibility("default"))) int plat_station_describe(char* tag, unsigned cap, unsigned* accent) {
+    const uint32_t bytes = 64u * 1024u * 1024u;
+    uint8_t* mem = new uint8_t[bytes];
+    static lab::Shell shell;
+    lab::Hal hal;
+    if (!shell.init(hal, mem, bytes, PLAT_STATION_NAME) || !shell.workstation()) return 0;
+    lab::copyStr(tag, cap, shell.workstation()->tagline());
+    const lab::Rgb c = shell.workstation()->theme().accent;
+    *accent = (unsigned(c.r) << 16) | (unsigned(c.g) << 8) | unsigned(c.b);
+    return 1;
+}
+#endif
 
 extern "C" __attribute__((used, visibility("default"), section(".text.plat_app_entry"))) const PlatApp*
 plat_app_entry(void) {
@@ -151,5 +209,8 @@ plat_app_entry(void) {
     a.settings = settings;
     a.save = save;
     a.close = close;
+    a.benchScenarios = benchScenarios;
+    a.benchName = benchName;
+    a.benchSetup = benchSetup;
     return &a;
 }

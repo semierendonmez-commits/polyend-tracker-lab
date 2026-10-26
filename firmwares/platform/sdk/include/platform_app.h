@@ -229,6 +229,11 @@ typedef struct PlatApp {
     int (*settings)(void* self, PlatSetting* rows, int cap);
     void (*save)(void* self);
     void (*close)(void* self);
+    /* CPU bench scenarios (optional; lab::Workstation::benchScenarios / benchName /
+     * benchSetup): the hosted bench of make lab-gate runs them under QEMU. */
+    int (*benchScenarios)(void* self);
+    const char* (*benchName)(void* self, int i);
+    void (*benchSetup)(void* self, int i);
 } PlatApp;
 
 /* Metadata the launcher reads without running the app. Put exactly one in each
@@ -242,6 +247,7 @@ typedef struct PlatInfo {
     char icon[16];   /* launcher glyph: drone, seq, grid, wave, dots, euclid, arp, spark, station, app */
     uint32_t memKB;  /* memory the app needs from host->alloc; the loader refuses to start it with less */
     uint32_t flags;  /* PLAT_INFO_WORKSTATION: listed under Stations */
+    uint32_t color;  /* launcher accent 0xRRGGBB (0 = default); stations: their theme accent */
 } PlatInfo;
 #define PLAT_INFO_WORKSTATION 1u
 
@@ -259,14 +265,14 @@ typedef struct PlatInfo {
     PLAT_EXTERN_C PLAT_USED const PlatInfo plat_app_info = {"PLATINF", NAME, AUTHOR, DESC, ICON, MEMKB, FLAGS}
 
 /* Hot code for the fast RAM (SRAM_L, on the Cortex-M4 code bus): the loader
- * copies the .fast segment there when it fits (up to PLAT_FAST_MAX bytes),
+ * copies the .fast segment there when it fits (up to PLAT_FAST_MAX bytes, 24 KB),
  * otherwise it runs from the SDRAM with the rest of the app. */
 #if defined(__arm__) && defined(PLAT_DEVICE)
 #define PLAT_FAST __attribute__((section(".fast"), noinline, noclone))
 #else
 #define PLAT_FAST
 #endif
-#define PLAT_FAST_MAX 16384
+#define PLAT_FAST_MAX 24576
 
 /* The one symbol PLATFORM looks for. */
 typedef const PlatApp* (*PlatEntryFn)(void);

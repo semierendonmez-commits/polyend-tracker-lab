@@ -263,32 +263,52 @@ lab-gate: all
 	$(MAKE) -s -C tests lab-bench-m4 CROSS=$(CROSS) > build/perf/lab_bench_m4.txt
 	python3 tools/lab_gate.py build/perf/lab_bench_m4.txt
 	$(MAKE) -s -C tests papp-qemu CROSS=$(CROSS)
+	$(MAKE) -s stations
+	$(MAKE) -s -C tests hosted-bench CROSS=$(CROSS)
+	python3 tools/lab_gate.py build/perf/lab_hosted.txt
 	$(MAKE) -s -C sim lab LAB_FW=$(LAB_FW)
 	rm -rf build/sim/lab-check-sd && mkdir -p build/sim/lab-check-sd/Firmware
 	$(MAKE) -s sim-card SIM_SD=build/sim/lab-check-sd
-	build/sim/lab-sim --sd build/sim/lab-check-sd --script $(LAB_CHECK)
+	build/sim/lab-sim --sd build/sim/lab-check-sd --line-in-tone 330 --script $(LAB_CHECK)
 	@echo "lab-gate: PASS ($(PTF))"
 .PHONY: lab-gate
 
 # Screenshots for the README and the manual: sim/lab/shots.txt writes PNGs
 # into docs/screenshots/ (run from the repository root of this firmware).
-lab-shots:
+lab-shots: stations
 	$(MAKE) -s -C sim lab LAB_FW=$(LAB_FW)
 	rm -rf build/sim/lab-shots-sd && mkdir -p build/sim/lab-shots-sd docs/screenshots
 	$(MAKE) -s sim-card SIM_SD=build/sim/lab-shots-sd
-	build/sim/lab-sim --sd build/sim/lab-shots-sd --panel --script sim/lab/shots.txt
+	build/sim/lab-sim --sd build/sim/lab-shots-sd --line-in-tone 330 --panel --script sim/lab/shots.txt
 .PHONY: lab-shots
 
 # PLATFORM: fill a simulator card -- the example scripts, the SDK example apps
-# built as host libraries (.so, what the simulator loads), and the test script
-# for the error page (examples/test/). SIM_SD=<folder>.
+# built as host libraries (.so, what the simulator loads), the test scripts for
+# the error page (examples/test/), and the stations' .so files -- those in
+# /Firmware/Apps, where PLATFORM installs them from at boot, like release/Apps
+# on a real card. SIM_SD=<folder>.
 SIM_SD ?= build/sim/platform-sd
 sim-card:
 	$(MAKE) -s -C sdk host
-	mkdir -p $(SIM_SD)/Lab/PLATFORM/Scripts $(SIM_SD)/Lab/PLATFORM/Apps
+	mkdir -p $(SIM_SD)/Lab/PLATFORM/Scripts $(SIM_SD)/Lab/PLATFORM/Apps $(SIM_SD)/Firmware/Apps
 	cp examples/scripts/*.lua examples/test/*.lua $(SIM_SD)/Lab/PLATFORM/Scripts/
 	cp build/sdk/*.so $(SIM_SD)/Lab/PLATFORM/Apps/
+	if ls build/stations/*.so >/dev/null 2>&1; then cp build/stations/*.so $(SIM_SD)/Firmware/Apps/; fi
 .PHONY: sim-card
+
+# PLATFORM: the six sibling workstations as station apps (tools/build_stations.sh,
+# build/stations/*.papp + *.so; incremental).
+stations:
+	sh tools/build_stations.sh
+.PHONY: stations
+
+# PLATFORM: the release folder: the image and the station apps (release/Apps/).
+# Copy release/ to /Firmware on the card; PLATFORM installs Apps/*.papp at boot.
+release-apps: stations
+	mkdir -p release/Apps
+	cp build/stations/*.papp release/Apps/
+	cp $(PTF) release/
+.PHONY: release-apps
 
 # PLATFORM: the native app SDK (both example apps for the device and the sim).
 sdk:

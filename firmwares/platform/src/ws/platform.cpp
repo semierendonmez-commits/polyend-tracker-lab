@@ -92,8 +92,73 @@ bool Platform::init(lab::Context& c) {
         c.fs->mkdir(p);
     }
     readState();
+    installed_ = installApps();
     rescan();
     return true;
+}
+
+// Apps shipped next to the firmware image: release/Apps/ is copied to
+// /Firmware/Apps/ on the card together with the .ptf. Every .papp there that
+// is missing from /Lab/PLATFORM/Apps, or has another size, is copied in.
+int Platform::installApps() {
+    if (!ctx_->fs) return 0;
+    struct List {
+        char names[24][48];
+        uint32_t sizes[24];
+        int n;
+    };
+    static List src;
+    src.n = 0;
+    ctx_->fs->listDir(
+        "Firmware/Apps",
+        [](const ot::IStorage::DirEntry& e, void* u) {
+            List* l = static_cast<List*>(u);
+            if (e.isDir || !lab::endsWithCi(e.name, kAppExt) || std::strlen(e.name) >= 48) return true;
+            if (l->n >= 24) return false;
+            lab::copyStr(l->names[l->n], 48, e.name);
+            l->sizes[l->n++] = e.size;
+            return true;
+        },
+        &src);
+    int copied = 0;
+    static uint8_t buf[4096];
+    for (int i = 0; i < src.n; ++i) {
+        char from[96], to[96];
+        std::snprintf(from, sizeof from, "Firmware/Apps/%s", src.names[i]);
+        std::snprintf(to, sizeof to, "%s/%s/%s", ctx_->home, kAppsDir, src.names[i]);
+        const ot::IStorage::Handle old = ctx_->fs->open(to, ot::IStorage::kRead);
+        if (old >= 0) {
+            const int32_t sz = ctx_->fs->size(old);
+            ctx_->fs->close(old);
+            if (sz == int32_t(src.sizes[i])) continue;   // already installed
+        }
+        const ot::IStorage::Handle in = ctx_->fs->open(from, ot::IStorage::kRead);
+        if (in < 0) continue;
+        char tmp[100];
+        std::snprintf(tmp, sizeof tmp, "%s.part", to);
+        const ot::IStorage::Handle out = ctx_->fs->open(tmp, ot::IStorage::kWrite);
+        bool ok = out >= 0;
+        uint32_t total = 0;
+        while (ok) {
+            const int32_t n = ctx_->fs->read(in, buf, sizeof buf);
+            if (n <= 0) break;
+            ok = ctx_->fs->write(out, buf, uint32_t(n)) == n;
+            total += uint32_t(n);
+        }
+        ctx_->fs->close(in);
+        if (out >= 0) ctx_->fs->close(out);
+        ok = ok && total == src.sizes[i];
+        if (ok) {
+            ctx_->fs->remove(to);
+            ok = ctx_->fs->rename(tmp, to);
+        }
+        if (!ok) {
+            ctx_->fs->remove(tmp);
+            continue;
+        }
+        ++copied;
+    }
+    return copied;
 }
 
 // ---- card ---------------------------------------------------------------------------
@@ -191,6 +256,7 @@ void Platform::scanApps() {
             lab::copyStr(en.author, sizeof en.author, info.author);
             lab::copyStr(en.desc, sizeof en.desc, info.desc);
             lab::copyStr(en.icon, sizeof en.icon, info.icon[0] ? info.icon : "app");
+            en.color = info.color & 0xFFFFFFu;
         } else {
             en.kind = Entry::kApp;
             baseName(en.name, sizeof en.name, c.names[i]);
@@ -536,6 +602,12 @@ void Platform::update(uint32_t ms) {
         if (engine_->resetDone()) finishClose();
         return;
     }
+    if (installed_ > 0 && mode_ == kLauncher) {
+        char m[64];
+        std::snprintf(m, sizeof m, "Installed %d app%s from /Firmware/Apps", installed_, installed_ == 1 ? "" : "s");
+        ctx_->toast(m);
+        installed_ = 0;
+    }
     if (auxHeld_ && !auxUsed_ && ms - auxDownMs_ >= 1000 && mode_ != kLauncher) {
         auxUsed_ = true;
         closeSession(true);
@@ -583,8 +655,14 @@ int Platform::settings(lab::SettingRow* rows, int cap) {
 
 // ---- audio ------------------------------------------------------------------------------
 void Platform::render(const lab::Transport& t, const lab::AudioIn& in, float* l, float* r) {
+    // A native app owns the block: the voice engine (Lua's) is silent and was
+    // reset before the app opened, so it is skipped -- the hosting overhead of
+    // a station is then only the call bridge (hosted bench, make lab-gate).
+    if (audioNative_ && !audioQuiet_) {
+        native_->render(t, in, l, r);
+        return;
+    }
     engine_->render(t, l, r);
-    if (audioNative_ && !audioQuiet_) native_->render(t, in, l, r);
 }
 
 // ---- LEDs ---------------------------------------------------------------------------------
@@ -606,7 +684,7 @@ void Platform::leds(Rgb* pads) {
     // launcher: one pad per entry, the selection bright
     for (int v = 0; v < nView_ && v < lab::kPads; ++v) {
         const Entry& en = entries_[view_[v]];
-        const Rgb base = en.kind == Entry::kScript ? theme_.accent : theme_.accent2;
+        const Rgb base = en.color ? Rgb(en.color) : (en.kind == Entry::kScript ? theme_.accent : theme_.accent2);
         pads[v] = v == sel_ ? base : lab::scale(base, 0.12f);
     }
 }
@@ -783,7 +861,7 @@ void Platform::drawLauncher(lab::Canvas& g) {
         const int c = v % cols, r = v / cols - top_;
         const int x = x0 + c * (cw + gap), y = y0 + r * (ch + gap);
         const bool s = v == sel_;
-        const Rgb kc = en.kind == Entry::kScript ? t.accent : t.accent2;
+        const Rgb kc = en.color ? Rgb(en.color) : (en.kind == Entry::kScript ? t.accent : t.accent2);
         g.color(s ? lab::mix(t.panel, kc, 0.14f) : t.panel);
         g.fill(x, y, cw, ch);
         if (s) {

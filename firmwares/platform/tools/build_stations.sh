@@ -17,5 +17,6 @@ want flipper    && build flipper    FLIPPER    6420  ""
 want graf       && build graf       GRAF       10820 ""
 want bulut      && build bulut      BULUT      10880 "core/audio/effects.cpp core/audio/audio_tables.cpp"
 want datamatics && build datamatics DATAMATICS 6540  ""
+want makam      && build makam      MAKAM      4020  "core/audio/effects.cpp core/audio/audio_tables.cpp core/formats/crc32.cpp"
 want konsol     && build konsol     KONSOL     12440 "$ENG core/audio/synth_params.cpp core/audio/audio_tables.cpp core/audio/effects.cpp core/formats/patch_pb.cpp core/ui/screen_synth_tables.cpp core/ui/notes.cpp core/model/fx.cpp" "core/gen/*.cpp"
 ls -l build/stations/*.papp

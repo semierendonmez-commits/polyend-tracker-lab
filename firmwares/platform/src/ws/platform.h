@@ -19,6 +19,7 @@ struct Entry {
     char author[24] = {};
     char desc[96] = {};
     char icon[16] = {};
+    uint32_t color = 0;      // accent from the app info (stations: their theme), 0 = default
 };
 
 class Platform final : public lab::Workstation {
@@ -69,6 +70,7 @@ public:
 
 private:
     void installExamples(bool force);
+    int installApps();   // /Firmware/Apps/*.papp -> /Lab/PLATFORM/Apps (missing or changed files)
     void scanScripts();
     void scanApps();
     void readState();
@@ -113,6 +115,7 @@ private:
     int scriptHeapMB_ = 3;                // Settings: Lua heap 1..8 MB
     int sessionBar_ = 1;                  // Settings: show the top bar in sessions
     bool bootChecked_ = false;
+    int installed_ = 0;                   // apps copied from /Firmware/Apps at boot (toast)
     int bootOpen_ = -1;                   // entry reopened when the boot countdown ends
     uint32_t bootStart_ = 0;
     static constexpr uint32_t kBootCountdownMs = 1500;

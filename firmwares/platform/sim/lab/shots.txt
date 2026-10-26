@@ -1,10 +1,13 @@
-# PLATFORM screenshots for MANUAL.md (make lab-shots). Card from `make sim-card`.
+# PLATFORM screenshots for MANUAL.md (make lab-shots). Card from `make sim-card`
+# (stations installed from /Firmware/Apps at boot). Launcher order: 0-5 stations
+# (BULUT DATAMATICS FLIPPER GRAF KONSOL MAKAM), 6 Drone, 7 StepSeq, 8 Arp, 9 Broken,
+# 10 Drift, 11 Euclid, 12 Hello, 13 Spin, 14 Steps.
 wait 1500
 panelshot docs/screenshots/intro.png
 wait 2000
 panelshot docs/screenshots/launcher.png
 # Hello
-pad 6 tap
+pad 12 tap
 wait 400
 pad 20 down
 pad 30 down
@@ -15,7 +18,7 @@ pad 30 up
 hold Aux 1200
 wait 300
 # Steps, playing
-pad 8 tap
+pad 14 tap
 wait 300
 tap Play
 wait 2200
@@ -32,19 +35,19 @@ tap Play
 hold Aux 1200
 wait 300
 # Euclid
-pad 5 tap
+pad 11 tap
 wait 2500
 panelshot docs/screenshots/script-euclid.png
 hold Aux 1200
 wait 300
 # Drift
-pad 4 tap
+pad 10 tap
 wait 9000
 panelshot docs/screenshots/script-drift.png
 hold Aux 1200
 wait 300
 # Arp
-pad 2 tap
+pad 8 tap
 wait 300
 pad 24 down
 pad 28 down
@@ -57,22 +60,119 @@ pad 31 up
 hold Aux 1200
 wait 300
 # error page
-pad 3 tap
+pad 9 tap
 wait 2500
 panelshot docs/screenshots/error.png
 tap F8
 wait 300
-# native app (SDK example)
-pad 0 tap
+# native apps (SDK examples)
+pad 6 tap
 wait 300
 pad 3 tap
 wait 1500
 panelshot docs/screenshots/app-drone.png
 hold Aux 1200
 wait 300
-pad 1 tap
+pad 7 tap
 wait 300
 tap Play
 wait 1800
 panelshot docs/screenshots/app-stepseq.png
 tap Play
+press Shift
+tap Help
+release Shift
+wait 300
+# station BULUT (QUANTA on cloud 3)
+pad 0 tap
+wait 2000
+tap Play
+press Shift
+pad 2 tap
+release Shift
+pad 26 down 110
+pad 31 down 90
+wait 3000
+pad 26 up
+pad 31 up
+panelshot docs/screenshots/station-bulut.png
+tap Play
+press Shift
+tap Help
+release Shift
+wait 500
+# station DATAMATICS
+pad 1 tap
+wait 2000
+tap Play
+pad 13 down
+pad 40 down
+wait 3000
+pad 13 up
+pad 40 up
+panelshot docs/screenshots/station-datamatics.png
+tap Play
+press Shift
+tap Help
+release Shift
+wait 500
+# station FLIPPER
+pad 2 tap
+wait 2000
+tap Play
+pad 13 down
+pad 40 down
+wait 3000
+pad 13 up
+pad 40 up
+panelshot docs/screenshots/station-flipper.png
+tap Play
+press Shift
+tap Help
+release Shift
+wait 500
+# station GRAF
+pad 3 tap
+wait 2000
+tap Play
+pad 13 down
+pad 40 down
+wait 3000
+pad 13 up
+pad 40 up
+panelshot docs/screenshots/station-graf.png
+tap Play
+press Shift
+tap Help
+release Shift
+wait 500
+# station KONSOL
+pad 4 tap
+wait 2000
+tap Play
+pad 13 down
+pad 40 down
+wait 3000
+pad 13 up
+pad 40 up
+panelshot docs/screenshots/station-konsol.png
+tap Play
+press Shift
+tap Help
+release Shift
+wait 500
+# station MAKAM
+pad 5 tap
+wait 2000
+tap Play
+pad 13 down
+pad 40 down
+wait 3000
+pad 13 up
+pad 40 up
+panelshot docs/screenshots/station-makam.png
+tap Play
+press Shift
+tap Help
+release Shift
+wait 500

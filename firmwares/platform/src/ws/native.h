@@ -51,6 +51,10 @@ public:
     void transport(bool playing);
     int settings(lab::SettingRow* rows, int cap);
     void save();
+    // CPU bench scenarios of the app (hosted bench; 0 when the app has none)
+    int benchScenarios() const;
+    const char* benchName(int i) const;
+    void benchSetup(int i);
     // audio interrupt
     void render(const lab::Transport& t, const lab::AudioIn& in, float* l, float* r);
 

@@ -543,6 +543,17 @@ int NativeSession::settings(lab::SettingRow* rows, int cap) {
 void NativeSession::save() {
     if (running() && app_->save) app_->save(app_->self);
 }
+static bool hasBench(const PlatApp* a) {
+    return a && a->size >= offsetof(PlatApp, benchSetup) + sizeof(void*) && a->benchScenarios && a->benchSetup;
+}
+int NativeSession::benchScenarios() const { return running() && hasBench(app_) ? app_->benchScenarios(app_->self) : 0; }
+const char* NativeSession::benchName(int i) const {
+    return running() && hasBench(app_) && app_->benchName ? app_->benchName(app_->self, i) : "?";
+}
+void NativeSession::benchSetup(int i) {
+    if (running() && hasBench(app_)) app_->benchSetup(app_->self, i);
+}
+
 void NativeSession::render(const lab::Transport& t, const lab::AudioIn& in, float* l, float* r) {
     const PlatApp* a = app_;
     if (!a || failed_ || !a->render) return;

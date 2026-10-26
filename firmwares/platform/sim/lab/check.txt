@@ -1,11 +1,14 @@
 # PLATFORM lab-gate simulator check (make lab-gate). The card was filled by
-# `make sim-card`: examples/scripts, examples/test and the SDK apps (.so).
-# Launcher order: Drone, StepSeq (apps), then Arp Broken Drift Euclid Hello Spin Steps.
+# `make sim-card`: examples/scripts, examples/test, the SDK apps (.so) and the
+# six stations in /Firmware/Apps (installed by PLATFORM at boot).
+# Launcher order (pad = entry): 0 BULUT 1 DATAMATICS 2 FLIPPER 3 GRAF 4 KONSOL
+# 5 MAKAM (stations), 6 Drone 7 StepSeq (apps), 8 Arp 9 Broken 10 Drift
+# 11 Euclid 12 Hello 13 Spin 14 Steps (scripts). The sim runs with a 330 Hz line-in tone.
 wait 3500
 budget
 # ---- every example script opens, plays, sounds, stays in budget ----
 # Arp: hold three pads -> MIDI notes out + its voice
-pad 2 tap
+pad 8 tap
 wait 400
 peak-reset
 pad 24 down
@@ -23,7 +26,7 @@ tap Help
 release Shift
 wait 300
 # Drift: generative, sounds on its own
-pad 4 tap
+pad 10 tap
 peak-reset
 wait 8000
 expect-sound 100
@@ -31,7 +34,7 @@ budget
 hold Aux 1200
 wait 300
 # Euclid: runs without the transport
-pad 5 tap
+pad 11 tap
 peak-reset
 wait 2500
 expect-sound 300
@@ -41,7 +44,7 @@ tap Help
 release Shift
 wait 300
 # Hello: pads play sines
-pad 6 tap
+pad 12 tap
 wait 400
 peak-reset
 pad 20 down
@@ -52,7 +55,7 @@ budget
 hold Aux 1200
 wait 300
 # Steps: needs Play
-pad 8 tap
+pad 14 tap
 wait 300
 tap Play
 peak-reset
@@ -76,7 +79,7 @@ tap Help
 release Shift
 wait 300
 # ---- native apps (SDK examples, loaded from the card) ----
-pad 0 tap
+pad 6 tap
 wait 400
 peak-reset
 pad 3 tap
@@ -85,7 +88,7 @@ expect-sound 300
 budget
 hold Aux 1200
 wait 300
-pad 1 tap
+pad 7 tap
 wait 300
 tap Play
 peak-reset
@@ -97,15 +100,121 @@ press Shift
 tap Help
 release Shift
 wait 300
+# ---- stations: the six sibling workstations as apps ----
+# BULUT (QUANTA synthesis on cloud 3, as in BULUT's own check)
+pad 0 tap
+wait 2000
+tap Play
+press Shift
+pad 2 tap
+release Shift
+peak-reset
+pad 26 down 110
+pad 31 down 90
+wait 3000
+pad 26 up
+pad 31 up
+expect-sound 300
+budget
+tap Play
+press Shift
+tap Help
+release Shift
+wait 500
+# DATAMATICS
+pad 1 tap
+wait 2000
+tap Play
+peak-reset
+pad 13 down
+pad 40 down
+wait 3000
+pad 13 up
+pad 40 up
+expect-sound 100
+budget
+tap Play
+press Shift
+tap Help
+release Shift
+wait 500
+# FLIPPER
+pad 2 tap
+wait 2000
+tap Play
+peak-reset
+pad 13 down
+pad 40 down
+wait 3000
+pad 13 up
+pad 40 up
+expect-sound 100
+budget
+tap Play
+press Shift
+tap Help
+release Shift
+wait 500
+# GRAF
+pad 3 tap
+wait 2000
+tap Play
+peak-reset
+pad 13 down
+pad 40 down
+wait 3000
+pad 13 up
+pad 40 up
+expect-sound 100
+budget
+tap Play
+press Shift
+tap Help
+release Shift
+wait 500
+# KONSOL
+pad 4 tap
+wait 2000
+tap Play
+peak-reset
+pad 13 down
+pad 40 down
+wait 3000
+pad 13 up
+pad 40 up
+expect-sound 100
+budget
+tap Play
+press Shift
+tap Help
+release Shift
+wait 500
+# MAKAM
+pad 5 tap
+wait 2000
+tap Play
+peak-reset
+pad 13 down
+pad 40 down
+wait 3000
+pad 13 up
+pad 40 up
+expect-sound 100
+budget
+tap Play
+press Shift
+tap Help
+release Shift
+wait 500
 # ---- failures stay contained ----
 # a runtime error -> error page, sound stops, back to the launcher
-pad 3 tap
+pad 9 tap
 wait 2500
 budget
 tap F8
 wait 300
 # an endless loop -> stopped by the instruction limit
-pad 7 tap
+pad 13 tap
 wait 300
 pad 0 tap
 wait 500
@@ -113,7 +222,7 @@ budget
 tap F8
 wait 300
 # the launcher still works: open Hello again and play
-pad 6 tap
+pad 12 tap
 wait 300
 peak-reset
 pad 10 down

@@ -41,10 +41,12 @@ runs it, and Shift + Help brings you back.
 
 ## 1. Quick start
 
-1. Copy `release/PolyendTrackerPLATFM.ptf` to `/Firmware` on the card and install it. You
-   can use Config > Firmware from any lab firmware, or the stock updater.
+1. Copy the contents of `release/` to `/Firmware` on the card: `PolyendTrackerPLATFM.ptf`
+   and the `Apps/` folder with the six stations. Install the `.ptf` with Config > Firmware
+   from any lab firmware, or with the stock updater.
 2. Boot. After the intro the launcher appears. On a fresh card PLATFORM writes five example
-   scripts to `/Lab/PLATFORM/Scripts`.
+   scripts to `/Lab/PLATFORM/Scripts` and installs the station apps it finds in
+   `/Firmware/Apps` (section 9).
 3. Turn the encoder to choose an entry, then press the encoder (or F1, or the matching pad) to
    open it.
 4. Play. **Shift + Help** (or holding **Aux** for one second) returns to the launcher.
@@ -109,6 +111,8 @@ Each card shows:
 - an **icon** (from the script's `-- icon:` line or the app's info),
 - the **name** and **kind**: LUA SCRIPT (mint), NATIVE APP or STATION (amber),
 - a two-line **description** and the **author**,
+- the entry's **colour**: mint for scripts, amber for apps, and each station's own theme
+  accent,
 - **LAST** on the entry opened most recently.
 
 Stations come first, then apps, then scripts, each group by name.
@@ -572,6 +576,7 @@ appended.
 | `settings(self, rows, cap)` | rows for Config > Settings (`PlatSetting` = `lab::SettingRow`) | `settings` |
 | `save(self)` | power off, Settings > Save, every 5 minutes, and before close | `save` |
 | `close(self)` | the app is being unloaded | |
+| `benchScenarios` / `benchName` / `benchSetup` | optional: CPU bench scenarios, run under QEMU by the hosted bench | `benchScenarios` ... |
 
 `PlatHost` provides: memory (`alloc`, `memFree`), drawing (`color`, `fill`, `line`, `text`,
 batches, `bitmap332` + `writeRamG` in RAM_G 0x000000..0x06CBFF), files (paths from the card
@@ -595,7 +600,7 @@ inside `render`), the radio, and the Shell's state.
   console.
 - No exceptions, no RTTI, no thread-safe statics (the SDK flags turn them off).
 - **Hot code:** mark functions `PLAT_FAST`. The loader copies them to SRAM_L, the fast RAM on
-  the code bus (up to 16 KB per app); otherwise they run from SDRAM through the 8 KB cache.
+  the code bus (up to 24 KB per app); otherwise they run from SDRAM through the 8 KB cache.
   A station's `OT_FASTRUN_FN` functions go there too.
 
 ### The .papp format and the loader
@@ -603,7 +608,7 @@ inside `render`), the radio, and the Shell's state.
 `tools/mkpapp.py` turns the linked ELF (linked at address 0 with `--emit-relocs`) into:
 
 ```
-PappHeader (64 B) + PlatInfo (176 B)
+PappHeader (64 B) + PlatInfo (180 B)        format version 2
 fast segment    (PLAT_FAST code, linked at 0x40000000)
 main segment    (.text .rodata .init_array .data, linked at 0)
 relocations     one 32-bit word per absolute address in either segment
@@ -627,33 +632,98 @@ veneer, MOVW/MOVT absolute addresses, `R_ARM_REL32` (exception tables).
 
 ## 9. Stations: workstations as apps
 
-A lab workstation (`firmwares/<fw>/src/ws/`, a `lab::Workstation` with
-`createWorkstation()`) can be built **unchanged** as a PLATFORM app:
+The six other polyend-tracker-lab workstations run inside PLATFORM as **stations**:
+
+| Station | What it is | `.papp` | Fast code | Needs |
+| --- | --- | --- | --- | --- |
+| **BULUT** | granular cloud workstation | 126 KB | 10 KB | 10.6 MB |
+| **DATAMATICS** | data music: any file, sine / click / noise / impulse | 82 KB | 2.5 KB | 6.4 MB |
+| **FLIPPER** | the song is a pinball machine | 124 KB | 6 KB | 6.3 MB |
+| **GRAF** | modular synth: pin matrix + patch graph | 166 KB | 18.5 KB | 10.6 MB |
+| **KONSOL** | clip / scene production console, 8 channels | 297 KB | 14 KB | 12.2 MB |
+| **MAKAM** | MAKAM-JUNGLE: Turkish makam meets jungle / drum & bass | 114 KB | 16 KB | 3.9 MB |
+
+Each one is the **same workstation** as in its own firmware, compiled unchanged from that
+firmware's `src/ws/`, with the same pages, controls, sounds and files. It also keeps its own
+`.ptf` image. Use the station when you want to switch between instruments without
+reflashing. Use the firmware when you want an instrument alone on the Tracker.
+
+| Station inside PLATFORM | |
+|---|---|
+| ![GRAF](docs/screenshots/station-graf.png) | ![KONSOL](docs/screenshots/station-konsol.png) |
+| ![MAKAM](docs/screenshots/station-makam.png) | ![FLIPPER](docs/screenshots/station-flipper.png) |
+| ![BULUT](docs/screenshots/station-bulut.png) | ![DATAMATICS](docs/screenshots/station-datamatics.png) |
+
+### Installing
+
+The stations are separate files in `release/Apps/` (`bulut.papp`, `datamatics.papp`,
+`flipper.papp`, `graf.papp`, `konsol.papp`, `makam.papp`). They are not built into the
+firmware image. Either:
+
+- copy `release/Apps/` to **`/Firmware/Apps/`** on the card (together with the `.ptf`). At
+  every boot PLATFORM copies each `.papp` there that is missing from `/Lab/PLATFORM/Apps/`,
+  or has a different size (a newer build), and shows "Installed N apps". A card without
+  `/Firmware/Apps` simply gets none. Or:
+- copy the `.papp` files straight to **`/Lab/PLATFORM/Apps/`** and press F5 Rescan.
+
+To remove a station, delete its file from `/Lab/PLATFORM/Apps/`. Delete it from
+`/Firmware/Apps/` too, or the next boot installs it again.
+
+### Using a station
+
+Stations come first in the launcher, in their own colours, with their own tagline. Opening
+one starts it as its firmware would, without the boot intro. Every control is the
+station's own, including Aux pressed briefly and its own Help page. Two exceptions:
+
+- **Shift + Help** (or **Aux held one second**) closes the station and returns to the
+  launcher. The station saves first, like at power-off.
+- **Config** opens the Settings page: the Shell rows, PLATFORM's rows, then the station's
+  own rows.
+
+**Play**, **Shift + Rec** (including the station's stems), MIDI in and out, the tempo and
+the input selection are shared with PLATFORM's Shell and work exactly as in the firmware.
+The header shows the station's name.
+
+**Files.** A station uses `/Lab/<NAME>/`, the same folder as its own firmware. Projects,
+kits and settings are shared: save in BULUT-the-station, open in BULUT-the-firmware.
+
+**Memory.** A station gets all memory left in the session pool, 13.3 MB. The "Needs" column
+is the minimum it starts with; with less, it refuses and the error page says how much is
+free.
+
+**CPU.** Hosting costs almost nothing. While a station runs, PLATFORM's voice engine is
+skipped and `render()` goes straight to the station. `make lab-gate` runs every station's
+own CPU bench scenarios inside PLATFORM under QEMU (the hosted bench) and fails above
+180,000 M4 instructions per block. The worst block per station, hosted (with the station's
+own firmware bench in brackets): BULUT 174,520 (174,520), KONSOL 170,760 (169,360), FLIPPER
+166,200 (165,320), GRAF 158,880 (158,120), MAKAM 150,360 (150,480), DATAMATICS 130,920
+(130,160). These are instruction counts. On the device the station's code runs from SDRAM
+through the 8 KB cache, except its fast code in SRAM_L, so the real cycle cost can be
+higher than the firmware's own.
+
+### Building stations
 
 ```
-sh tools/build_stations.sh            # every finished sibling firmware found next to this one
-make -f sdk/station/station.mk FW=../flipper NAME=FLIPPER MEMKB=6420 [EXTRA="core/... "] [FW_EXTRA="core/gen/*.cpp"]
+make stations                 # all six: build/stations/<name>.papp (device) + <name>.so (simulator)
+make release-apps             # + copy them to release/Apps/
+sh tools/build_stations.sh graf konsol       # some of them
+make -f sdk/station/station.mk FW=../<fw> NAME=<NAME> MEMKB=<min KB> [EXTRA="core/..."] [FW_EXTRA="core/..."]
 ```
 
-The station is linked with its own `src/ws`, PLATFORM's `src/lab` (Canvas, drawing helpers,
-`Context` services), the core sources it uses, and `sdk/station/station_glue.cpp`. The glue
-gives the workstation:
+A station is linked from:
+- its firmware's `src/ws/`,
+- PLATFORM's `src/lab/` (the Canvas, the drawing helpers, the `Context` services; all seven
+  copies of `lab.h` are identical),
+- the core sources it uses (`EXTRA` from PLATFORM's tree, `FW_EXTRA` from its own, e.g.
+  KONSOL's `core/gen`),
+- `sdk/station/station_glue.cpp`.
 
-- its **arena**: all memory left in the session pool. `MEMKB` is the minimum it needs, and
-  the loader refuses to start it with less.
-- the host's own **Shell**, **Canvas**, **card** and **radio** objects. Through them
-  `ctx.shell->...`, `drawHeader()`, `g.display()->writeRamG()` and so on work exactly as in
-  the firmware. `PlatHost::labLayout` checks that the station was built against the same
-  `lab.h` object layout.
-- its **own card folder**, `/Lab/<NAME>/`: the same files as its own firmware, so projects
-  are shared between the two.
-- the whole frame budget, its own Settings rows, MIDI, transport, recorder stems.
-
-Stations appear first in the launcher (STATION). Shift + Help and holding Aux still return
-to the launcher. A station keeps every other control, including Aux pressed briefly and its
-own Help page.
-
----
+The glue gives the workstation its arena and the host's own Shell, Canvas, card and radio
+objects through `PlatHost::lab*`. `PlatHost::labLayout` refuses a station built against
+another `lab.h` layout. The station's calls to `drawHeader` are linked (`--wrap`) to a copy
+that shows the station's name. After the build, `tools/station_info` boots the simulator
+library headless to read the workstation's tagline and theme accent, and
+`tools/patch_info.py` writes them into the launcher record of both files.
 
 ## 10. Safety: errors, hangs, safe boot
 
@@ -713,13 +783,14 @@ including the running session's state.
 ```
 /Lab/PLATFORM/
   Scripts/*.lua          your scripts (the examples are written here on a fresh card)
-  Apps/*.papp            native apps and stations
+  Apps/*.papp            native apps and stations (installed from /Firmware/Apps at boot)
   Data/<name>/           each script's / app's own folder: params.txt, samples, state
   state.txt              last entry, crash-guard flag, the PLATFORM settings
   settings.bin           the Shell's settings
   Rec/REC-nnnn.wav       master recordings (Shift + Rec)
 /Lab/<STATION>/          a station's own files (shared with its own firmware)
 /Firmware/*.ptf          firmware images for Config > Firmware
+/Firmware/Apps/*.papp    apps shipped with the release (release/Apps): installed at boot
 ```
 
 ---
@@ -737,7 +808,8 @@ including the running session's state.
 | Engine CPU | 150,000 M4 instructions per block (governor) |
 | Scheduled events | 512 in the command ring, 256 waiting beyond the current block, 128 MIDI messages waiting |
 | Session pool | ~13.3 MB (scripts, samples, native apps, stations) |
-| Native app fast code | 16 KB in SRAM_L |
+| Native app fast code | 24 KB in SRAM_L |
+| Apps installed from /Firmware/Apps | 24 per boot |
 | Numbers in Lua | 32-bit integers, single-precision floats |
 
 ---
@@ -758,7 +830,9 @@ same ABI.
 Gate and documentation commands:
 
 ```
-make lab-gate          # image, flash / stack / libm, host tests, CPU bench (QEMU), loader test (QEMU), sim check
+make lab-gate          # image, flash / stack / libm, host tests, CPU bench (QEMU), loader test (QEMU),
+                       # the six stations built and benched inside PLATFORM (QEMU), sim check
+make -C tests hosted-bench [STATIONS="graf konsol"]   # the hosted bench alone (build/perf/lab_hosted.txt)
 make lab-shots         # docs/screenshots/*.png
 make -C tests papp-qemu [STATION=build/stations/flipper.papp]   # the ARM loader test alone
 ```

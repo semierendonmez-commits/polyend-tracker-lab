@@ -22,7 +22,8 @@ R_ARM_THM_CALL, R_ARM_THM_JUMP24 = 10, 30
 ABS_MOV = {43, 44, 47, 48}
 FAST_BASE = 0x40000000
 PLAT_ABI_VERSION = 1
-PAPP_VERSION = 1
+PAPP_VERSION = 2
+INFO_SIZE = 180
 
 
 def die(msg):
@@ -180,7 +181,7 @@ def main(src, dst):
 
     init_start, init_end = sym.get("__plat_init_start", 0), sym.get("__plat_init_end", 0)
     info_off = sym["plat_app_info"]
-    info = bytes(text[info_off:info_off + 176])
+    info = bytes(text[info_off:info_off + INFO_SIZE])
     if info[:8] != b"PLATINF\0":
         die("plat_app_info is not a PlatInfo record")
     entry = sym["plat_app_entry"]
@@ -188,7 +189,7 @@ def main(src, dst):
         die("plat_app_entry is not Thumb code")
     body = bytes(fast) + bytes(text) + b"".join(struct.pack("<I", r) for r in sorted(set(relocs)))
     flags = struct.unpack_from("<I", info, 172)[0]
-    hdr = struct.pack("<4sHHIIIIIIIIIII3I", b"PAPP", PAPP_VERSION, 64 + 176, PLAT_ABI_VERSION, flags, len(fast),
+    hdr = struct.pack("<4sHHIIIIIIIIIII3I", b"PAPP", PAPP_VERSION, 64 + INFO_SIZE, PLAT_ABI_VERSION, flags, len(fast),
                       len(text), (bss + 7) // 8 * 8, len(set(relocs)), entry, init_start,
                       (init_end - init_start) // 4, 8, zlib.crc32(body) & 0xFFFFFFFF, 0, 0, 0)
     assert len(hdr) == 64
