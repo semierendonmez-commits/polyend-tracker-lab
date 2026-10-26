@@ -1,6 +1,74 @@
-wait 800
+# FLIPPER screenshots for MANUAL.md / README (make lab-shots).
+wait 1300
 panelshot docs/screenshots/intro.png
 wait 2500
-pad 5 down
-panelshot docs/screenshots/main.png
-pad 5 up
+# Hybrid playfield: start the game, let it run, flip a few times
+tap Play
+wait 2500
+pad 41 down 120
+wait 120
+pad 41 up
+wait 1600
+panelshot docs/screenshots/play-hybrid.png
+# Multiball: drop extra balls with Shift + pad
+press Shift
+pad 14 tap
+pad 20 tap
+pad 9 tap
+release Shift
+wait 900
+panelshot docs/screenshots/multiball.png
+# Markov only
+tap F7
+wait 2500
+panelshot docs/screenshots/play-markov.png
+tap F7
+wait 2300
+# Editor
+tap F2
+pad 14 tap
+wait 300
+panelshot docs/screenshots/editor.png
+# Sounds
+tap F3
+pad 5 tap
+wait 300
+panelshot docs/screenshots/sounds.png
+# Table graph
+tap F4
+wait 300
+panelshot docs/screenshots/tables.png
+# Run: capture the game
+tap F5
+tap F6
+wait 400
+tap F7
+wait 1500
+panelshot docs/screenshots/run.png
+tap F7
+# Settings (the Config button)
+tap Config
+wait 200
+press Down
+release Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+wait 200
+panelshot docs/screenshots/settings.png
+tap Config
+tap F1
+tap Help
+wait 200
+panelshot docs/screenshots/help.png
+tap Help

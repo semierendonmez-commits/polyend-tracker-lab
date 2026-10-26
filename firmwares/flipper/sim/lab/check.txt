@@ -1,13 +1,113 @@
-# lab-gate simulator check (template): intro, main page, settings, sound.
+# FLIPPER lab-gate simulator check: intro, every page, both ball modes, multiball,
+# sound, MIDI notes, the display budget, capture / replay, save / load.
 wait 3000
 budget
+# Play: the game starts, the auto-player launches and plays
+tap Play
 peak-reset
-pad 5 down
-wait 300
+wait 4000
 expect-sound 1000
-pad 5 up
-tap Config
+expect-midi-notes 4
+budget
+# the player: flippers on the bottom pads and Left / Right, launch, tilt, magnet
+pad 41 down 120
+wait 150
+pad 41 up
+tap Left
+tap Right
+tap Down
+tap Up
+pad 18 down
+wait 400
+pad 18 up
+# multiball (Shift + pad drops balls) with trails, then all performance effects at once
+press Shift
+pad 14 tap
+pad 20 tap
+pad 9 tap
+release Shift
+press Note
+press Instr
+press FX2
+press Pattern
+wait 1500
+release Note
+release Instr
+release FX2
+release Pattern
+press FX1
+wait 300
+release FX1
+budget
+# Markov only, with multiball (the heaviest playfield frame: preview arrows + trails)
+tap F7
+press Shift
+pad 3 tap
+pad 22 tap
+pad 28 tap
+release Shift
+peak-reset
+wait 3000
+expect-sound 500
+budget
+tap F7
+# Editor: pick a cell, change the element, stamp, copy / paste, drop a ball
 tap F2
+pad 15 tap
+tap F6
+enc 2
+tap Down
+enc 3
+press Shift
+pad 16 tap
+release Shift
+tap Copy
+pad 17 tap
+tap Insert
+tap F7
+tap Help
+wait 200
+budget
+tap Help
+# Sounds: pick, audition, change values
 tap F3
+pad 3 tap
+peak-reset
+pad 30 tap
+wait 200
+expect-sound 200
+tap Down
+enc 5
+tap F6
+budget
+# Tables: graph page, weights, cue a table
+tap F4
+pad 2 tap
+pad 14 tap
+tap Down
+enc 1
+tap F6
+wait 1500
+budget
+# Run: capture, replay, save, load
+tap F5
+tap F6
+tap F7
+peak-reset
+wait 2500
+expect-sound 300
+tap F7
 tap F8
+tap EncPush
+tap EncPush
+wait 500
+budget
+# Settings: the workstation rows
+tap Config
+tap F1
+tap Down
+tap F8
+tap F1
+wait 1000
+expect-midi-notes 20
 budget
