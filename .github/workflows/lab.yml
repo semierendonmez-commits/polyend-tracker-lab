@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        fw: [konsol, graf, bulut, datamatics, flipper, makam, platform]
+        fw: [konsol, graf, bulut, datamatics, flipper, makam, tilt, platform]
     steps:
       - uses: actions/checkout@v5
       - uses: carlosperate/arm-none-eabi-gcc-action@49f4db4520f840e77ab1e99b24cfac2c540a21b1   # v1.14.1

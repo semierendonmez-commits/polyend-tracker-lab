@@ -1,13 +1,270 @@
-# lab-gate simulator check (template): intro, main page, settings, sound.
+# TILT lab-gate simulator check: the intro, every page and overlay, the perform
+# pads (flips, flippers, multiball, nudge, combos, capture / replay), MIDI in
+# and out, every sound engine, melody mode, files, settings, the display budget.
 wait 3000
 budget
+# ---- GRAPH: play the default groove ----
+tap Play
 peak-reset
-pad 5 down
-wait 300
+wait 3000
 expect-sound 1000
-pad 5 up
-tap Config
+expect-midi-notes 8
+budget
+# perform pads: flip to step 6, the flipper keys, a second and third ball, a nudge
+pad 5 tap 100
+tap Note
+tap Instr
+tap FX1
+pad 38 tap
+pad 38 tap
+pad 39 tap 90
+wait 1200
+budget
+# the encoder sets the tempo, arrows the move rate, Shift shows the page actions
+enc 4
+tap Right
+tap Left
+press Shift
+wait 100
+budget
+release Shift
+# MIDI in: step notes (C3 + 4 = step 5) and flipper notes (C2 = flipper 1)
+midi 0x90 52 100
+midi 0x90 36 100
+wait 600
+# ---- FILE: load the COMBOS factory pattern from a pad ----
+tap File
+wait 100
+budget
+pad 6 tap
+tap File
+peak-reset
+wait 2500
+expect-sound 500
+# fire the combos from the perform pads, then a hard flip tilts the table
+pad 32 tap
+pad 33 tap
+pad 34 tap
+pad 35 tap
+wait 400
+budget
+press Shift
+tap Note
+tap Note
+tap Note
+tap Note
+release Shift
+pad 47 tap
+wait 1500
+budget
+# ---- MATRIX: edit cells from the pads and the encoder, shapes, pages ----
 tap F2
-tap F3
+pad 26 tap
+pad 3 tap 90
+pad 10 tap 60
+tap Right
+enc 4
+tap Down
+enc -2
+press Shift
+tap F2
+release Shift
+enc 2
+press Shift
+tap F5
+release Shift
+enc 3
+tap Push
+pad 35 tap
+pad 22 tap
+press Shift
 tap F8
+release Shift
+wait 300
+budget
+press Shift
+tap F8
+release Shift
+pad 11 tap
+# ---- STEPS: channels from the pads, rows, bumpers, ramps, melody ----
+tap F3
+pad 2 tap
+pad 29 tap
+pad 42 tap
+enc 2
+pad 43 tap
+enc 5
+pad 1 down
+pad 24 tap
+pad 1 up
+tap Down
+tap Down
+tap Right
+enc -3
+pad 46 tap
+tap Push
+tap Right
+enc 3
+wait 300
+budget
+press Shift
+tap F7
+tap F6
+tap F5
+release Shift
+tap Copy
+tap Right
+tap Insert
+peak-reset
+wait 1500
+expect-sound 300
+# ---- TABLE ----
+tap F4
+pad 0 tap
+enc 1
+tap Down
+enc 2
+tap Right
+tap Down
+enc 1
+pad 36 tap
+pad 37 tap
+pad 40 tap
+wait 400
+budget
+# ---- EVOLVE: memory, mutation, meta, locks, the randomizer and undo ----
+tap F5
+enc 30
+tap Down
+tap Down
+tap Down
+enc 40
+tap Right
+enc 1
+pad 0 tap
+pad 1 tap
+pad 28 tap
+pad 36 tap
+wait 200
+pad 37 tap
+pad 38 tap
+wait 2000
+budget
+press Shift
+tap F1
+tap F8
+release Shift
+# ---- COMBOS: a path from the step pads, an action, fire it ----
+tap F6
+pad 25 tap
+pad 0 tap
+pad 4 tap
+pad 8 tap
+pad 31 tap
+enc 2
+pad 37 tap
+wait 600
+budget
+# ---- CHANNELS: every engine plays from the pad keyboard ----
+tap F7
+peak-reset
+pad 24 tap 110
+wait 300
+expect-sound 200
+pad 37 tap
+peak-reset
+pad 26 tap 110
+wait 300
+expect-sound 200
+pad 38 tap
+peak-reset
+pad 28 tap 110
+wait 300
+expect-sound 200
+pad 41 tap
+peak-reset
+pad 13 tap 110
+wait 400
+expect-sound 200
+pad 42 tap
+peak-reset
+pad 26 tap 110
+wait 400
+expect-sound 200
+pad 43 tap
+peak-reset
+pad 24 tap 110
+wait 300
+expect-sound 200
+tap Down
+enc 5
+tap Down
+enc -3
+tap Push
+wait 200
+budget
+# ---- MIX: levels, sends, mutes, FX ----
+tap F8
+enc -4
+tap Down
+enc 3
+tap Down
+enc 20
+tap Down
+enc 30
+pad 12 tap
+pad 12 tap
+pad 1 tap
+pad 1 tap
+pad 8 tap
+enc 2
+tap F1
+peak-reset
+wait 1500
+expect-sound 300
+tap F8
+wait 200
+budget
+# ---- capture the last bars, replay, MIDI file, save / load ----
+tap Rec
+wait 1500
+budget
+peak-reset
+wait 1500
+expect-sound 300
+tap Rec
+tap File
+tap Right
+tap Right
+tap Right
+tap F7
+tap Left
+tap Left
+tap F2
+tap F4
+tap Left
+tap Down
+tap F1
+tap Right
+tap F1
+wait 300
+budget
+tap F8
+# ---- HELP, settings ----
+tap Help
+wait 200
+budget
+tap Help
+tap Config
+tap Down
+tap Down
+tap Down
+wait 200
+budget
+tap Config
+# keep playing: the walk, the sound, MIDI out
+peak-reset
+wait 2000
+expect-sound 300
+expect-midi-notes 60
 budget

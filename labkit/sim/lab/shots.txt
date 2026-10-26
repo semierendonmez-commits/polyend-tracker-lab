@@ -1,0 +1,95 @@
+# LABKIT demo screenshots (make lab-shots): docs/screenshots/labkit-*.png
+mkdir Samples
+mkdir Samples/Drums
+mkdir Samples/Loops
+mkwav Samples/bass_c1.wav 1.5 55
+mkwav Samples/kick_808.wav 0.8 50
+mkwav Samples/pad_chord.wav 4.0 220 2
+mkwav Samples/snare.wav 0.4 180
+mkwav Samples/Drums/hat.wav 0.2 4000
+wait 3000
+# the demo's FILTER page, a knob turned: the value HUD
+tap F2
+tap Right
+enc 3
+wait 60
+panelshot docs/screenshots/labkit-hud.png
+wait 1500
+# PARAM pads (I.Param tap)
+tap INSTRPARAMS
+wait 100
+panelshot docs/screenshots/labkit-param.png
+# a mod route being set: hold LFO1 + hold Reso, turn the encoder
+pad 36 down
+pad 1 down
+enc 15
+wait 100
+panelshot docs/screenshots/labkit-route.png
+pad 1 up
+pad 36 up
+# a macro target: hold BRIGHT, tap Env amt
+pad 42 down
+pad 2 down
+enc 10
+wait 100
+panelshot docs/screenshots/labkit-macro-assign.png
+pad 2 up
+pad 42 up
+tap INSTRPARAMS
+wait 100
+# MAP (hold Master), AMP column, Sustain
+press MASTER
+wait 300
+pad 2 down
+pad 2 up
+pad 14 down
+pad 14 up
+wait 100
+panelshot docs/screenshots/labkit-map.png
+release MASTER
+wait 100
+# MACRO page (Shift + I.Param), BRIGHT at 66 %
+press SHIFT
+tap INSTRPARAMS
+release SHIFT
+pad 12 down
+pad 12 up
+wait 100
+panelshot docs/screenshots/labkit-macro.png
+press SHIFT
+tap INSTRPARAMS
+release SHIFT
+# MOD page (Shift + Master)
+press SHIFT
+tap MASTER
+release SHIFT
+tap Down
+tap Down
+wait 300
+panelshot docs/screenshots/labkit-mod.png
+tap F8
+# HELP (Shift + Config)
+press SHIFT
+tap CONFIG
+release SHIFT
+wait 100
+screenshot docs/screenshots/labkit-help.png
+tap F8
+# the browser (F7 on the demo)
+tap F7
+wait 500
+tap Down
+wait 700
+panelshot docs/screenshots/labkit-browser.png
+tap F7
+# the keyboard (F6 on the demo)
+tap F6
+pad 13 down
+pad 13 up
+pad 46 down
+pad 46 up
+pad 25 down
+wait 100
+panelshot docs/screenshots/labkit-keyboard.png
+pad 25 up
+tap F7

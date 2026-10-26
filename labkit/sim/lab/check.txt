@@ -1,0 +1,136 @@
+# LABKIT demo lab-gate check: the synth sounds, every LABKIT view opens and
+# stays inside the display budget, and params / routes / macros / MIDI learn /
+# browser / keyboard work. Keys (NAV.md): I.Param = INSTRPARAMS (PARAM pads),
+# Master = MASTER (MAP), Shift + I.Param = MACRO, Shift + Master = MOD,
+# Shift + Config = HELP.
+mkdir Samples
+mkwav Samples/kick.wav 0.6 55
+mkwav Samples/pad.wav 3.0 220 2
+wait 3000
+budget
+# ---- pads play the synth -------------------------------------------------
+peak-reset
+pad 30 down
+wait 400
+expect-sound 1000
+pad 30 up
+wait 300
+expect-overlay none
+# ---- the page's encoder goes through the registry (FILTER > Cutoff) ------
+tap F2
+enc 10
+wait 100
+budget
+# ---- PARAM pads: tap = latched ---------------------------------------------
+tap INSTRPARAMS
+expect-overlay param
+wait 100
+budget
+# hold Reso (pad 1) + encoder
+expect-param flt.res 0.35 0.001
+pad 1 down
+enc 10
+pad 1 up
+expect-param flt.res 0.45 0.002
+# hold LFO2 (pad 37) + tap Key trk (pad 3) = a route, encoder = depth
+expect-routes 7
+pad 37 down
+pad 3 down
+enc 20
+wait 100
+budget
+pad 3 up
+pad 37 up
+expect-routes 8
+# source + param held + Delete removes it
+pad 37 down
+pad 3 down
+tap DELETE
+pad 3 up
+pad 37 up
+expect-routes 7
+# macro BRIGHT (pad 42) + tap Drive (pad 4) = a macro target
+pad 42 down
+pad 4 down
+pad 4 up
+pad 42 up
+expect-routes 8
+# MIDI learn: Shift + hold Cutoff (pad 0) + move CC 74
+press SHIFT
+pad 0 down
+cc 1 74 64
+pad 0 up
+release SHIFT
+expect-learn 1
+cc 1 74 127
+wait 50
+expect-param flt.cut 16000 1
+tap INSTRPARAMS
+expect-overlay none
+# ---- MAP: hold, pick the FX column (pad 4 = col 4: OSC FILTER AMP FX ARP), release
+press MASTER
+wait 100
+expect-overlay map
+pad 3 down
+pad 3 up
+wait 100
+budget
+release MASTER
+expect-overlay none
+# ---- MACRO page: top pad of column 1 = macro 1 at 100 % -------------------
+press SHIFT
+tap INSTRPARAMS
+release SHIFT
+expect-overlay macro
+pad 0 down
+pad 0 up
+expect-param lk.m1 1 0.001
+wait 100
+budget
+press SHIFT
+tap INSTRPARAMS
+release SHIFT
+expect-overlay none
+# ---- MOD page, HELP ---------------------------------------------------------
+press SHIFT
+tap MASTER
+release SHIFT
+expect-overlay mod
+wait 100
+budget
+tap F8
+expect-overlay none
+press SHIFT
+tap CONFIG
+release SHIFT
+expect-overlay help
+wait 100
+budget
+tap F8
+expect-overlay none
+# ---- the browser: auto-preview, load the first WAV -------------------------
+tap F7
+expect-overlay browser
+peak-reset
+wait 600
+expect-sound 300
+budget
+tap F8
+wait 200
+expect-overlay none
+expect-param osc.wave 4
+# ---- the keyboard -------------------------------------------------------------
+tap F6
+expect-overlay keyboard
+pad 13 down
+pad 13 up
+wait 100
+budget
+tap F8
+expect-overlay none
+# ---- Config still opens the Shell settings ----------------------------------
+tap CONFIG
+tap F2
+tap F3
+tap F8
+budget
