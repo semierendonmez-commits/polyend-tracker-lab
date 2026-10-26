@@ -14,7 +14,7 @@ ALSA_LIBS   := $(shell pkg-config --libs alsa)
 endif
 CXXFLAGS := -std=c++17 -O2 -g -Wall -Wextra -Wno-format-truncation -MMD -I$(ROOT)/src/core -I$(ROOT)/src -Isrc \
             $(SDL_CFLAGS) $(ALSA_CFLAGS)
-LDLIBS   := $(SDL_LIBS) $(ALSA_LIBS) -lpthread
+LDLIBS   := $(SDL_LIBS) $(ALSA_LIBS) -lpthread -lz
 
 CORE_SRCS := $(shell find $(ROOT)/src/core -name '*.cpp')
 CORE_OBJS := $(patsubst $(ROOT)/src/%.cpp,$(OUT)/obj/%.o,$(CORE_SRCS))

@@ -1,6 +1,7 @@
 #include "png.h"
 
 #include <cstdio>
+#include <zlib.h>
 #include <vector>
 
 namespace sim {
@@ -58,24 +59,14 @@ bool writePng(const char* path, const uint32_t* argb, int w, int h) {
             raw.push_back(uint8_t(p));
         }
     }
-    std::vector<uint8_t> z{0x78, 0x01};
-    uint32_t a = 1, b = 0;
-    for (uint8_t c : raw) {
-        a = (a + c) % 65521;
-        b = (b + a) % 65521;
+    // zlib (level 9): screenshots go into the repository, keep them small.
+    uLongf zn = compressBound(uLong(raw.size()));
+    std::vector<uint8_t> z(zn);
+    if (compress2(z.data(), &zn, raw.data(), uLong(raw.size()), 9) != Z_OK) {
+        std::fclose(f);
+        return false;
     }
-    size_t pos = 0;
-    do {
-        const size_t n = raw.size() - pos > 65535 ? 65535 : raw.size() - pos;
-        z.push_back(pos + n == raw.size() ? 1 : 0);
-        z.push_back(uint8_t(n));
-        z.push_back(uint8_t(n >> 8));
-        z.push_back(uint8_t(~n));
-        z.push_back(uint8_t(~n >> 8));
-        z.insert(z.end(), raw.begin() + long(pos), raw.begin() + long(pos + n));
-        pos += n;
-    } while (pos < raw.size());
-    be32(z, (b << 16) | a);
+    z.resize(zn);
     chunk(f, "IDAT", z);
     chunk(f, "IEND", {});
     return std::fclose(f) == 0;

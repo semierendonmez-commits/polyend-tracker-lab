@@ -13,7 +13,7 @@ namespace konsol {
 
 class TableEngine : public Engine {
 public:
-    static constexpr int kMaxP = 28;
+    static constexpr int kMaxP = 40;
     int sections() const override { return nsec_; }
     const char* sectionName(int s) const override { return (s >= 0 && s < nsec_) ? secs_[s].name : ""; }
     int sectionParams(int s, uint8_t* out, int cap) const override {
