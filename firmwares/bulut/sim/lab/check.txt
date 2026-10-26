@@ -1,13 +1,195 @@
-# lab-gate simulator check (template): intro, main page, settings, sound.
+# BULUT lab-gate simulator check: boot, every page, clouds from line in /
+# radio / a resampled sample / QUANTA synthesis / MIDI, gestures, freezes,
+# scenes, projects, budget. (The gate runs without --line-in-tone: line in is
+# silent there, so the audible checks use the radio, synthesis and samples.)
 wait 3000
 budget
+
+# ---- line in (silent in the gate): pads on cloud 1 must not crash
+pad 18 down
+pad 21 down
+wait 600
+pad 18 up
+pad 21 up
+
+# ---- QUANTA synthesis needs no input: cloud 3 is a QUANTA cloud
+press Shift
+pad 2 tap
+release Shift
 peak-reset
-pad 5 down
-wait 300
-expect-sound 1000
-pad 5 up
-tap Config
+pad 26 down 110
+pad 31 down 90
+wait 800
+expect-sound 300
+pad 26 up
+pad 31 up
+budget
+
+# every particle type of QUANTA
 tap F2
+peak-reset
+pad 20 down
+wait 300
+enc 4
+wait 400
+enc 4
+wait 400
+enc 4
+wait 400
+enc 4
+wait 400
+expect-sound 300
+pad 20 up
+budget
+
+# ---- radio: Config > Input = Radio, then a granular cloud on it
+tap Config
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Right
+tap Config
+press Shift
+pad 0 tap
+release Shift
 tap F3
+wait 200
+tap Down
+tap Down
+tap Down
+enc 3
+wait 1500
+peak-reset
+pad 40 down 120
+pad 45 down 100
+wait 1200
+expect-sound 300
+pad 40 up
+pad 45 up
+budget
+
+# ---- gesture: record pad + encoder moves on cloud 1, then it plays alone
+tap F4
+tap Rec
+pad 14 down
+wait 300
+tap F1
+enc 6
+wait 200
+pad 14 up
+pad 19 down
+wait 400
+pad 19 up
+enc -6
+wait 200
+tap Rec
+wait 300
+peak-reset
+wait 1500
+expect-sound 200
+tap F4
+wait 300
+budget
+
+# ---- freeze: capture the radio moment, the bed sings on its own
+tap F5
+tap Fx1
+wait 400
+peak-reset
+wait 800
+expect-sound 200
+press Shift
+tap F4
+release Shift
+wait 100
+press Shift
+tap F1
+release Shift
+budget
+
+# ---- MIDI notes play the selected cloud
+peak-reset
+midi 0x90 60 110
+midi 0x90 67 100
+wait 700
+midi 0x80 60 0
+midi 0x80 67 0
+expect-sound 300
+
+# ---- resample loop: record the mix, it becomes cloud 2's sample
+tap Fx2
+wait 500
+tap SAMPLERECORDER
+wait 1600
+tap SAMPLERECORDER
+wait 500
+tap Fx2
+press Shift
+pad 1 tap
+release Shift
+tap F3
+wait 300
+budget
+peak-reset
+pad 15 down 120
+pad 20 down 120
+wait 1000
+expect-sound 300
+pad 15 up
+pad 20 up
+
+# ---- mixer, scenes, timeline, files
+tap F6
+tap Right
+enc -5
+tap Down
+enc 3
+budget
+tap F7
+tap Insert
+tap Right
+tap Insert
+press Shift
+tap F4
+release Shift
+tap Down
+enc 4
+press Shift
+tap F6
+release Shift
+tap Play
+wait 1500
+tap Play
+press Shift
+tap F6
+release Shift
+budget
 tap F8
+press Shift
+tap F1
+release Shift
+wait 300
+press Shift
+tap F3
+release Shift
+wait 300
+press Shift
+tap F2
+release Shift
+wait 500
+budget
+
+# ---- settings rows of BULUT and the about page
+tap Config
+tap F3
+tap F1
+tap Config
+peak-reset
+pad 33 down
+wait 800
+expect-sound 200
+pad 33 up
 budget

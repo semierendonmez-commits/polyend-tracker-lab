@@ -1,6 +1,170 @@
-wait 800
+# BULUT screenshots for MANUAL.md (make lab-shots): docs/screenshots/*.png
+wait 1700
 panelshot docs/screenshots/intro.png
+wait 1800
+
+# radio as the input, cloud 1 granular on it
+tap Config
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Right
+tap Config
 wait 2500
-pad 5 down
-panelshot docs/screenshots/main.png
-pad 5 up
+
+# cloud page with particles: two held pads on cloud 1
+pad 15 down 120
+pad 20 down 90
+pad 32 down 70
+wait 1400
+panelshot docs/screenshots/cloud.png
+
+# the pad map while Shift is held
+press Shift
+wait 200
+panelshot docs/screenshots/padmap.png
+release Shift
+pad 15 up
+pad 20 up
+pad 32 up
+
+# GRANULAR engine page
+tap F2
+pad 17 down 110
+pad 22 down 110
+wait 900
+panelshot docs/screenshots/grain-granular.png
+pad 17 up
+pad 22 up
+
+# QUANTA engine page (cloud 3), pulsars
+press Shift
+pad 2 tap
+release Shift
+tap F2
+enc 2
+tap Right
+enc 6
+pad 26 down 110
+pad 29 down 100
+pad 33 down 90
+wait 900
+panelshot docs/screenshots/grain-quanta.png
+pad 26 up
+pad 29 up
+pad 33 up
+
+# gestures on clouds 1 and 3
+tap F4
+tap Rec
+pad 28 down
+wait 250
+tap F2
+enc 8
+wait 200
+pad 28 up
+pad 31 down
+wait 300
+enc -12
+pad 31 up
+pad 35 down
+wait 400
+pad 35 up
+tap Rec
+press Shift
+pad 0 tap
+release Shift
+tap Rec
+pad 13 down
+wait 400
+pad 13 up
+pad 18 down
+wait 300
+tap F1
+enc 10
+pad 18 up
+pad 22 down
+wait 500
+pad 22 up
+tap Rec
+tap F4
+wait 1500
+panelshot docs/screenshots/gesture.png
+
+# freeze library: three frozen moments
+tap F5
+press Shift
+tap F1
+release Shift
+tap Right
+press Shift
+tap F5
+release Shift
+wait 300
+press Shift
+tap F1
+release Shift
+tap Right
+press Shift
+tap F5
+release Shift
+wait 400
+press Shift
+tap F1
+release Shift
+tap Left
+tap Left
+tap EncPush
+wait 2600
+panelshot docs/screenshots/freeze.png
+
+# mixer
+tap F6
+tap Right
+tap Right
+tap Down
+wait 2600
+panelshot docs/screenshots/mix.png
+
+# scenes and a timeline
+tap F7
+tap Insert
+tap Right
+press Shift
+pad 2 tap
+release Shift
+tap F7
+tap Insert
+tap Down
+tap Insert
+enc 4
+tap Insert
+tap Insert
+enc -2
+wait 2600
+panelshot docs/screenshots/scene.png
+
+# resample panel on the file page, while recording
+tap F8
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+tap EncPush
+wait 1200
+panelshot docs/screenshots/file.png
+tap EncPush
+wait 300
+
+# the source page with the sample browser
+tap F3
+wait 2600
+panelshot docs/screenshots/source.png

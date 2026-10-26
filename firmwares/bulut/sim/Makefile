@@ -132,5 +132,5 @@ testsongs-check: $(BIN)
 clean:
 	rm -rf $(OUT)
 
--include $(CORE_OBJS:.o=.d) $(SIM_OBJS:.o=.d) $(JPEG_CHECK_OBJS:.o=.d) $(VISUAL_DIFF_OBJS:.o=.d)
+-include $(CORE_OBJS:.o=.d) $(SIM_OBJS:.o=.d) $(LAB_OBJS:.o=.d) $(JPEG_CHECK_OBJS:.o=.d) $(VISUAL_DIFF_OBJS:.o=.d)
 .PHONY: all clean fonts check visual-diff testsongs-check lab
