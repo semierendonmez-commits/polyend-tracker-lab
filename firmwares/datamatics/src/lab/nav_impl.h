@@ -1336,8 +1336,9 @@ void Nav::drawMap(Canvas& g) {
         }
         const int cnt = r.onPage(page, list, 64);
         const int show = cnt > maxRows ? maxRows - 1 : cnt;
+        const uint32_t keep = uint32_t(n - c - 1) * 24u;   // the later columns' headers
         for (int i = 0; i < show; ++i) {
-            if (!g.room(24)) break;
+            if (!g.room(24 + keep)) break;
             fitText(nm, sizeof nm, font::kTiny, r.name(list[i]), colW - 12);
             if (list[i] == focus_) {
                 g.color(t.accent);
@@ -1346,7 +1347,7 @@ void Nav::drawMap(Canvas& g) {
             g.color(list[i] == focus_ ? t.accent : (on ? t.fg : t.dim));
             g.text(x + 9, listY + i * rowH + 6, font::kTiny, nm, Canvas::kCenterY);
         }
-        if (cnt > show && g.room(16)) {
+        if (cnt > show && g.room(16 + keep)) {
             g.color(t.dim);
             g.textf(x + 9, listY + show * rowH + 6, font::kTiny, Canvas::kCenterY, "+%d more", cnt - show);
         }

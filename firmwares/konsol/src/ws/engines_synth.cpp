@@ -125,6 +125,25 @@ public:
         if (i == nParams_) return float(poly_) / float(maxPoly());
         return synthui::valueFrac(id_, i, synthParamGet(patch_, i));
     }
+    void setFrac(int i, float f) override {
+        f = f < 0.0f ? 0.0f : (f > 1.0f ? 1.0f : f);
+        if (i == nParams_) {
+            set(i, 1.0f + f * float(maxPoly() - 1));
+            return;
+        }
+        const PatchParamRange* r = audio::synthParamRange(id_, i);
+        const synthui::ParamUi* u = synthui::paramUi(id_, i);
+        if (!r || !(r->max > r->min)) return;
+        float v;
+        if (u && (u->fmt == synthui::kFmtHz || u->fmt == synthui::kFmtLfoHz)) {
+            const float lo = r->min > 0.1f ? r->min : 0.1f;
+            v = lo * expf(f * logf(r->max / lo));
+        } else {
+            v = r->min + f * (r->max - r->min);
+        }
+        if (u && (u->fmt == synthui::kFmtEnum || u->fmt == synthui::kFmtOnOff)) v = floorf(v + 0.5f);
+        set(i, v);
+    }
     void reset() override {
         patchInit(id_, &patch_);
         stage();

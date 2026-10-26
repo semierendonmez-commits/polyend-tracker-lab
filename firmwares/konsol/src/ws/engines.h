@@ -63,6 +63,9 @@ public:
     virtual void stepParam(int i, int d, bool coarse) = 0;
     virtual void format(int i, char* out, int cap) const = 0;
     virtual float frac(int i) const = 0;   // 0..1 for the value bar
+    // The inverse of frac() (LABKIT: params are registered normalized). May
+    // run in the audio interrupt (modulation): no allocation, no I/O.
+    virtual void setFrac(int i, float f) { (void)i; (void)f; }
     virtual void reset() = 0;              // every parameter to its default
     // Musical default for a fresh project (may differ from reset()).
     virtual void preset(int variant) { (void)variant; reset(); }

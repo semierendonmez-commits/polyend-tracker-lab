@@ -305,7 +305,7 @@ private:
     int lastSec_ = -1;
     uint32_t nowMs_ = 0;
     // VIEW
-    int visMode_ = VM_STREAM, follow_ = 1, visAuto_ = 0, wfSpeed_ = 1;
+    int visMode_ = VM_STREAM, follow_ = 3, visAuto_ = 0, wfSpeed_ = 1;
     uint32_t visAutoMs_ = 0;
     uint8_t win_[1024];          // the bytes around the followed read head
     float yaw_ = 0.6f;

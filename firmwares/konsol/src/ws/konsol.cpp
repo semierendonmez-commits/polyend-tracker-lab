@@ -64,12 +64,11 @@ bool Konsol::init(Context& c) {
     acidPh_ = a.alloc(sizeof(ot::gen::MonoStep) * kMaxSteps * kTracks);
     list_ = static_cast<char(*)[40]>(a.alloc(kListMax * 40));
     stutter_ = static_cast<int16_t*>(a.alloc(kStutterMax * 2 * sizeof(int16_t)));
-    int16_t* dmem = static_cast<int16_t*>(a.alloc(ot::audio::Delay::kMemorySamples * sizeof(int16_t)));
     int16_t* rmem = static_cast<int16_t*>(a.alloc(ot::audio::Reverb::kMemorySamples * sizeof(int16_t)));
     reverb_ = a.make<ot::audio::Reverb>();
-    if (!P_ || !scratch_ || !src_ || !undo_ || !acidPh_ || !list_ || !stutter_ || !dmem || !rmem || !reverb_)
+    if (!P_ || !scratch_ || !src_ || !undo_ || !acidPh_ || !list_ || !stutter_ || !rmem || !reverb_)
         return false;
-    delay_.init(dmem);
+    if (!dly_.init(a) || !verb_.init(a)) return false;
     reverb_->init(rmem);
     str_ = a.make<Stretcher>();
     if (!str_ || !str_->init(a)) return false;
@@ -424,6 +423,7 @@ void Konsol::fire(int t, int pitch, int vel, int tone, int flags, int offset, ui
     }
     e->noteOn(pitch, v, offset, tone, flags);
     rt_[t].flash = 6;
+    noteEnv_[t] = v;
     midiFromAudio(t, true, pitch, vel);
     if (lenSub) {
         Ev off{at + lenSub, uint8_t(pitch), 0, 0, 0};
@@ -476,6 +476,14 @@ void Konsol::applyCmd(const Cmd& c, uint32_t pos) {
                 }
             break;
         case Cmd::kLaunch:
+            if (P_->clip[t][c.a & 15].launchQ && !c.b && wasPlaying_) {   // the clip's own quantise
+                const int cq = launchQBeats(P_->clip[t][c.a & 15].launchQ - 1);
+                at = pos;
+                if (cq > 0) {
+                    const uint32_t qs = uint32_t(cq) * kSubPerBeat;
+                    at = ((pos + qs - 1) / qs) * qs;
+                }
+            }
             if (!P_->clip[t][c.a & 15].exists()) {
                 r.queued = -1;
             } else {
@@ -549,6 +557,7 @@ void Konsol::trackNotes(int t, uint32_t pos, uint32_t end, float subPerSample) {
             uint32_t at = loopStart + uint32_t(n.start) * kSubPerTick;
             if (swingSub && (n.start % (2 * kTps)) == kTps) at += swingSub;
             if (at < from || at >= end) continue;
+            if (n.cond && !condPasses(n.cond, k, fillHeld_)) continue;
             if (n.chance < 100) {
                 static uint32_t s = 0x9E3779B9u;
                 s ^= s << 13;
@@ -608,10 +617,9 @@ void Konsol::applyFxParams() {
     static const float kSync[6] = {0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f};   // beats
     const float beats = kSync[f.delaySync > 5 ? 5 : f.delaySync];
     uint32_t t = uint32_t(beats * 60.0f / (bpm_ > 20.0f ? bpm_ : 120.0f) * 44100.0f);
-    delay_.setTimeSamples(t);
-    delay_.setFeedbackK(uint8_t(clampf(f.delayFb, 0.0f, 0.95f) * 255.0f));
-    delay_.setFilter(800.0f * exp2f(f.delayTone * 4.6f));
-    delay_.setPingPong(f.pingPong != 0);
+    dly_.setTime(t);
+    dly_.set(f.dlyType, clampf(f.delayFb, 0.0f, 0.95f), f.delayTone, f.pingPong != 0, f.dlyMod);
+    verb_.set(f.revType, f.revSize, f.revDamp, f.revPre);
     reverb_->setSize(0.35f + 0.6f * f.revSize);
     reverb_->setDamping(f.revDamp);
     reverb_->setDiffusion(0.7f);
@@ -857,17 +865,25 @@ void Konsol::render(const Transport& tr, const AudioIn& in, float* l, float* r) 
             }
     }
     lastCost_ = cost;
+    // modulation sources (LABKIT): note envelopes, bar / beat ramps
+    for (int t = 0; t < kTracks; ++t) noteEnv_[t] *= 0.985f;
+    {
+        const uint32_t p = posPub_;
+        barPh_ = float(p % (4 * kSubPerBeat)) / float(4 * kSubPerBeat);
+        beatPh_ = float(p % kSubPerBeat) / float(kSubPerBeat);
+    }
     fxBlock(l, r);
     // sends -> returns
     {
         alignas(16) float ol[kBlock], orr[kBlock];
         const float ra = P_->fx.retA, rb = P_->fx.retB;
-        if (delay_.process(sa, ol, orr))
+        if (dly_.process(sa, ol, orr))
             for (uint32_t i = 0; i < kBlock; ++i) {
                 l[i] += ol[i] * ra;
                 r[i] += orr[i] * ra;
             }
-        if (reverb_->process(sb, ol, orr))
+        const bool rv = P_->fx.revType == 0 ? reverb_->process(sb, ol, orr) : verb_.process(sb, ol, orr);
+        if (rv)
             for (uint32_t i = 0; i < kBlock; ++i) {
                 l[i] += ol[i] * rb;
                 r[i] += orr[i] * rb;

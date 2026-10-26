@@ -120,5 +120,39 @@ int launchQBeats(int q) {
     return kB[q < 0 ? 0 : (q > 4 ? 4 : q)];
 }
 
+const char* condName(int c) {
+    static const char* const k[kCondCount] = {"-", "1:2", "2:2", "1:3", "2:3", "3:3", "1:4",
+                                              "2:4", "3:4", "4:4", "Fill", "!Fill", "First", "!First"};
+    return k[c < 0 || c >= kCondCount ? 0 : c];
+}
+
+bool condPasses(int cond, uint32_t loop, bool fill) {
+    switch (cond) {
+        case kCond12: return loop % 2 == 0;
+        case kCond22: return loop % 2 == 1;
+        case kCond13: return loop % 3 == 0;
+        case kCond23: return loop % 3 == 1;
+        case kCond33: return loop % 3 == 2;
+        case kCond14: return loop % 4 == 0;
+        case kCond24: return loop % 4 == 1;
+        case kCond34: return loop % 4 == 2;
+        case kCond44: return loop % 4 == 3;
+        case kCondFill: return fill;
+        case kCondNotFill: return !fill;
+        case kCondFirst: return loop == 0;
+        case kCondNotFirst: return loop != 0;
+        default: return true;
+    }
+}
+
+const char* revTypeName(int t) {
+    static const char* const k[kRevTypes] = {"Plate", "Hall", "Shimmer", "Gated"};
+    return k[t < 0 || t >= kRevTypes ? 0 : t];
+}
+const char* dlyTypeName(int t) {
+    static const char* const k[kDlyTypes] = {"Digital", "Tape", "Lo-fi"};
+    return k[t < 0 || t >= kDlyTypes ? 0 : t];
+}
+
 }  // namespace konsol
 }  // namespace lab

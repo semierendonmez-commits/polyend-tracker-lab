@@ -634,9 +634,12 @@ OT_FASTRUN_FN void Engine::render(const lab::Transport& t, float* l, float* r, f
         killAll();
         for (int s = 0; s < kStreams; ++s) midiOff(s);
     }
+    const uint32_t fall = lastThrows_ & ~th;
     for (int s = 0; s < kStreams; ++s) {
         if (rise & TH_FREEZE) thFreezeK_[s] = st[s].k;
         if (rise & TH_STUTTER) stutK_[s] = st[s].k ? st[s].k - 1u : 0u;
+        // a stutter starts and ends at once: the stream's grid restarts at this block
+        if (((rise | fall) & TH_STUTTER) && wasPlaying_ && next_[s] > now_) next_[s] = now_;
     }
     lastThrows_ = th;
     evBlock_ = 0;

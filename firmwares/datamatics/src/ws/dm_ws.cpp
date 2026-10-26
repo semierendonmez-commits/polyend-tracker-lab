@@ -262,7 +262,9 @@ void Datamatics::pushRegistry() {
             P.set(id, (p == P_DUR || p == P_START) ? float(v) * 0.1f : float(v), false);
         }
     for (int i = 0; i < kSlots; ++i) P.set(scrubId_[i], eng_.scrub[i], false);
-    P.sync();
+    // Without audio (tests, before the first block) nothing clears the dirty
+    // marks, and sync() skips dirty params: write them now.
+    if (!ctx_->shell || !ctx_->shell->labkit().audioRunning) P.applyNow();
 }
 
 void Datamatics::nudge(ParamId id, int delta, bool fine) {
@@ -584,6 +586,7 @@ uint32_t readHex(const char*& s, const char* e) {
 
 bool Datamatics::savePiece(const char* path) {
     if (!ctx_->fs) return false;
+    ctx_->params().sync();   // fields written directly follow into the registry chunk
     uint32_t n = writePiece(eng_, ctx_->bpm(), pieceBuf_, kPieceBuf);
     if (!n) return false;
     Writer w{pieceBuf_, kPieceBuf, n};
@@ -1231,11 +1234,11 @@ void Datamatics::benchSetup(int i) {
         eng_.secCount = 1;
         eng_.sec[0] = Section{T_CUT, 64, 0xFF, 10};
     }
-    if (i == 5) {   // every throw that changes the read: stutter on a 1/128 grid, reverse, invert, octave
-        eng_.stutterDiv = 0;
-        eng_.throws = TH_STUTTER | TH_REVERSE | TH_INVERT | TH_OCT | TH_DENSE;
+    if (i == 5) {   // the densest case with throws held: 1 ms grid, long voices, reverse + freeze + octave + dense, fills, scrub
+        eng_.freezeWin = 7;
+        eng_.throws = TH_REVERSE | TH_FREEZE | TH_OCT | TH_DENSE;
         eng_.fillMask = 0xFF;
-        for (int s = 0; s < kStreams; ++s) eng_.scrub[s & 3] = 0.37f;
+        for (int s = 0; s < kSlots; ++s) eng_.scrub[s] = 0.37f;
     }
 }
 

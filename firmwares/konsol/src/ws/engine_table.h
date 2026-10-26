@@ -52,6 +52,16 @@ public:
         if (d.fmt == kFHz) return logf(p_[i] / d.min) / logf(d.max / d.min);
         return (p_[i] - d.min) / (d.max - d.min);
     }
+    void setFrac(int i, float f) override {
+        if (i < 0 || i >= np_) return;
+        const PDesc& d = desc_[i];
+        f = f < 0.0f ? 0.0f : (f > 1.0f ? 1.0f : f);
+        float v;
+        if (d.fmt == kFHz && d.min > 0.0f) v = d.min * expf(f * logf(d.max / d.min));
+        else v = d.min + f * (d.max - d.min);
+        if (d.fmt == kFList || d.fmt == kFInt) v = floorf(v + 0.5f);
+        set(i, v);
+    }
     void reset() override {
         for (int i = 0; i < np_; ++i) p_[i] = desc_[i].def;
         for (int i = 0; i < np_; ++i) changed(i);

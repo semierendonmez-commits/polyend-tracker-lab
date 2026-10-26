@@ -239,7 +239,7 @@ void Datamatics::composeMatrix() {
             const uint32_t idx = readIndex(x, slot, uint32_t(kk), scan);
             uint8_t v, a;
             readValue(slot, x.p[P_UNIT], idx, v, a);
-            if (wouldHit(s, v) && !(fill_ & (1u << s) && false)) {
+            if (wouldHit(s, v)) {
                 const uint8_t col = c < kMxPast ? past : on;
                 for (int r = 1; r <= 6; ++r) band[r * kMxW + c] = col;
             } else {
@@ -408,21 +408,44 @@ void Datamatics::drawWaterfall(Canvas& g, int x, int y, int scale) {
 // ---- pages ---------------------------------------------------------------------------------------
 void Datamatics::draw(Canvas& g) {
     if (!disp_) disp_ = g.display();
-    switch (screenPage()) {
+    const int sp = screenPage();
+    if (sp == PG_VIEW) {
+        drawView(g);
+        return;
+    }
+    // header and F-keys first: a Shell overlay limit trims the page body, never them
+    static const char* const kTitle[PG_COUNT] = {"PERFORM", "MATRIX", "MIXER", "SONG", "STREAM", "", "", "",
+                                                 "",        "",       "",      "",     "VIEW",   "DATA", "PIECE"};
+    drawTop(g, kTitle[sp]);
+    const char* f8 = "";
+    switch (sp) {
+        case PG_PERFORM: f8 = perfReplay_ ? "REPLAY*" : "REPLAY"; break;
+        case PG_MATRIX: f8 = eng_.st[sel_].p[P_MUTE] ? "UNMUTE" : "MUTE"; break;
+        case PG_ST0: f8 = "AUDITION"; break;
+        case PG_DATA: f8 = "LOAD"; break;
+        case PG_SONG: f8 = ctx_->playing() ? "LAUNCH" : "CUE"; break;
+        case PG_MIXER: f8 = "MUTE"; break;
+        default: f8 = "LOAD"; break;
+    }
+    drawKeys(g, f8);
+    if (ctx_->shell->labkit().nav.overlay() == kit::Nav::kParam) {
+        // the PARAM pads panel covers the lower screen: only what each stream reads
+        for (int s = 0; s < kStreams; ++s) drawSlotTag(g, 8 + (s & 3) * 198, 34 + (s >> 2) * 14, s, 22);
+        return;
+    }
+    switch (sp) {
         case PG_PERFORM: drawPerform(g); break;
         case PG_MATRIX: drawMatrix(g); break;
         case PG_ST0: drawStream(g); break;
         case PG_DATA: drawData(g); break;
         case PG_SONG: drawSong(g); break;
         case PG_MIXER: drawMixer(g); break;
-        case PG_PIECE: drawPiece(g); break;
-        default: drawView(g); break;
+        default: drawPiece(g); break;
     }
 }
 
 void Datamatics::drawPerform(Canvas& g) {
     char buf[64];
-    drawTop(g, "PERFORM");
     kit::Registry& P = ctx_->params();
     const bool playing = ctx_->playing();
     // eight stream strips: slot colour bar, name, slot tag, the units ahead, state
@@ -565,12 +588,10 @@ void Datamatics::drawPerform(Canvas& g) {
     g.text(rx + 6, 424, kMonoS, buf);
     g.color(perfReplay_ ? kWhite : kDark);
     g.text(rx + 6, 434, kMonoS, perfReplaying_ ? "REPLAYING" : (perfReplay_ ? "REPLAY ON" : "REPLAY OFF"));
-    drawKeys(g, perfReplay_ ? "REPLAY*" : "REPLAY");
 }
 
 void Datamatics::drawMatrix(Canvas& g) {
     char buf[96];
-    drawTop(g, "MATRIX");
     constexpr int bx = 184, by = 34, sc = 4, bw = 512;
     if (mxUploaded_) {
         g.clip(bx, by, bw, kMxH * sc);
@@ -661,12 +682,10 @@ void Datamatics::drawMatrix(Canvas& g) {
     }
     g.color(kDark);
     g.frame(560, 330, 200, 108);
-    drawKeys(g, eng_.st[sel_].p[P_MUTE] ? "UNMUTE" : "MUTE");
 }
 
 void Datamatics::drawStream(Canvas& g) {
     char buf[64], val[32];
-    drawTop(g, "STREAM");
     kit::Registry& P = ctx_->params();
     const int s = sel_;
     const int sl = eng_.st[s].p[P_SLOT] & 3;
@@ -720,15 +739,12 @@ void Datamatics::drawStream(Canvas& g) {
         }
     }
     g.color(kDark);
-    std::snprintf(buf, sizeof buf, "EVENTS %lu   LEFT/RIGHT STREAM   F8 AUDITION   COPY / INSERT PASTE",
-                  static_cast<unsigned long>(eng_.st[s].events));
-    g.text(14, 438, kMonoS, buf);
-    drawKeys(g, "AUDITION");
+    std::snprintf(buf, sizeof buf, "EV %lu  L/R STREAM  COPY/INSERT", static_cast<unsigned long>(eng_.st[s].events));
+    g.text(410, 438, kMonoS, buf);
 }
 
 void Datamatics::drawData(Canvas& g) {
     char buf[96];
-    drawTop(g, "DATA");
     // left: the four slots with their barcode and what they are
     for (int i = 0; i < kSlots; ++i) {
         const Slot& sl = eng_.slot[i];
@@ -750,6 +766,8 @@ void Datamatics::drawData(Canvas& g) {
         if (sl.mode == kImage && sl.srcW)
             std::snprintf(buf, sizeof buf, "%dx%d PX  %lu VALUES  WANT %s", sl.srcW, sl.srcH, static_cast<unsigned long>(sl.n),
                           modeName(sl.wantMode));
+        else if (sl.path[0] == '@')
+            std::snprintf(buf, sizeof buf, "%lu VALUES  BUILT-IN  WANT %s", static_cast<unsigned long>(sl.n), modeName(sl.wantMode));
         else
             std::snprintf(buf, sizeof buf, "%lu VALUES  %lu B  WANT %s", static_cast<unsigned long>(sl.n),
                           static_cast<unsigned long>(m.fileSize), modeName(sl.wantMode));
@@ -802,11 +820,6 @@ void Datamatics::drawData(Canvas& g) {
         std::snprintf(buf, sizeof buf, "S%d", i + 1);
         g.text(gx - 26, gy + i * chh + 12, kMonoS, buf);
     }
-    g.beginRects();
-    for (int s = 0; s < kStreams; ++s) {   // filled cells, per slot colour below
-        (void)s;
-    }
-    g.endBatch();
     for (int i = 0; i < kSlots; ++i) {
         g.color(slotColor(i));
         g.beginRects();
@@ -857,12 +870,10 @@ void Datamatics::drawData(Canvas& g) {
         g.color(kRed);
         g.text(490, ty + 140, kMonoS, "NO CARD - BUILT-IN DATA ONLY");
     }
-    drawKeys(g, "LOAD");
 }
 
 void Datamatics::drawSong(Canvas& g) {
     char buf[96];
-    drawTop(g, "SONG");
     const int x0 = 60, w = 720, ty = 40, th = 64;
     const int total = eng_.totalBars();
     int acc = 0;
@@ -1025,12 +1036,10 @@ void Datamatics::drawSong(Canvas& g) {
         }
         g.endBatch();
     }
-    drawKeys(g, ctx_->playing() ? "LAUNCH" : "CUE");
 }
 
 void Datamatics::drawMixer(Canvas& g) {
     char buf[32];
-    drawTop(g, "MIXER");
     kit::Registry& P = ctx_->params();
     static const char* const kFieldNames[5] = {"LEVEL", "PAN", "PANMODE", "STEM", "MIDI"};
     static const uint8_t kFields[5] = {P_LEVEL, P_PAN, P_PANMODE, P_STEM, P_MIDI};
@@ -1095,12 +1104,10 @@ void Datamatics::drawMixer(Canvas& g) {
     }
     g.color(kDark);
     g.text(400, 440, kMonoS, kFieldNames[mixField_], Canvas::kCenterX);
-    drawKeys(g, "MUTE");
 }
 
 void Datamatics::drawPiece(Canvas& g) {
     char buf[96];
-    drawTop(g, "PIECE");
     g.color(kGrey);
     g.text(20, 36, kMonoS, "PIECES ON THE CARD");
     if (!ctx_->fs) {
@@ -1162,7 +1169,6 @@ void Datamatics::drawPiece(Canvas& g) {
         g.vtx(float(a + (bw > 1 ? bw : 1)), 400.0f);
     }
     g.endBatch();
-    drawKeys(g, "LOAD");
 }
 
 // ---- pads --------------------------------------------------------------------------------------
