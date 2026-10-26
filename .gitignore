@@ -1,2 +1,4 @@
 sim/build/
 tools/make_demo/make_demo
+build/
+firmwares/*/build/
