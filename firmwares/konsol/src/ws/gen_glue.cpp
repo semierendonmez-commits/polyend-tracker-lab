@@ -15,6 +15,8 @@
 // writes the next variation into the clip's back buffer, and the audio swaps
 // it in exactly at the loop point (Acid mutates its phrase, BBCut cuts anew,
 // Genotype walks its learnt chain, the others re-roll their seed).
+// Main loop only (no audio-interrupt code here): built for size.
+#pragma GCC optimize("Os")
 #include <cstdio>
 #include <cstring>
 
@@ -52,7 +54,9 @@ const ParamDesc kNone = {nullptr, 0, 0, 0, nullptr};
 
 constexpr int kRates[8] = {1, 2, 3, 4, 6, 8, 12, 16};
 
-bool drumLike(int engine) { return engine == kEngDrums || engine == kEngPerc; }
+bool drumEngine(int engine) {
+    return engine == kEngDrums || engine == kEngPerc || engine == kEngKit || engine == kEngFloater;
+}
 
 }  // namespace
 
@@ -297,9 +301,9 @@ bool Konsol::runGenerator(int t, int s, uint32_t seed, char* msg, int cap) {
     }
     if (!c.exists()) c.lenSteps = 16;
     const int engine = P_->track[t].engine;
-    const bool drum = drumLike(engine);
+    const bool drum = drumEngine(engine);
     int root = rootNote(t);
-    if (engine == kEngDrums) root = 36;
+    if (engine == kEngDrums || engine == kEngKit || engine == kEngFloater) root = 36;
     if (engine == kEngPerc) root = 60;
     const uint16_t mask = scaleMask(t);
     if (c.gen == kGenUsul) c.lenSteps = uint8_t(usulSteps(c.gp[0], c.gp[1]));
@@ -346,7 +350,13 @@ bool Konsol::runGenerator(int t, int s, uint32_t seed, char* msg, int cap) {
         tg.entropy = seed | 1u;
         uint16_t sl[64];
         int nsl = 16;
-        if (engine == kEngSampler) nsl = int(this->engine(t)->get(3) + 0.5f);
+        if (engine == kEngSampler) {
+            const TrackSample& tsm = ts_[t];
+            const bool trans = this->engine(t)->get(3) > 0.5f && pool_.valid(tsm.slot) && pool_.slot(tsm.slot).nOn > 1;
+            nsl = trans ? pool_.slot(tsm.slot).nOn : int(this->engine(t)->get(4) + 0.5f);
+            if (nsl > 64) nsl = 64;
+        }
+        if (engine == kEngKit) nsl = 16;
         if (engine == kEngDrums) nsl = 8;
         if (nsl < 2) nsl = 2;
         for (int i = 0; i < nsl; ++i) sl[i] = uint16_t(uint32_t(i) * 65536u / uint32_t(nsl));
@@ -355,7 +365,7 @@ bool Konsol::runGenerator(int t, int s, uint32_t seed, char* msg, int cap) {
         tg.slices.beatSlice = true;
         float beats = 4.0f;
         if (engine == kEngSampler || engine == kEngGrain) {
-            const uint32_t len = smp_[t].len;
+            const uint32_t len = pool_.valid(ts_[t].slot) ? pool_.slot(ts_[t].slot).frames : 0;
             const float sel = this->engine(t)->get(2) - this->engine(t)->get(1);
             if (len) beats = float(len) / 44100.0f * (bpm_ > 20.0f ? bpm_ : 120.0f) / 60.0f * (sel > 0.05f ? sel : 1.0f);
         } else {

@@ -1,5 +1,7 @@
 # KONSOL lab-gate simulator check: boot, every page, clip / scene launching,
-# a generator written and run live, recording, MIDI, sound and the frame budget.
+# a generator written and run live, recording, MIDI, samples / stretch / slices /
+# kits, LABKIT (PARAM pads, MAP, HELP, browser, keyboard), sound and the frame budget.
+# Only keys the original Tracker has (no Aux, Help, encoder push).
 wait 3200
 budget
 # session: launch scene 1 with the scene pad (col 9 = pad 8), play
@@ -42,11 +44,11 @@ tap Left
 budget
 # piano roll: add notes, move, lengthen, quantise, undo
 tap Fx1
-tap EncPush
+tap Insert
 tap Right
 tap Right
 tap Up
-tap EncPush
+tap Insert
 tap F2
 enc 2
 tap F4
@@ -67,7 +69,7 @@ tap Fx2
 enc 1
 tap F1
 tap F3
-tap EncPush
+tap Insert
 wait 2500
 tap F2
 tap F5
@@ -123,8 +125,8 @@ tap F2
 tap F2
 tap F5
 budget
-# mixer: strips, fader, sends, FX page
-tap Master
+# mixer: strips, fader, sends, FX page (S.Rec)
+tap S.Rec
 enc -5
 tap Down
 enc 4
@@ -133,6 +135,12 @@ enc 10
 tap F2
 tap Down
 enc 2
+tap F3
+tap F4
+tap F3
+tap F4
+tap F3
+tap F4
 tap F1
 pad 0 tap
 pad 0 tap
@@ -153,11 +161,84 @@ tap F1
 tap Down
 enc 1
 tap F3
-tap F2
-tap F1
-tap SampleLoader
+budget
+# samples: a stereo WAV from the browser, tempo, stretch, slices, kit
+mkdir Lab/KONSOL/Samples
+mkwav Lab/KONSOL/Samples/loop.wav 2 220 2
+tap Pattern
+pad 1 tap
+tap S.Load
 tap F3
+wait 300
+expect-overlay browser
+wait 600
+pad 47 tap
+wait 400
+expect-overlay none
 tap F5
+wait 2500
+tap Down
+enc 1
+tap F4
+tap F5
+wait 2500
+tap F6
+tap S.Edit
+tap Right
+enc 3
+tap F5
+tap F6
+tap F8
+pad 2 tap
+budget
+# kit from the slices, play the pads, pad params, save the kit (keyboard)
+tap S.Play
+tap F2
+pad 36 tap
+pad 37 tap
+pad 24 tap
+tap Down
+enc 2
+tap Right
+enc -1
+tap F6
+wait 200
+expect-overlay keyboard
+tap F8
+wait 200
+expect-overlay none
+tap F5
+wait 200
+expect-overlay browser
+pad 46 tap
+wait 200
+expect-overlay none
+budget
+# LABKIT: PARAM pads on the Sound page, a route LFO1 -> a param, the MAP, HELP
+tap Pattern
+pad 2 tap
+tap Instr
+tap I.Param
+expect-overlay param
+pad 0 tap
+enc 3
+pad 36 down
+pad 1 tap
+enc 4
+pad 36 up
+expect-routes 1
+tap I.Param
+expect-overlay none
+hold Master 700
+expect-overlay none
+press Shift
+tap Config
+release Shift
+expect-overlay help
+press Shift
+tap Config
+release Shift
+expect-overlay none
 budget
 # record into a playing clip from MIDI and pads
 tap Pattern
@@ -167,14 +248,12 @@ wait 200
 midi 0x80 60 0
 pad 40 tap
 tap Rec
-# keys overlay + help
-tap Aux
+# keys overlay (Perform)
+tap Perform
 pad 30 tap
-tap Aux
-tap Help
-tap Help
+tap Perform
 # MIDI out on track 1
-tap Master
+tap S.Rec
 tap Up
 tap Up
 tap Up

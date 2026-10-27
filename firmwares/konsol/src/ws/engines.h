@@ -8,6 +8,7 @@
 #include "audio/synth_engine.h"
 #include "lab/lab.h"
 #include "model/synth_patch.h"
+#include "ws/samples.h"
 
 namespace lab {
 namespace konsol {
@@ -23,18 +24,16 @@ enum EngineKind : uint8_t {
     kEngFat,
     kEngWtfm,
     kEngPerc,
+    kEngPlaits,     // Mutable Instruments Plaits, 24 models
+    kEngFloater,    // FLOATER kick / snare / perc
+    kEngTb303,      // Open303
+    kEngNeuro,      // NEUROSTACK neuro bass
+    kEngQuanta,     // QUANTA microsound particles
+    kEngKit,        // 16-pad sample kit
     kEngCount
 };
 const char* engineName(int k);      // "SAMPLER", ...
 const char* engineInfo(int k);      // one line
-
-// One track's sample memory (sampler + granular), mono int16 at 44.1 kHz.
-struct SampleBuf {
-    int16_t* data = nullptr;
-    uint32_t cap = 0;
-    volatile uint32_t len = 0;      // 0 while (re)loading
-    char path[96] = {};             // "" = the built-in break
-};
 
 // Parameter display formats of the KONSOL-native engines.
 enum PFmt : uint8_t { kFPct, kFNum, kFHz, kFMs, kFSemi, kFList, kFdB, kFInt, kFBi };
@@ -64,6 +63,10 @@ public:
     virtual void stepParam(int i, int d, bool coarse) = 0;
     virtual void format(int i, char* out, int cap) const = 0;
     virtual float frac(int i) const = 0;   // 0..1 for the value bar
+    // The inverse of frac() (LABKIT: params are registered normalized). May
+    // run in the audio interrupt (modulation): no allocation, no I/O.
+    virtual void setFrac(int i, float f) { (void)i; (void)f; }
+    virtual bool bipolar(int i) const { (void)i; return false; }   // drawn from the centre
     virtual void reset() = 0;              // every parameter to its default
     // Musical default for a fresh project (may differ from reset()).
     virtual void preset(int variant) { (void)variant; reset(); }
@@ -86,7 +89,7 @@ public:
 // side; the track switches a pointer). False when the arena is exhausted.
 struct TrackEngines {
     Engine* e[kEngCount] = {};
-    bool init(Arena& a, SampleBuf* sample, int track);
+    bool init(Arena& a, SamplePool* pool, TrackSample* sample, int track);
 };
 
 // Makam helpers (the generators get the makam's 12-TET mask).

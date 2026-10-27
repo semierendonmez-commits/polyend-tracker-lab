@@ -14,11 +14,22 @@
 //     SONG  u8 count, loop; count x {u8 scene, u8 bars}
 //     MSTR  f32 master level
 //     PREF  u8 pad brightness
+//     TSMP  u8 track, bars, stretch mode, i8 pitch, u8 stretched (v2; the stretch re-runs on load)
+//     KIT   u8 track, 16 pad records (sample_mgr.cpp) (v2)
+//     LKIT  the LABKIT chunk: macros, modulation routes, MIDI learn, param values (v2)
+//     XCLP  u8 track, scene, launchQ (v2: the clip's own launch quantise)
+//   v2 also: CLIP notes carry a u8 trig condition (11 bytes a note), TRK ends
+//   with u8 midiCh, MFX with u8 revType, dlyType + f32 revPre, dlyMod, PREF
+//   with u8 keyLayout, recHits.
+// Main loop only (no audio-interrupt code here): built for size.
+#pragma GCC optimize("Os")
 #include <cstdio>
 #include <cstring>
 
 #include "formats/wav.h"
+#include "ws/kit.h"
 #include "ws/konsol.h"
+#include "ws/stretch.h"
 
 namespace lab {
 namespace konsol {
@@ -27,7 +38,7 @@ void makamSetKey(Engine* e, int key);
 
 namespace {
 
-constexpr uint16_t kVersion = 1;
+constexpr uint16_t kVersion = 2;   // 2: stereo pool, SAMPLER params reordered, TSMP / KIT / LKIT chunks
 
 struct Writer {
     Writer(IStorage* f, IStorage::Handle hh) : fs(f), h(hh) {}
@@ -86,6 +97,7 @@ struct Reader {
 };
 
 float clampf(float v, float lo, float hi) { return !(v >= lo) ? lo : (v > hi ? hi : v); }
+int dx_clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
 }  // namespace
 
@@ -115,7 +127,7 @@ bool Konsol::saveProject(const char* name) {
     w.u8(p.songLoop);
     // MFX
     const FxCfg& f = p.fx;
-    w.chunk("MFX ", 2 + 4 * 9 + 1);
+    w.chunk("MFX ", 2 + 4 * 9 + 1 + 2 + 8);
     w.u8(f.delaySync);
     w.u8(f.pingPong);
     w.f32(f.delayFb);
@@ -128,11 +140,15 @@ bool Konsol::saveProject(const char* name) {
     w.f32(f.compRatio);
     w.f32(f.compMakeup);
     w.u8(f.limiter);
+    w.u8(f.revType);
+    w.u8(f.dlyType);
+    w.f32(f.revPre);
+    w.f32(f.dlyMod);
     // the master level last (added in the same version: optional on load)
     // TRK + ENG
     for (int t = 0; t < kTracks; ++t) {
         const TrackCfg& tc = p.track[t];
-        w.chunk("TRK ", 3 + 4 * 4 + 4 + 96);
+        w.chunk("TRK ", 3 + 4 * 4 + 4 + 96 + 1);
         w.u8(uint8_t(t));
         w.u8(tc.engine);
         w.u8(tc.octave);
@@ -144,7 +160,13 @@ bool Konsol::saveProject(const char* name) {
         w.u8(tc.mix.solo);
         w.u8(tc.mix.stem);
         w.u8(tc.mix.midiOut);
-        w.put(smp_[t].path, 96);
+        {
+            char sp[96] = {};
+            const int src = ts_[t].src;
+            if (pool_.valid(src) && src != breakSlot_) std::snprintf(sp, sizeof sp, "%s", pool_.slot(src).path);
+            w.put(sp, 96);
+        }
+        w.u8(tc.midiCh);
         for (int k = 0; k < kEngCount; ++k) {
             Engine* e = eng_[t].e[k];
             const int n = e->paramCount();
@@ -155,13 +177,28 @@ bool Konsol::saveProject(const char* name) {
             for (int i = 0; i < n; ++i) w.f32(e->get(i));
         }
     }
+    // TSMP + KIT
+    for (int t = 0; t < kTracks; ++t) {
+        const TrackSample& ts = ts_[t];
+        w.chunk("TSMP", 5);
+        w.u8(uint8_t(t));
+        w.u8(ts.bars);
+        w.u8(ts.mode);
+        w.i8(ts.pitch);
+        w.u8(ts.stretched);
+        w.chunk("KIT ", 1 + kitBytes());
+        w.u8(uint8_t(t));
+        static uint8_t kb[4096];
+        kitWrite(t, kb);
+        w.put(kb, kitBytes());
+    }
     // CLIP
     for (int t = 0; t < kTracks; ++t)
         for (int s = 0; s < kScenes; ++s) {
             const Clip& c = p.clip[t][s];
             if (!c.exists()) continue;
             const NoteBuf& nb = c.notes();
-            w.chunk("CLIP", 6 + 12 + 2 + uint32_t(nb.count) * 10);
+            w.chunk("CLIP", 6 + 12 + 2 + uint32_t(nb.count) * 11);
             w.u8(uint8_t(t));
             w.u8(uint8_t(s));
             w.u8(c.lenSteps);
@@ -180,6 +217,13 @@ bool Konsol::saveProject(const char* name) {
                 w.u8(n.chance);
                 w.u8(n.roll);
                 w.u8(uint8_t(n.flags & 7));
+                w.u8(n.cond);
+            }
+            if (c.launchQ) {
+                w.chunk("XCLP", 3);
+                w.u8(uint8_t(t));
+                w.u8(uint8_t(s));
+                w.u8(c.launchQ);
             }
         }
     // SONG
@@ -192,8 +236,18 @@ bool Konsol::saveProject(const char* name) {
     }
     w.chunk("MSTR", 4);
     w.f32(f.master);
-    w.chunk("PREF", 1);
+    w.chunk("PREF", 3);
     w.u8(uint8_t(setPadBright_));
+    w.u8(p.keyLayout);
+    w.u8(p.recHits);
+    if (lkitBuf_) {
+        ctx_->params().sync();   // fields written directly (presets, this page) first
+        const uint32_t n = ctx_->params().saveChunk(lkitBuf_, kLkitCap);
+        if (n) {
+            w.chunk("LKIT", n);
+            w.put(lkitBuf_, n);
+        }
+    }
     w.flush();
     fs->close(h);
     if (!w.ok) {
@@ -261,6 +315,10 @@ bool Konsol::loadProject(const char* name) {
     for (int t = 0; t < kTracks; ++t)
         for (int s = 0; s < kScenes; ++s) p.clip[t][s].lenSteps = 0;
     char samplePath[kTracks][96] = {};
+    TrackSample tsLoad[kTracks];
+    const uint8_t* kitChunk[kTracks] = {};
+    const uint8_t* lkitAt = nullptr;
+    uint32_t lkitLen = 0;
     while (r.ok && r.p + 8 <= r.e) {
         char tag[4];
         r.get(tag, 4);
@@ -294,8 +352,22 @@ bool Konsol::loadProject(const char* name) {
             f.compRatio = clampf(c.f32(), 0, 1);
             f.compMakeup = clampf(c.f32(), 0, 1);
             f.limiter = c.u8() ? 1 : 0;
+            if (uint32_t(c.e - c.p) >= 10) {
+                f.revType = uint8_t(c.u8() % kRevTypes);
+                f.dlyType = uint8_t(c.u8() % kDlyTypes);
+                f.revPre = clampf(c.f32(), 0, 1);
+                f.dlyMod = clampf(c.f32(), 0, 1);
+            }
         } else if (!std::memcmp(tag, "PREF", 4)) {
             setPadBright_ = c.u8() % 3;
+            if (c.p < c.e) p.keyLayout = c.u8() ? 1 : 0;
+            if (c.p < c.e) p.recHits = c.u8() ? 1 : 0;
+        } else if (!std::memcmp(tag, "LKIT", 4)) {
+            lkitAt = c.p;
+            lkitLen = uint32_t(c.e - c.p);
+        } else if (!std::memcmp(tag, "XCLP", 4)) {
+            const int t = c.u8(), sc = c.u8();
+            if (t < kTracks && sc < kScenes) p.clip[t][sc].launchQ = uint8_t(c.u8() % 6);
         } else if (!std::memcmp(tag, "MSTR", 4)) {
             p.fx.master = clampf(c.f32(), 0, 1.25f);
         } else if (!std::memcmp(tag, "TRK ", 4)) {
@@ -314,10 +386,12 @@ bool Konsol::loadProject(const char* name) {
             tc.mix.midiOut = c.u8() ? 1 : 0;
             c.get(samplePath[t], 96);
             samplePath[t][95] = 0;
+            if (c.p < c.e) tc.midiCh = uint8_t(c.u8() % 17);
         } else if (!std::memcmp(tag, "ENG ", 4)) {
             const int t = c.u8(), k = c.u8();
             const int n = c.u16();
             if (t >= kTracks || k >= kEngCount) continue;
+            if (ver < 2 && k == kEngSampler) continue;   // v1 SAMPLER params had another order
             Engine* e = eng_[t].e[k];
             for (int i = 0; i < n && c.ok; ++i) {
                 const float v = c.f32();
@@ -351,6 +425,7 @@ bool Konsol::loadProject(const char* name) {
                 x.chance = c.u8();
                 x.roll = c.u8();
                 x.flags = uint8_t(c.u8() & 7);
+                x.cond = ver >= 2 ? uint8_t(c.u8() % kCondCount) : 0;
                 if (x.chance > 100) x.chance = 100;
                 if (x.roll > 16) x.roll = 16;
                 if (x.vel < 1) x.vel = 1;
@@ -358,6 +433,17 @@ bool Konsol::loadProject(const char* name) {
                 if (x.len < 1) x.len = 1;
                 if (x.start < maxTick) nb.add(x);
             }
+        } else if (!std::memcmp(tag, "TSMP", 4)) {
+            const int t = c.u8();
+            if (t >= kTracks) continue;
+            tsLoad[t].bars = uint8_t(c.u8() % 33);
+            tsLoad[t].mode = uint8_t(c.u8() % kStrModes);
+            tsLoad[t].pitch = int8_t(dx_clampi(c.i8(), -24, 24));
+            tsLoad[t].stretched = c.u8() ? 1 : 0;
+        } else if (!std::memcmp(tag, "KIT ", 4)) {
+            const int t = c.u8();
+            if (t >= kTracks || uint32_t(c.e - c.p) < kitBytes()) continue;
+            kitChunk[t] = c.p;
         } else if (!std::memcmp(tag, "SONG", 4)) {
             int n = c.u8();
             p.songLoop = c.u8() ? 1 : 0;
@@ -371,11 +457,34 @@ bool Konsol::loadProject(const char* name) {
             }
         }
     }
-    std::memset(stutter_, 0, uint32_t(kStutterMax) * 4u);
+    // samples and kits (the file buffer is still intact: kits read from it)
     for (int t = 0; t < kTracks; ++t) {
-        if (samplePath[t][0]) loadSample(t, samplePath[t]);
+        if (samplePath[t][0] && !loadSample(t, samplePath[t])) setTrackBreak(t);
+        TrackSample& ts = ts_[t];
+        ts.mode = tsLoad[t].mode;
+        ts.pitch = tsLoad[t].pitch;
+        if (tsLoad[t].bars) {
+            ts.bars = tsLoad[t].bars;
+            int bars = ts.bars;
+            if (pool_.valid(ts.src)) ts.srcBpm = ts.outBpm = loopBpm(pool_.slot(ts.src).frames, bars, p.bpm, &pool_.slot(ts.src));
+        }
+        if (tsLoad[t].stretched) strPend_ = uint8_t(strPend_ | (1u << t));
+        if (kitChunk[t]) kitRead(t, kitChunk[t]);
         makamSetKey(eng_[t].e[kEngMakam], p.key);
     }
+    gcSamples();
+    // LABKIT: macros, routes, MIDI learn (engine slots follow the engines loaded above)
+    if (lkitAt && lkitLen) {
+        // the chunk writes the registered fields too: the project's own chunks win
+        Mix mixes[kTracks];
+        for (int t = 0; t < kTracks; ++t) mixes[t] = p.track[t].mix;
+        const FxCfg fx = p.fx;
+        ctx_->params().loadChunk(lkitAt, lkitLen);
+        for (int t = 0; t < kTracks; ++t) p.track[t].mix = mixes[t];
+        p.fx = fx;
+    }
+    refreshRegistry();
+    std::memset(stutter_, 0, uint32_t(kStutterMax) * 4u);
     if (!p.name[0]) std::snprintf(p.name, sizeof p.name, "%s", name);
     std::snprintf(p.name, sizeof p.name, "%s", name);
     setLaunchQ_ = p.launchQ;
@@ -385,6 +494,9 @@ bool Konsol::loadProject(const char* name) {
     setScale_ = p.scale;
     setMetro_ = p.metronome;
     setLoop_ = p.songLoop;
+    setKeyLayout_ = p.keyLayout;
+    setRecHits_ = p.recHits;
+    undoN_ = redoN_ = 0;
     ctx_->setBpm(p.bpm);
     fxDirty_ = true;
     dirty_ = false;
@@ -404,129 +516,13 @@ void Konsol::save() {
 }
 
 // ---------------------------------------------------------------------------
-// samples
-// ---------------------------------------------------------------------------
-void Konsol::loadSample(int t, const char* path) {
-    SampleBuf& b = smp_[t];
-    b.len = 0;   // the audio sees no sample while it loads
-    if (!ctx_ || !ctx_->fs) {
-        buildBreak(b);
-        return;
-    }
-    ot::WavImportOptions opt;
-    ot::WavImportResult res;
-    // longer files: import the start that fits
-    {
-        const IStorage::Handle h = ctx_->fs->open(path, IStorage::kRead);
-        if (h >= 0) {
-            ot::WavInfo info;
-            ot::StorageReader rd(*ctx_->fs, h);
-            if (ot::wavParseHeader(rd, info) && ot::wavIsSupported(info)) {
-                const uint32_t frames = ot::wavResampledFrames(ot::wavSourceFrames(info), info.sampleRate);
-                if (frames > b.cap) opt.endMarker = uint16_t(uint64_t(65535) * b.cap / (frames + 1));
-            }
-            ctx_->fs->close(h);
-        }
-    }
-    const ot::FmtStatus st = ot::wavImportFile(*ctx_->fs, path, opt, b.data, b.cap, res);
-    if (st != ot::FmtStatus::Ok || res.frames < 64) {
-        buildBreak(b);
-        if (ctx_) ctx_->toast("Cannot read that WAV - using the built-in break");
-        return;
-    }
-    copyStr(b.path, sizeof b.path, path);
-    b.len = res.frames;
-    dirty_ = true;
-}
-
-namespace {
-struct ListCtx {
-    char (*list)[40];
-    int n, cap;
-    const char* ext;
-    bool dirs;
-};
-bool listFn(const IStorage::DirEntry& e, void* p) {
-    ListCtx& c = *static_cast<ListCtx*>(p);
-    if (c.n >= c.cap) return false;
-    if (e.name[0] == '.') return true;
-    if (e.isDir) {
-        if (!c.dirs) return true;
-        std::snprintf(c.list[c.n++], 40, "/%s", e.name);   // a leading '/' marks a folder
-        return true;
-    }
-    if (!endsWithCi(e.name, c.ext)) return true;
-    std::snprintf(c.list[c.n++], 40, "%s", e.name);
-    return true;
-}
-void sortList(char (*l)[40], int n) {
-    for (int i = 1; i < n; ++i) {
-        char x[40];
-        std::memcpy(x, l[i], 40);
-        int j = i;
-        while (j > 0) {
-            // folders first, then case-insensitive
-            const bool xd = x[0] == '/', yd = l[j - 1][0] == '/';
-            bool less;
-            if (xd != yd) less = xd;
-            else {
-                int k = 0;
-                for (;; ++k) {
-                    char a = x[k], b = l[j - 1][k];
-                    if (a >= 'a' && a <= 'z') a = char(a - 32);
-                    if (b >= 'a' && b <= 'z') b = char(b - 32);
-                    if (a != b || !a) {
-                        less = a < b;
-                        break;
-                    }
-                }
-            }
-            if (!less) break;
-            std::memcpy(l[j], l[j - 1], 40);
-            --j;
-        }
-        std::memcpy(l[j], x, 40);
-    }
-}
-}  // namespace
-
-void Konsol::scanSamples() {
-    listN_ = 0;
-    listSel_ = 0;
-    listTop_ = 0;
-    if (!ctx_ || !ctx_->fs) return;
-    ListCtx c{list_, 0, kListMax, ".wav", true};
-    if (listDir_[0] && std::strcmp(listDir_, "/") != 0) {
-        std::snprintf(list_[c.n++], 40, "/..");
-    }
-    ctx_->fs->listDir(listDir_[0] ? listDir_ : "/", listFn, &c);
-    listN_ = c.n;
-    sortList(list_ + (listDir_[0] && std::strcmp(listDir_, "/") != 0 ? 1 : 0),
-             listN_ - (listDir_[0] && std::strcmp(listDir_, "/") != 0 ? 1 : 0));
-}
-
-void Konsol::scanProjects() {
-    listN_ = 0;
-    listSel_ = 0;
-    listTop_ = 0;
-    if (!ctx_ || !ctx_->fs) return;
-    char dir[64];
-    std::snprintf(dir, sizeof dir, "%s/Projects", ctx_->home);
-    ListCtx c{list_, 0, kListMax, ".kon", false};
-    ctx_->fs->listDir(dir, listFn, &c);
-    listN_ = c.n;
-    for (int i = 0; i < listN_; ++i) {
-        char* d = std::strrchr(list_[i], '.');
-        if (d) *d = 0;
-    }
-    sortList(list_, listN_);
-}
-
-// ---------------------------------------------------------------------------
 // main loop
 // ---------------------------------------------------------------------------
 void Konsol::update(uint32_t ms) {
     nowMs_ = ms;
+    applyPick();
+    placeSlots();
+    stretchService(4096);
     // live generators: after each loop of a live clip, prepare the next one
     for (int t = 0; t < kTracks; ++t) {
         TrackRt& r = rt_[t];
@@ -556,6 +552,7 @@ void Konsol::update(uint32_t ms) {
             const float pk = rt_[t].peak;
             rt_[t].peak = 0.0f;
             meter_[t] = pk > meter_[t] ? pk : meter_[t] * 0.8f;
+            meterHold_[t] = meter_[t] > meterHold_[t] ? meter_[t] : meterHold_[t] - 0.01f;
         }
         const float pk = masterPk_;
         masterPk_ = 0.0f;
@@ -578,30 +575,38 @@ void Konsol::update(uint32_t ms) {
     if (ctx_) P_->bpm = ctx_->bpm();
 }
 
+// MIDI in: a track whose MIDI-in channel matches plays; notes on a channel no
+// track claims play the selected track (as before).
 void Konsol::onMidi(const MidiMsg& m) {
     const uint8_t ty = m.type();
+    int t = -1;
+    for (int k = 0; k < kTracks; ++k)
+        if (P_->track[k].midiCh == m.channel() + 1) {
+            t = k;
+            break;
+        }
+    if (t < 0) t = selT_;
     if (ty == 0x90 && m.d2) {
-        playNote(m.d1, m.d2, true);
+        playNoteOn(t, m.d1, m.d2, true);
     } else if (ty == 0x80 || (ty == 0x90 && !m.d2)) {
-        playNote(m.d1, 0, false);
+        playNoteOn(t, m.d1, 0, false);
     } else if (ty == 0xB0 && m.d1 == 7) {
-        P_->track[selT_].mix.level = float(m.d2) / 127.0f * 1.25f;
+        P_->track[t].mix.level = float(m.d2) / 127.0f * 1.25f;
     } else if (ty == 0xB0 && m.d1 == 10) {
-        P_->track[selT_].mix.pan = (float(m.d2) - 64.0f) / 64.0f;
+        P_->track[t].mix.pan = (float(m.d2) - 64.0f) / 64.0f;
     }
 }
 
-void Konsol::playNote(int pitch, int vel, bool on) {
-    if (pitch < 0 || pitch > 127) return;
-    if (on) send(Cmd{Cmd::kNoteOn, uint8_t(selT_), uint8_t(pitch), uint8_t(vel)});
-    else send(Cmd{Cmd::kNoteOff, uint8_t(selT_), uint8_t(pitch), 0});
-    recordNote(pitch, vel, on);
+void Konsol::playNoteOn(int t, int pitch, int vel, bool on) {
+    if (pitch < 0 || pitch > 127 || t < 0 || t >= kTracks) return;
+    if (on) send(Cmd{Cmd::kNoteOn, uint8_t(t), uint8_t(pitch), uint8_t(vel)});
+    else send(Cmd{Cmd::kNoteOff, uint8_t(t), uint8_t(pitch), 0});
+    recordNote(t, pitch, vel, on);
 }
 
 // Live recording into the clip playing on the selected track (overdub).
-void Konsol::recordNote(int pitch, int vel, bool on) {
+void Konsol::recordNote(int t, int pitch, int vel, bool on) {
     if (!recArm_ || !ctx_ || !ctx_->playing()) return;
-    const int t = selT_;
     const TrackRt& r = rt_[t];
     const int s = r.play;
     if (s < 0) return;
@@ -610,11 +615,34 @@ void Konsol::recordNote(int pitch, int vel, bool on) {
     if (!L) return;
     const uint32_t pos = posPub_;
     const uint32_t tick = pos > r.startPos ? ((pos - r.startPos) / 256u) % L : 0;
+    // drum-like engines: hits are written at once with a fixed length (no note-off needed)
+    if (on && P_->recHits && drumLike(t)) {
+        static const int kQ[4] = {0, kTps, 2 * kTps, kTps / 2};
+        const int q = kQ[P_->recQ & 3];
+        uint32_t st = tick;
+        if (q) {
+            st = ((st + uint32_t(q) / 2) / uint32_t(q)) * uint32_t(q);
+            if (st >= L) st = 0;
+        }
+        NoteBuf& b = c.beginEdit();
+        const int dup = b.find(int(st), pitch);
+        if (dup >= 0) b.remove(dup);
+        Note n;
+        n.start = uint16_t(st);
+        n.len = uint16_t(kTps - 1);
+        n.pitch = uint8_t(pitch);
+        n.vel = uint8_t(vel);
+        b.add(n);
+        c.commit();
+        dirty_ = true;
+        return;
+    }
     if (on) {
         int k = 0;
         for (; k < 8; ++k)
             if (rec_[k].pitch < 0) break;
         if (k == 8) return;
+        rec_[k].track = int8_t(t);
         rec_[k].pitch = int8_t(pitch);
         rec_[k].start = uint16_t(tick);
         rec_[k].startPos = pos;
@@ -623,7 +651,7 @@ void Konsol::recordNote(int pitch, int vel, bool on) {
         return;
     }
     for (int k = 0; k < 8; ++k) {
-        if (rec_[k].pitch != pitch) continue;
+        if (rec_[k].pitch != pitch || rec_[k].track != t) continue;
         RecNote& rn = rec_[k];
         rn.pitch = -1;
         if (rn.scene != s) return;
@@ -706,6 +734,13 @@ int Konsol::settings(SettingRow* rows, int cap) {
     add("KONSOL song loops", &setLoop_, 0, 1, kOff, "",
         [](void* c, int v) { static_cast<Konsol*>(c)->P_->songLoop = uint8_t(v); });
     add("KONSOL pad brightness", &setPadBright_, 0, 2, kBright, "", nullptr);
+    static const char* const kLayout[2] = {"Chromatic", "In key"};
+    setKeyLayout_ = P_->keyLayout;
+    setRecHits_ = P_->recHits;
+    add("KONSOL pad keyboard", &setKeyLayout_, 0, 1, kLayout, "",
+        [](void* c, int v) { static_cast<Konsol*>(c)->P_->keyLayout = uint8_t(v); });
+    add("KONSOL drums record hits", &setRecHits_, 0, 1, kOff, "",
+        [](void* c, int v) { static_cast<Konsol*>(c)->P_->recHits = uint8_t(v); });
     return n;
 }
 

@@ -36,7 +36,17 @@ struct Note {
     uint8_t chance = 100; // 0..100 %
     uint8_t roll = 0;     // hits per step (0/1 = none, 2..16)
     uint8_t flags = 0;
+    uint8_t cond = 0;     // trig condition (kCond*: A:B loop counts, Fill, First)
 };
+
+// Trig conditions (after the Elektron A:B idea): a note plays only on some
+// loops of its clip, only while Fill is held, or only on the first loop.
+enum TrigCond : uint8_t {
+    kCondAlways = 0, kCond12, kCond22, kCond13, kCond23, kCond33, kCond14, kCond24, kCond34, kCond44,
+    kCondFill, kCondNotFill, kCondFirst, kCondNotFirst, kCondCount
+};
+const char* condName(int c);
+bool condPasses(int cond, uint32_t loop, bool fill);
 
 struct NoteBuf {
     Note n[kMaxNotes];
@@ -75,6 +85,7 @@ struct Clip {
     int16_t gp[kGenParams] = {};
     uint8_t live = 0;               // generator runs every `every` loops
     uint8_t every = 1;
+    uint8_t launchQ = 0;            // 0 = the project's launch quantise, else launchQ + 1
     bool exists() const { return lenSteps > 0; }
     const NoteBuf& notes() const { return buf[cur]; }
     // Main loop: start an edit (copy of the live notes, cancels a pending loop)
@@ -97,6 +108,7 @@ struct TrackCfg {
     uint8_t engine = 0;   // EngineKind
     uint8_t octave = 4;   // generator base octave (root = 12 * octave + key)
     Mix mix;
+    uint8_t midiCh = 0;   // MIDI in: 0 = plays when selected (any channel), 1..16 = that channel
 };
 
 struct SongEntry {
@@ -116,7 +128,14 @@ struct FxCfg {
     float compMakeup = 0.15f;  // 0..1 -> 0..+12 dB
     uint8_t limiter = 1;
     float master = 0.9f;
+    uint8_t revType = 0;       // 0 Plate (OpenTracker), 1 Hall, 2 Shimmer, 3 Gated
+    uint8_t dlyType = 0;       // 0 Digital, 1 Tape, 2 Lo-fi
+    float revPre = 0.0f;       // pre-delay 0..1 -> 0..120 ms (Hall / Shimmer / Gated)
+    float dlyMod = 0.3f;       // tape wow / lo-fi crush amount
 };
+constexpr int kRevTypes = 4, kDlyTypes = 3;
+const char* revTypeName(int t);
+const char* dlyTypeName(int t);
 
 struct Project {
     char name[16] = "SONG01";
@@ -131,6 +150,8 @@ struct Project {
     uint8_t launchQ = 2;       // 0 none, 1 beat, 2 bar, 3 2 bars, 4 4 bars
     uint8_t recQ = 1;          // 0 off, 1 1/16, 2 1/8, 3 1/32
     uint8_t metronome = 0;
+    uint8_t keyLayout = 0;     // pads as a keyboard: 0 chromatic rows, 1 in key (scale lock)
+    uint8_t recHits = 1;       // drum-like engines record hits (no note-off needed)
     FxCfg fx;
     float bpm = 120.0f;
 };

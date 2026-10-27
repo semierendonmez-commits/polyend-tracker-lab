@@ -14,36 +14,83 @@ panelshot docs/screenshots/steps.png
 # piano roll: track 4 (VAP chords) scene 4
 tap Pattern
 pad 39 tap
-tap Fx1
+tap FX1
 wait 600
 panelshot docs/screenshots/piano_roll.png
 # player: track 3 acid, live
 tap Pattern
 pad 38 tap
-tap Fx2
+tap FX2
 wait 1200
 panelshot docs/screenshots/player.png
-# sound: track 5 makam engine
-tap Pattern
-pad 40 tap
+# sound: track 3 ACD, filter section
 tap Instr
 tap Down
-wait 300
-panelshot docs/screenshots/sound_makam.png
-# sound: track 3 ACD engine, filter section
-tap Pattern
-pad 38 tap
-tap Instr
-tap F2
-tap Down
+tap Right
 enc 3
 wait 300
 panelshot docs/screenshots/sound_acd.png
-# mixer
-tap Master
+# the engine chooser, then PLAITS on track 3
+tap F3
+enc 5
+wait 300
+panelshot docs/screenshots/sound_engines.png
+tap Insert
+wait 300
+pad 36 tap
+pad 40 tap
+wait 400
+panelshot docs/screenshots/sound_plaits.png
+# LABKIT on the Sound page: PARAM pads, an LFO route, the MAP, HELP
+tap I.Param
+pad 2 tap
+pad 36 down
+pad 1 tap
+enc 5
+pad 36 up
+wait 300
+panelshot docs/screenshots/labkit_param.png
+tap I.Param
+press Master
+wait 700
+panelshot docs/screenshots/labkit_map.png
+release Master
+wait 300
+press Shift
+tap Config
+release Shift
+wait 300
+panelshot docs/screenshots/labkit_help.png
+press Shift
+tap Config
+release Shift
+# samples: track 2 (the break), stretched to the project tempo
+tap Pattern
+pad 37 tap
+tap S.Load
+tap F5
+wait 3000
+panelshot docs/screenshots/sample.png
+tap S.Edit
+tap Right
+tap Right
+tap Right
+wait 400
+panelshot docs/screenshots/slices.png
+# kit from the slices, by class
+tap S.Play
+tap F2
+wait 300
+pad 36 tap
+wait 100
+panelshot docs/screenshots/kit.png
+# mixer + send FX
+tap S.Rec
 wait 600
 panelshot docs/screenshots/mixer.png
 tap F2
+tap F3
+tap F4
 wait 300
 panelshot docs/screenshots/mixer_fx.png
 tap F1

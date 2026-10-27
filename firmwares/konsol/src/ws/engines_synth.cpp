@@ -20,8 +20,14 @@
 namespace lab {
 namespace konsol {
 
-Engine* makeSampler(Arena& a, SampleBuf* b);
-Engine* makeGrain(Arena& a, SampleBuf* b);
+Engine* makeSampler(Arena& a, SamplePool* pool, TrackSample* ts);
+Engine* makeGrain(Arena& a, SamplePool* pool, TrackSample* ts);
+Engine* makeKit(Arena& a, SamplePool* pool);
+Engine* makePlaits(Arena& a);
+Engine* makeFloater(Arena& a);
+Engine* makeTb303(Arena& a);
+Engine* makeNeuro(Arena& a);
+Engine* makeQuanta(Arena& a);
 Engine* makeDrums(Arena& a);
 Engine* makeIkeda(Arena& a);
 Engine* makeMakam(Arena& a);
@@ -118,6 +124,35 @@ public:
     float frac(int i) const override {
         if (i == nParams_) return float(poly_) / float(maxPoly());
         return synthui::valueFrac(id_, i, synthParamGet(patch_, i));
+    }
+    bool bipolar(int i) const override { return i < nParams_ && synthui::valueBipolar(id_, i); }
+    void setFrac(int i, float f) override {
+        f = f < 0.0f ? 0.0f : (f > 1.0f ? 1.0f : f);
+        if (i == nParams_) {
+            set(i, 1.0f + f * float(maxPoly() - 1));
+            return;
+        }
+        const PatchParamRange* r = audio::synthParamRange(id_, i);
+        const synthui::ParamUi* u = synthui::paramUi(id_, i);
+        if (!r || !(r->max > r->min)) return;
+        float v;
+        if (u && (u->fmt == synthui::kFmtHz || u->fmt == synthui::kFmtLfoHz)) {
+            const float lo = r->min > 0.1f ? r->min : 0.1f;
+            v = lo * expf(f * logf(r->max / lo));
+        } else {
+            v = r->min + f * (r->max - r->min);
+        }
+        if (u && (u->fmt == synthui::kFmtEnum || u->fmt == synthui::kFmtOnOff)) v = floorf(v + 0.5f);
+        // audio context (LABKIT routes, 32 writes a block at load): no full re-stage, the
+        // value goes straight into the live parameter array (KONSOL patches have no macros)
+        synthParamSet(patch_, i, v);
+        if (i < p_.count) {
+            p_.end[i] = synthParamGet(patch_, i);
+            if (i == cutoffIndex()) {
+                baseCut_ = p_.end[i];
+                applyTone();
+            }
+        }
     }
     void reset() override {
         patchInit(id_, &patch_);
@@ -370,10 +405,10 @@ public:
     SynthPatch& patch() { return patch_; }
 };
 
-const char* const kNames[kEngCount] = {"SAMPLER", "GRAIN", "DRUMS", "IKEDA", "MAKAM",
-                                       "ACD",     "VAP",   "FAT",   "WTFM",  "PERC"};
+const char* const kNames[kEngCount] = {"SAMPLER", "GRAIN", "DRUMS",   "IKEDA",  "MAKAM", "ACD",    "VAP", "FAT",
+                                       "WTFM",    "PERC",  "PLAITS",  "FLOATER", "TB303", "NEURO", "QUANTA", "KIT"};
 const char* const kInfo[kEngCount] = {
-    "WAV from the card: one-shot, loop or slices",
+    "Stereo WAV: one-shot, loop, slices, warp",
     "Granular cloud over the track's sample",
     "Analog-style kit: 8 drums on notes C2..G2",
     "Sine tones, clicks, noise, data bursts",
@@ -383,6 +418,12 @@ const char* const kInfo[kEngCount] = {
     "OpenTracker FAT: supersaw",
     "OpenTracker WTFM: wavetable FM",
     "OpenTracker PERC: synthesized drum kit",
+    "Mutable Instruments Plaits: 24 models",
+    "FLOATER kick / snare / perc on notes",
+    "Open303 acid bass: accent and slide",
+    "NEUROSTACK neuro bass: 12 models",
+    "QUANTA microsound particle clouds",
+    "16-pad kit from slices or one-shots",
 };
 
 template <class T, class... A>
@@ -403,10 +444,16 @@ int Engine::sectionParams(int s, uint8_t* out, int cap) const {
     return n;
 }
 
-bool TrackEngines::init(Arena& a, SampleBuf* sample, int track) {
+bool TrackEngines::init(Arena& a, SamplePool* pool, TrackSample* sample, int track) {
     (void)track;
-    e[kEngSampler] = makeSampler(a, sample);
-    e[kEngGrain] = makeGrain(a, sample);
+    e[kEngSampler] = makeSampler(a, pool, sample);
+    e[kEngGrain] = makeGrain(a, pool, sample);
+    e[kEngKit] = makeKit(a, pool);
+    e[kEngPlaits] = makePlaits(a);
+    e[kEngFloater] = makeFloater(a);
+    e[kEngTb303] = makeTb303(a);
+    e[kEngNeuro] = makeNeuro(a);
+    e[kEngQuanta] = makeQuanta(a);
     e[kEngDrums] = makeDrums(a);
     e[kEngIkeda] = makeIkeda(a);
     e[kEngMakam] = makeMakam(a);

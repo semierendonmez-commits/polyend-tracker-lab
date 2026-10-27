@@ -10,7 +10,9 @@
 #include "lab/dsp.h"
 #include "lab/lab.h"
 #include "ws/engines.h"
+#include "ws/fx.h"
 #include "ws/model.h"
+#include "ws/samples.h"
 
 namespace ot {
 struct Pattern;
@@ -19,16 +21,19 @@ struct Pattern;
 namespace lab {
 namespace konsol {
 
+class Stretcher;
+
 enum Page : uint8_t {
-    kPgSession = 0,
-    kPgSteps,
-    kPgRoll,
-    kPgGen,
-    kPgSound,
-    kPgMixer,
-    kPgSong,
-    kPgProject,
-    kPgSamples,
+    kPgSession = 0,   // Pattern
+    kPgSteps,         // Note
+    kPgRoll,          // Fx1
+    kPgGen,           // Fx2   (players / generators)
+    kPgSound,         // Instr (the track's engine)
+    kPgSample,        // S.Load (file, tempo, stretch) / S.Edit (slices)
+    kPgKit,           // S.Play (16-pad kit)
+    kPgMixer,         // S.Rec (channels / send FX + master)
+    kPgSong,          // Song
+    kPgProject,       // File
     kPgCount
 };
 
@@ -83,9 +88,10 @@ public:
     void onTransport(bool playing) override;
     int settings(SettingRow* rows, int cap) override;
     void save() override;
-    int benchScenarios() const override { return 6; }
+    int benchScenarios() const override { return 27; }
     const char* benchName(int i) const override;
     void benchSetup(int i) override;
+    void benchSetupNew(int i);
 
     // ---- used by the tests ---------------------------------------------------
     Project& project() { return *P_; }
@@ -132,6 +138,7 @@ private:
     void fire(int t, int pitch, int vel, int tone, int flags, int offset, uint32_t at, uint32_t lenSub);
     void schedule(int t, const Ev& e);
     bool admit(int t, int32_t extra);
+    int32_t engineBudget(int extraTrack) const;
     void trackNotes(int t, uint32_t pos, uint32_t end, float subPerSample);
     void songStep(uint32_t pos, uint32_t end, float subPerSample);
     void fxBlock(float* l, float* r);
@@ -141,49 +148,110 @@ private:
     void padEvent(const Event& e);
     void sessionPad(int col, int row, bool down, int vel);
     void controlPad(int col, int row, bool down, int vel);
-    void keysPad(int pad, bool down, int vel, int rows);
+    void keysPad(int pad, bool down, int vel);
     void stepsPad(int col, int row, bool down, int vel);
     void rollPad(int pad, bool down, int vel);
     void mixerPad(int col, int row, bool down);
+    void samplePad(int pad, bool down, int vel);
+    void kitPad(int pad, bool down, int vel);
+    void songPad(int col, int row, bool down, bool shift);
+    void soundPad(int pad, bool down, int vel);
     void button(const Event& e);
     void encoder(int d, bool shift);
     void arrow(int id, bool shift);
     void fkey(int k, bool shift);
-    void playNote(int pitch, int vel, bool on);
-    void recordNote(int pitch, int vel, bool on);
+    void insertKey(bool shift);
+    void deleteKey(bool shift);
+    void copyKey(bool shift);
+    void gotoPage(int p);
+    void playNote(int pitch, int vel, bool on) { playNoteOn(selT_, pitch, vel, on); }
+    void playNoteOn(int t, int pitch, int vel, bool on);
+    void recordNote(int t, int pitch, int vel, bool on);
     void scrollScenes(int d);
     void toggleStep(int step, int vel);
     void ensureClip(int t, int s, int steps);
     void undoSave(int t, int s);
     void undoRestore();
+    void redoRestore();
     int rootNote(int t) const;
     uint16_t scaleMask(int t) const;
-    void loadSample(int t, const char* path);
-    void buildBreak(SampleBuf& b);
-    void scanSamples();
-    void scanProjects();
-    void applyFxParams();
-    int keyPitch(int pad, int rows) const;
+    bool drumLike(int t) const;
+    // ---- samples (sample_mgr.cpp) ----
+public:
+    bool loadSample(int t, const char* path);
+    bool stretchTrack(int t);                  // to the project tempo (job runs in update())
+    void unstretch(int t);
+    float stretchProgress() const;             // -1 idle
+    int kitFromSlices(int t, bool byClass);
+    int kitFromFolder(int t, const char* dir);
+    bool saveKit(int t, const char* name);
+    bool loadKit(int t, const char* path);
+    bool padSample(int t, int pad, const char* path);
+    SamplePool& pool() { return pool_; }
+    TrackSample& trackSample(int t) { return ts_[t]; }
+    void stretchService(uint32_t budgetFrames);
+    void gcSamples();
+    // ---- LABKIT (nav.cpp) ----
+    int navPages(kit::PageInfo* out, int cap) override;
+    int navPage() const override { return page_; }
+    void navGoto(int page) override;
+    void navFocus(kit::ParamId id) override;
+    void navParamChanged(kit::ParamId id) override;
+    void refreshSlots(int t);                  // engine changed / loaded: names and values of track t's slots
+    void refreshRegistry();                    // after a load / new project: every registered value
+    void refreshFx();                          // the FX page changed FxCfg
+    void slotEdited(int t, int param);         // the Sound page changed engine param `param` of track t
+    kit::ParamId slotId(int t, int param) const;
 
-    // ---- drawing (ui.cpp) -------------------------------------------------------
-    void drawHeaderBar(Canvas& g, const char* page);
-    void drawFKeys(Canvas& g, const char* const k[8], int active = -1);
+private:
+    void registerParams();
+    void placeSlots();                         // the selected track's slots on the SOUND page
+    static void slotSet(void* ctx, float v);
+    static void fxSet(void* ctx, float v);
+    void ensureBreak();
+    void setTrackBreak(int t);
+    int poolFind(const char* path) const;
+    int poolLoad(const char* path);
+    bool slotUsed(int s) const;
+    void compactPool();
+    const char* stretchState(int t) const;
+    void kitWrite(int t, uint8_t* out) const;
+    void kitRead(int t, const uint8_t* in);
+    static uint32_t kitBytes();
+    void applyFxParams();
+    int keyPitch(int pad) const;
+    void openBrowser(int what);
+    void applyPick();
+    void openKeyboard(int what);
+
+    // ---- drawing (ui_draw.cpp) -------------------------------------------------
+    void drawChrome(Canvas& g);
+    void drawFKeys(Canvas& g, const char* const k[8], int active = -1, uint32_t litMask = 0);
     void drawSession(Canvas& g);
     void drawSteps(Canvas& g);
     void drawRoll(Canvas& g);
     void drawGen(Canvas& g);
     void drawSound(Canvas& g);
+    void drawSample(Canvas& g);
+    void drawSlices(Canvas& g);
+    void drawKit(Canvas& g);
     void drawMixer(Canvas& g);
+    void drawFx(Canvas& g);
     void drawSong(Canvas& g);
     void drawProject(Canvas& g);
-    void drawSamples(Canvas& g);
-    void drawHelp(Canvas& g);
+    void drawWave(Canvas& g, int slot, uint32_t a, uint32_t e, int x, int y, int w, int h, Rgb c, int colW = 4);
 
     Context* ctx_ = nullptr;
     Theme theme_;
     Project* P_ = nullptr;
     TrackEngines eng_[kTracks];
-    SampleBuf smp_[kTracks];
+    SamplePool pool_;
+    TrackSample ts_[kTracks];
+    Stretcher* str_ = nullptr;
+    int16_t breakSlot_ = -1;
+    int strTrack_ = -1;
+    float strTarget_ = 120.0f;
+    uint8_t strPend_ = 0;               // tracks to re-stretch (after a project load)
     ot::Pattern* scratch_ = nullptr;   // generator target
     NoteBuf* src_ = nullptr;            // per-track live source (Genotype / Turnaround)
     void* acidPh_ = nullptr;            // per-track Acid live phrase (gen::MonoStep[128])
@@ -193,13 +261,22 @@ private:
     int8_t acidScene_[kTracks] = {-1, -1, -1, -1, -1, -1, -1, -1};
     uint32_t liveCount_[kTracks] = {};
     int16_t* stutter_ = nullptr;
-    NoteBuf* undo_ = nullptr;
-    int undoT_ = -1, undoS_ = -1, undoLen_ = 0;
+    // undo / redo: 16 clip snapshots each way
+    struct UndoRec {
+        int8_t t = -1, s = -1;
+        uint8_t len = 0;
+        NoteBuf nb;
+    };
+    static constexpr int kUndo = 16;
+    UndoRec* undo_ = nullptr;
+    UndoRec* redo_ = nullptr;
+    int undoN_ = 0, redoN_ = 0;
 
     // audio-side state
     SpscRing<Cmd, 128> cmds_;
     TrackRt rt_[kTracks];
-    ot::audio::Delay delay_;
+    SendDelay dly_;
+    FdnVerb verb_;
     ot::audio::Reverb* reverb_ = nullptr;
     uint32_t pos_ = 0;                 // global subtick at the block start
     volatile uint32_t posPub_ = 0;     // published for the UI
@@ -213,7 +290,9 @@ private:
     volatile float masterPk_ = 0.0f;
     float hpZ_[4] = {};
     float hpCut_ = 0.0f;               // performance HP sweep 0..1
-    volatile bool hpHeld_ = false, stutHeld_ = false, dlyThrow_ = false, revThrow_ = false;
+    volatile bool hpHeld_ = false, stutHeld_ = false, dlyThrow_ = false, revThrow_ = false, fillHeld_ = false;
+    float noteEnv_[kTracks] = {};      // LABKIT sources: a decaying envelope per track's notes
+    float barPh_ = 0, beatPh_ = 0;
     int32_t stutW_ = 0, stutLen_ = 0, stutR_ = 0, stutStart_ = 0;
     bool stutActive_ = false;
     int lastCost_ = 0;
@@ -222,18 +301,42 @@ private:
     float bpm_ = 120.0f;
     uint32_t blockCount_ = 0;
     volatile bool fxDirty_ = true;
-    volatile bool hold_ = false;
-    volatile float budgetScale_ = 1.0f;   // device CPU feedback (update())       // main loop rewrites the project: render() outputs silence
+    volatile bool hold_ = false;          // the main loop rewrites the project: render() outputs silence
+    volatile float budgetScale_ = 1.0f;   // device CPU feedback (update())
     // smoothed mixer gains
     float gl_[kTracks] = {}, gr_[kTracks] = {}, ga_[kTracks] = {}, gb_[kTracks] = {};
+
+    // ---- LABKIT ---------------------------------------------------------------
+    static constexpr int kSlotsPerTrack = 36;
+    struct SlotRef {
+        Konsol* k;
+        uint8_t t, s;
+    };
+    SlotRef slotRef_[kTracks][kSlotsPerTrack];
+    kit::ParamId slotParam_[kTracks][kSlotsPerTrack];
+    char slotName_[kTracks][kSlotsPerTrack][14];
+    int8_t slotIdx_[kTracks][kSlotsPerTrack];     // engine param index of each slot (-1 none)
+    kit::ParamId mixId_[kTracks][4] = {};
+    struct FxRef {
+        Konsol* k;
+        uint8_t which;
+    };
+    FxRef fxRef_[16];
+    kit::ParamId fxId_[16] = {};
+    bool kitReady_ = false;
+    int placedFor_ = -1;
+    // browser / keyboard results (picked in the Shell's modal, applied in update())
+    char pickPath_[128] = {};
+    static constexpr uint32_t kLkitCap = 32768;
+    uint8_t* lkitBuf_ = nullptr;
+    int pickWhat_ = -1;
 
     // ---- UI state -------------------------------------------------------------
     uint8_t page_ = kPgSession, prevPage_ = kPgSession;
     uint8_t gridMode_ = kGmLaunch;
     bool gridModeLatched_ = false;
     uint32_t gridModeDownMs_ = 0;
-    bool keysOverlay_ = false;         // Aux: pads play the selected track on any page
-    bool help_ = false;
+    bool keysOverlay_ = false;         // Performance: pads play the selected track on any page
     int selT_ = 0, selS_ = 0;
     int sceneTop_ = 0;
     bool recArm_ = false;
@@ -249,7 +352,15 @@ private:
     // gen
     int genRow_ = 0;
     // sound
-    int sndSec_ = 0, sndRow_ = 0;
+    int sndSec_ = 0, sndCol_ = 0;
+    bool sndEngine_ = false;           // the engine chooser is open
+    int sndPick_ = 0;
+    // sample
+    int smpTab_ = 0, smpRow_ = 0, sliceSel_ = 1;
+    float sliceSens_ = 0.5f;
+    // kit
+    int kitSel_ = 0, kitRow_ = 0;
+    bool kitFollow_ = true;
     // mixer
     int mixRow_ = 0, mixCol_ = 0;
     bool mixFx_ = false;
@@ -257,19 +368,18 @@ private:
     // song
     int songCur_ = 0;
     // project
-    int projRow_ = 0, projTab_ = 0, trkRow_ = 0, trkCol_ = 0;
-    int nameCur_ = 0;
-    bool confirm_ = false;
+    int trkRow_ = 0, trkCol_ = 0;
     int confirmKey_ = -1;
-    // file lists
+    uint32_t confirmMs_ = 0;
+    // folder scratch (kits from a folder)
     static constexpr int kListMax = 64;
     char (*list_)[40] = nullptr;
-    int listN_ = 0, listSel_ = 0, listTop_ = 0;
-    char listDir_[48] = {};
     // hand play / recording
     int8_t padPitch_[kPads];
+    int8_t padTrack_[kPads];
     struct RecNote {
         int8_t pitch = -1;
+        int8_t track = -1;
         uint16_t start = 0;
         uint32_t startPos = 0;
         uint8_t vel = 0;
@@ -277,13 +387,14 @@ private:
     } rec_[8];
     // meters (UI)
     float meter_[kTracks] = {};
+    float meterHold_[kTracks] = {};
     float masterMeter_ = 0.0f;
     char msg_[48] = {};
     uint32_t lastAutosave_ = 0;
     bool dirty_ = false;
     // settings rows
     int setLaunchQ_ = 2, setRecQ_ = 1, setSwing_ = 50, setKey_ = 9, setScale_ = 1, setMetro_ = 0, setLoop_ = 1;
-    int setPadBright_ = 2;
+    int setPadBright_ = 2, setKeyLayout_ = 0, setRecHits_ = 1;
 };
 
 // Track colours (console strip colours).

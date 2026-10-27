@@ -13,7 +13,7 @@ namespace konsol {
 
 class TableEngine : public Engine {
 public:
-    static constexpr int kMaxP = 28;
+    static constexpr int kMaxP = 40;
     int sections() const override { return nsec_; }
     const char* sectionName(int s) const override { return (s >= 0 && s < nsec_) ? secs_[s].name : ""; }
     int sectionParams(int s, uint8_t* out, int cap) const override {
@@ -51,6 +51,21 @@ public:
         if (d.max <= d.min) return 0.0f;
         if (d.fmt == kFHz) return logf(p_[i] / d.min) / logf(d.max / d.min);
         return (p_[i] - d.min) / (d.max - d.min);
+    }
+    bool bipolar(int i) const override {
+        if (i < 0 || i >= np_) return false;
+        const PDesc& d = desc_[i];
+        return d.fmt == kFBi || (d.fmt != kFList && d.min < 0.0f && d.max > 0.0f && fabsf(d.min + d.max) < 1e-3f);
+    }
+    void setFrac(int i, float f) override {
+        if (i < 0 || i >= np_) return;
+        const PDesc& d = desc_[i];
+        f = f < 0.0f ? 0.0f : (f > 1.0f ? 1.0f : f);
+        float v;
+        if (d.fmt == kFHz && d.min > 0.0f) v = d.min * expf(f * logf(d.max / d.min));
+        else v = d.min + f * (d.max - d.min);
+        if (d.fmt == kFList || d.fmt == kFInt) v = floorf(v + 0.5f);
+        set(i, v);
     }
     void reset() override {
         for (int i = 0; i < np_; ++i) p_[i] = desc_[i].def;
