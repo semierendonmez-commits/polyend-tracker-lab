@@ -4,6 +4,8 @@
 #include <cstdint>
 
 #include "lab/lab.h"
+#include "lab/nav.h"
+#include "lab/params.h"
 #include "ws/engine.h"
 #include "ws/kit.h"
 #include "ws/song.h"
@@ -23,7 +25,7 @@ struct PRow {
     uint8_t id = 0;                       // RowId: what changing it implies
 };
 enum RowId : uint8_t { kRidNone, kRidBpm, kRidUsul, kRidMakam, kRidTuning, kRidKit, kRidSongMode, kRidGen,
-                       kRidBreakEdit, kRidVar, kRidPhrase, kRidSectionSel, kRidPhraseCycles };
+                       kRidBreakEdit, kRidVar, kRidPhrase, kRidSectionSel, kRidPhraseCycles, kRidAutoSlice };
 
 // The palette: Istanbul at night, Iznik tiles.
 namespace col {
@@ -49,12 +51,27 @@ public:
     void onTransport(bool playing) override;
     int settings(lab::SettingRow* rows, int cap) override;
     void save() override;
-    int benchScenarios() const override { return 5; }
+    int benchScenarios() const override { return 7; }
     const char* benchName(int i) const override;
     void benchSetup(int i) override;
 
+    // LABKIT v2
+    int navPages(lab::kit::PageInfo* out, int cap) override;
+    int navPage() const override { return page_; }
+    void navGoto(int page) override { setPage(page); }
+    void navFocus(lab::kit::ParamId id) override;
+    void navParamChanged(lab::kit::ParamId id) override;
+
+    // Scenes (Perform + pad): snapshots of every continuous parameter, morphed.
+    static constexpr int kScenes = 8;
+    void storeScene(int i);
+    void recallScene(int i, bool morph = true);
+    bool sceneUsed(int i) const { return i >= 0 && i < kScenes && sceneUsed_[i]; }
+    bool morphing() const { return morphOn_; }
+
     // Host tests.
     Song& song() { return *song_; }
+    lab::kit::ParamId paramOf(const void* field) const;
     Engine& engine() { return eng_; }
     Kit& kit(int i) { return kits_[i]; }
     int page() const { return page_; }
@@ -63,6 +80,17 @@ public:
     bool loadWav(const char* name);
 
 private:
+    // LABKIT glue (makam_nav.cpp)
+    void registerParams();
+    void pullFields();
+    void defaultMacros();
+    void applyRid(uint8_t rid);
+    uint8_t ridOf(const void* field) const;
+    void updateMorph(uint32_t ms);
+    size_t saveTrailers(uint8_t* out, size_t cap) const;
+    void loadTrailers(const uint8_t* data, size_t len);
+    void openBreakBrowser();
+
     // pages
     int buildRows(int page, PRow* rows, int cap);
     void rowChanged(const PRow& r);
@@ -126,6 +154,25 @@ private:
     int lastBpm_ = 0;
     bool dirtyState_ = false;
     bool benchMode_ = false;
+    // LABKIT
+    static constexpr int kMaxReg = 96;
+    const void* regPtr_[kMaxReg] = {};
+    lab::kit::ParamId regId_[kMaxReg] = {};
+    int regCount_ = 0;
+    // scenes
+    static constexpr int kSceneParams = 80;
+    lab::kit::ParamId sceneIds_[kSceneParams] = {};
+    int sceneCount_ = 0;
+    float* scene_ = nullptr;          // kScenes x kSceneParams normalized values
+    bool sceneUsed_[kScenes] = {};
+    float morphFrom_[kSceneParams] = {};
+    int morphTo_ = -1;
+    bool morphOn_ = false;
+    uint32_t morphStart_ = 0, morphMs_ = 0, lastMorphMs_ = 0;
+    int lastSceneSection_ = -1;
+    bool performHeld_ = false;
+    char pendingWav_[128] = {};
+    bool pendingWavReady_ = false;
 };
 
 }  // namespace makam

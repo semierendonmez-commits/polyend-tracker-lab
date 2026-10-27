@@ -138,10 +138,11 @@ void songApplyMakam(Song& s) {
 
 void songDefaults(Song& s) {
     s = Song();
-    struct Def { int type, cycles, brk, bass, lead, chaos, filter; };
+    struct Def { int type, cycles, brk, bass, lead, chaos, filter, cut, fill; };
     const Def d[6] = {
-        {kSecIntro, 16, 1, 0, 0, 0, -55},  {kSecBuild, 16, 2, 1, 0, 10, -20}, {kSecDrop, 32, 3, 2, 1, 25, 0},
-        {kSecTaksim, 16, 0, 1, 2, 0, 0},   {kSecDrop2, 32, 4, 3, 3, 45, 0},   {kSecOutro, 16, 1, 1, 4, 10, 40},
+        {kSecIntro, 16, 1, 0, 0, 0, -55, kCutUsul, 20},     {kSecBuild, 16, 2, 1, 0, 10, -20, kCutClassic, 60},
+        {kSecDrop, 32, 3, 2, 1, 25, 0, kCutUsul, 40},        {kSecTaksim, 16, 0, 1, 2, 0, 0, kCutUsul, 0},
+        {kSecDrop2, 32, 4, 3, 3, 45, 0, kCutWarp, 55},       {kSecOutro, 16, 1, 1, 4, 10, 40, kCutDna, 30},
     };
     for (int i = 0; i < 6; ++i) {
         Section& x = s.sec[i];
@@ -152,6 +153,8 @@ void songDefaults(Song& s) {
         x.lead = d[i].lead;
         x.chaos = d[i].chaos;
         x.filter = d[i].filter;
+        x.cut = d[i].cut;
+        x.fill = d[i].fill;
     }
     s.sectionCount = 6;
     s.ch[0] = Channel{85, 0, 0, 8, 0};    // break

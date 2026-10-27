@@ -114,6 +114,21 @@ void pDelay(Module&, Proc&);
 void pVerb(Module&, Proc&);
 void pGrain(Module&, Proc&);
 void pOut(Module&, Proc&);
+// round 2
+void pPlts(Module&, Proc&);
+void pReso(Module&, Proc&);
+void pExct(Module&, Proc&);
+void pNet(Module&, Proc&);
+void rNet(Module&);
+void pRval(Module&, Proc&);
+void pMg(Module&, Proc&);
+void pMgate(Module&, Proc&);
+void pChaos(Module&, Proc&);
+void pBern(Module&, Proc&);
+void pAcid(Module&, Proc&);
+void pFltr(Module&, Proc&);
+void pPart(Module&, Proc&);
+float netNode(const Module& m, int i);   // 0..1 activity of rete node i
 
 // Shared tables of the round-2 modules (particle windows...), from the arena.
 bool initModuleTables(lab::Arena& a);
