@@ -16,12 +16,34 @@ float gIn[kMaxIn][kBlock];
 // Output buffers: a fast pool in SRAM first, the rest in the arena (SDRAM).
 constexpr int kFastBufs = 72;
 float gFast[kFastBufs][kBlock];
+// Per (type, param): the exponent span of kExp params (log2(max / min)), so the
+// audio side maps a modulated knob without a log.
+float gExpSpan[kTypeCount][kMaxParam];
+inline float mapFast(const ParamDef& d, float span, float k) {
+    k = k < 0.0f ? 0.0f : (k > 1.0f ? 1.0f : k);
+    switch (d.kind) {
+        case kExp: return (d.min > 1e-6f ? d.min : 1e-6f) * fexp2(k * span);
+        case kInt: return float(int32_t(d.min + k * (d.max - d.min) + 0.5f));
+        default: return d.min + k * (d.max - d.min);
+    }
+}
 }  // namespace
 
 // ------------------------------------------------------------------ init
 bool Engine::init(lab::Arena& a) {
     initMath();
     if (!initWavetables(a)) return false;
+    if (!initModuleTables(a)) return false;
+    for (int t = 0; t < kTypeCount; ++t)
+        for (int p = 0; p < kMaxParam; ++p) {
+            const ParamDef& d = def(t).p[p];
+            const float lo = d.min > 1e-6f ? d.min : 1e-6f;
+            gExpSpan[t][p] = (p < def(t).nParam && d.kind == kExp && d.max > lo) ? log2f(d.max / lo) : 0.0f;
+        }
+    for (int i = 0; i < kPlaitsPool; ++i) {
+        plaits_[i] = plaitsAlloc(a);
+        if (!plaits_[i]) return false;
+    }
     mods_ = a.make<Module>(kMaxSlots);
     cables_ = a.make<Cable>(kMaxCables);
     plans_ = a.make<Plan>(3);
@@ -93,13 +115,32 @@ void Engine::setParamK(int slot, int p, float k) {
     Module& m = mods_[slot];
     const ModDef& d = def(m.type);
     if (p < 0 || p >= d.nParam) return;
-    m.k[p] = clampf(k, 0.0f, 1.0f);
-    m.v[p] = mapParam(d.p[p], m.k[p]);
+    k = clampf(k, 0.0f, 1.0f);
+    if (m.type == kPlts && p == 0 && m.used) {   // a model change must fit the CPU budget
+        const int32_t was = modCost(slot);
+        const float old = m.k[0];
+        m.k[0] = k;
+        const int32_t now = modCost(slot);
+        m.k[0] = old;
+        if (now > was && cpuCost() - was + now > kCpuBudget) {
+            err_ = "CPU budget full for that model";
+            return;
+        }
+    }
+    const bool changed = m.k[p] != k;
+    m.k[p] = m.ke[p] = m.kv[p] = k;
+    m.v[p] = mapParam(d.p[p], k);
+    if (changed && m.used && onKnob) onKnob(onKnobCtx, slot, p);
 }
 
 void Engine::refresh(int slot) {
-    const ModDef& d = def(mods_[slot].type);
-    for (int p = 0; p < d.nParam; ++p) mods_[slot].v[p] = mapParam(d.p[p], mods_[slot].k[p]);
+    Module& m = mods_[slot];
+    const ModDef& d = def(m.type);
+    for (int p = 0; p < d.nParam; ++p) {
+        m.ke[p] = m.kv[p] = m.k[p];
+        m.v[p] = mapParam(d.p[p], m.k[p]);
+        if (m.used && onKnob) onKnob(onKnobCtx, slot, p);
+    }
 }
 
 void Engine::resetParams(int slot) {
@@ -118,6 +159,7 @@ void Engine::randomize(int slot, Rand& r) {
         if (!std::strcmp(n, "Level") || !std::strcmp(n, "MIDI out") || !std::strcmp(n, "Voice") ||
             !std::strcmp(n, "Sample") || !std::strcmp(n, "Stem") || !std::strcmp(n, "Freeze"))
             continue;
+        if (m.type == kPlts && p == 0) continue;   // the model (CPU)
         m.k[p] = clampf(m.k[p] + r.bi() * 0.35f, 0.0f, 1.0f);
     }
     refresh(slot);
@@ -159,6 +201,7 @@ int Engine::cableCount() const {
 int32_t Engine::modCost(int slot, bool allOuts) const {
     const Module& m = mods_[slot];
     const ModDef& d = def(m.type);
+    if (m.type == kPlts) return plaitsCost(int(mapParam(d.p[0], m.k[0])));
     if (m.type != kVco && m.type != kNoise) return d.cost;
     uint8_t used = 0;
     bool fm = false;
@@ -236,6 +279,18 @@ int Engine::addAt(int slot, int type, int patch, int cell) {
             return -1;
         }
     }
+    int big = -1;
+    if (type == kPlts) {
+        for (int i = 0; i < kPlaitsPool; ++i)
+            if (!plaitsUsed_[i]) {
+                big = i;
+                break;
+            }
+        if (big < 0) {
+            err_ = "Plaits: 4 at most";
+            return -1;
+        }
+    }
     if (type == kSmpl) {
         for (int i = 0; i < kSampleBanks; ++i)
             if (!bankUsed_[i]) {
@@ -264,6 +319,14 @@ int Engine::addAt(int slot, int type, int patch, int cell) {
     m.slabIdx = -1;
     m.bank = nullptr;
     m.bankIdx = -1;
+    m.big = nullptr;
+    m.bigIdx = -1;
+    if (big >= 0) {
+        plaitsUsed_[big] = true;
+        m.bigIdx = int8_t(big);
+        m.big = plaits_[big];
+        plaitsReset(m.big);
+    }
     if (slab >= 0) {
         slabUsed_[slab] = true;
         m.slabIdx = int8_t(slab);
@@ -279,11 +342,14 @@ int Engine::addAt(int slot, int type, int patch, int cell) {
         sampleStereo[slot] = false;
         sampleName[slot][0] = 0;
     }
-    for (int p = 0; p < kMaxParam; ++p) m.k[p] = m.v[p] = 0.0f;
+    for (int p = 0; p < kMaxParam; ++p) m.k[p] = m.ke[p] = m.kv[p] = m.v[p] = 0.0f;
     resetParams(slot);
     if (d.reset) d.reset(m);
     m.used = true;
+    for (int p = 0; p < d.nParam; ++p)
+        if (onKnob) onKnob(onKnobCtx, slot, p);
     dirtyPlan_ = true;
+    if (onModules) onModules(onKnobCtx);
     return slot;
 }
 
@@ -291,6 +357,9 @@ void Engine::freeSlot(int slot) {
     Module& m = mods_[slot];
     if (m.slabIdx >= 0) slabUsed_[m.slabIdx] = false;
     if (m.bankIdx >= 0) bankUsed_[m.bankIdx] = false;
+    if (m.bigIdx >= 0) plaitsUsed_[m.bigIdx] = false;
+    m.bigIdx = -1;
+    m.big = nullptr;
     m.slabIdx = -1;
     m.bankIdx = -1;
     m.slab = nullptr;
@@ -304,9 +373,12 @@ bool Engine::remove(int slot) {
         if (cables_[c].used && (cables_[c].src == slot || cables_[c].dst == slot)) cables_[c].used = false;
     mods_[slot].used = false;
     if (scopeSlot == slot) scopeSlot = -1;
+    for (int t = 0; t < kTaps; ++t)
+        if (tapSlot[t] == slot) tapSlot[t] = -1;
     reserved_[slot] = true;
     rebuild();   // publish a plan without the slot before it may be reused
     if (nPending_ < kMaxSlots) pending_[nPending_++] = Pending{uint8_t(slot), renders_};
+    if (onModules) onModules(onKnobCtx);
     return true;
 }
 
@@ -363,10 +435,127 @@ int Engine::duplicate(int slot) {
 
 bool Engine::move(int slot, int cell) {
     if (slot < 0 || !mods_[slot].used || cell < 0 || cell >= kCells) return false;
-    const int other = slotAtCell(mods_[slot].patch, cell);
-    if (other >= 0 && other != slot) mods_[other].cell = mods_[slot].cell;   // swap
+    const int pt = mods_[slot].patch, was = mods_[slot].cell;
+    if (was == cell) return true;
+    const int other = slotAtCell(pt, cell);
+    uint16_t from[2] = {uint16_t(pt * kCells + was), uint16_t(pt * kCells + cell)};
+    uint16_t to[2] = {uint16_t(pt * kCells + cell), uint16_t(pt * kCells + was)};
+    if (other >= 0 && other != slot) mods_[other].cell = uint8_t(was);   // swap
     mods_[slot].cell = uint8_t(cell);
+    // snapshots follow (a swap remaps both cells; a move into a free cell only one)
+    remapSnapKeys(from, to, other >= 0 ? 2 : 1);
+    if (onModules) onModules(onKnobCtx);
     return true;
+}
+
+bool Engine::place(int slot, int cell) {
+    if (slot < 0 || !mods_[slot].used || cell < 0 || cell >= kCells) return false;
+    if (mods_[slot].cell == cell) return true;
+    if (slotAtCell(mods_[slot].patch, cell) >= 0) return false;
+    return move(slot, cell);
+}
+
+void Engine::remapSnapKeys(const uint16_t* from, const uint16_t* to, int n) {
+    auto map = [&](uint16_t k) -> uint16_t {
+        for (int i = 0; i < n; ++i)
+            if (from[i] == k) return to[i];
+        return k;
+    };
+    for (int i = 0; i < kSnaps; ++i) {
+        Snapshot& sn = snaps_[i];
+        if (!sn.valid) continue;
+        for (int m = 0; m < sn.nMod; ++m) {
+            const uint16_t k = map(sn.mod[m].key());
+            sn.mod[m].patch = uint8_t(k / kCells);
+            sn.mod[m].cell = uint8_t(k % kCells);
+        }
+        for (int c = 0; c < sn.nCab; ++c) {
+            sn.cab[c].src = map(sn.cab[c].src);
+            sn.cab[c].dst = map(sn.cab[c].dst);
+        }
+    }
+    if (morphFrom_ && morphTo_ >= 0) {
+        Snapshot& sn = *morphFrom_;
+        for (int m = 0; m < sn.nMod; ++m) {
+            const uint16_t k = map(sn.mod[m].key());
+            sn.mod[m].patch = uint8_t(k / kCells);
+            sn.mod[m].cell = uint8_t(k % kCells);
+        }
+        for (int c = 0; c < sn.nCab; ++c) {
+            sn.cab[c].src = map(sn.cab[c].src);
+            sn.cab[c].dst = map(sn.cab[c].dst);
+        }
+    }
+}
+
+int Engine::upstream(int slot, int* out, int cap) const {
+    int n = 0;
+    for (int c = 0; c < kMaxCables && n < cap; ++c) {
+        const Cable& k = cables_[c];
+        if (!k.used || k.dst != slot || k.src == slot) continue;
+        bool dup = false;
+        for (int i = 0; i < n; ++i) dup = dup || out[i] == k.src;
+        if (!dup) out[n++] = k.src;
+    }
+    return n;
+}
+
+int Engine::downstream(int slot, int* out, int cap) const {
+    int n = 0;
+    for (int c = 0; c < kMaxCables && n < cap; ++c) {
+        const Cable& k = cables_[c];
+        if (!k.used || k.src != slot || k.dst == slot) continue;
+        bool dup = false;
+        for (int i = 0; i < n; ++i) dup = dup || out[i] == k.dst;
+        if (!dup) out[n++] = k.dst;
+    }
+    return n;
+}
+
+int Engine::signalOrder(int patch, int* out, int cap) const {
+    const Plan& p = plans_[pub_];
+    int n = 0;
+    for (int i = 0; i < p.count && n < cap; ++i) {
+        const int s = p.order[i];
+        if (mods_[s].used && (patch < 0 || mods_[s].patch == patch)) out[n++] = s;
+    }
+    return n;
+}
+
+int Engine::tapOf(int slot, int out) const {
+    for (int t = 0; t < kTaps; ++t)
+        if (tapSlot[t] == slot && tapOut[t] == out) return t;
+    return -1;
+}
+
+int Engine::toggleTap(int slot, int out) {
+    const int have = tapOf(slot, out);
+    if (have >= 0) {
+        tapSlot[have] = -1;
+        tapVal[have] = 0.0f;
+        return -1;
+    }
+    for (int t = 0; t < kTaps; ++t)
+        if (tapSlot[t] < 0) {
+            tapOut[t] = uint8_t(out);
+            tapSlot[t] = int8_t(slot);
+            return t;
+        }
+    return -2;
+}
+
+void Engine::refreshLanes() {
+    // the first four sequencing modules (by canvas, then cell)
+    int n = 0;
+    int8_t pick[kLanes] = {-1, -1, -1, -1};
+    for (int p = 0; p < kPatches && n < kLanes; ++p)
+        for (int c = 0; c < kCells && n < kLanes; ++c) {
+            const int s = slotAtCell(p, c);
+            if (s < 0) continue;
+            const int t = mods_[s].type;
+            if (def(t).cat == kCatSeq || t == kPinb || t == kChaos || t == kRval || t == kMg) pick[n++] = int8_t(s);
+        }
+    for (int i = 0; i < kLanes; ++i) laneSlot[i] = pick[i];
 }
 
 int Engine::cableFind(int src, int srcOut, int dst, int dstIn) const {
@@ -557,6 +746,12 @@ OT_FASTRUN_FN void Engine::render(const lab::Transport& t, const lab::AudioIn& i
             p.in[i] = dst;
         }
         for (int i = d.nIn; i < kMaxIn; ++i) p.in[i] = gZero;
+        // knobs the LABKIT registry moved (modulation, macros): re-map them
+        for (int q = 0; q < d.nParam; ++q)
+            if (m.ke[q] != m.kv[q]) {
+                m.kv[q] = m.ke[q];
+                m.v[q] = mapFast(d.p[q], gExpSpan[m.type][q], m.ke[q]);
+            }
         p.used = (allOutputs || s == scopeSlot) ? 0xFF : plan.used[s];
         if (m.type == kOut) p.used = 0xFF;
         d.process(m, p);
@@ -577,6 +772,38 @@ OT_FASTRUN_FN void Engine::render(const lab::Transport& t, const lab::AudioIn& i
         if (a > pk) pk = a;
     }
     if (pk > masterPeak) masterPeak = pk;
+    masterEnv += (pk > masterEnv ? 0.5f : 0.03f) * (pk - masterEnv);
+    // LABKIT sources: taps (marked outputs) and lanes
+    for (int i = 0; i < kTaps; ++i) {
+        const int ts = tapSlot[i];
+        if (ts < 0 || !mods_[ts].used) continue;
+        const Module& m = mods_[ts];
+        const int o = tapOut[i] < def(m.type).nOut ? tapOut[i] : 0;
+        const float* b = m.out[o];
+        if (def(m.type).out[o].sig == kAudio) {   // audio: an envelope 0..1
+            float a = 0.0f;
+            for (uint32_t j = 0; j < kBlock; j += 4) a = fabsf(b[j]) > a ? fabsf(b[j]) : a;
+            tapVal[i] += (a > tapVal[i] ? 0.6f : 0.05f) * (clampf(a, 0.0f, 1.0f) - tapVal[i]);
+        } else {
+            tapVal[i] = clampf(b[kBlock - 1], -1.0f, 1.0f);
+        }
+    }
+    for (int i = 0; i < kLanes; ++i) {
+        const int ls = laneSlot[i];
+        if (ls < 0 || !mods_[ls].used) {
+            laneVal[i] = 0.0f;
+            continue;
+        }
+        const Module& m = mods_[ls];
+        const int o = laneOutput(m.type);
+        laneVal[i] = o < def(m.type).nOut ? clampf(m.out[o][kBlock - 1], -1.0f, 1.0f) : 0.0f;
+    }
+    {
+        const float bt = p.beat;
+        beatPhase = bt - float(int32_t(bt));
+        const float bar = bt * 0.25f;
+        barPhase = bar - float(int32_t(bar));
+    }
     if (ctx)
         for (int s = 0; s < 4; ++s)
             if (stemUsed[s]) ctx->stem(s, stemL[s], stemR[s]);
@@ -731,62 +958,81 @@ void Engine::clearSnap(int i) {
     if (i >= 0 && i < kSnaps) snaps_[i].valid = false;
 }
 
-// Live state = a -> b at t. Modules matched by position (patch, cell) and
-// type: their knobs interpolate. Modules only in b appear at the start (if
-// the CPU allows), modules only in a leave at the end; cables only in a fade
-// out, cables only in b fade in. Sequencer data (ext) switches half way.
+// Live state = a -> b at t. Modules are matched by position (patch, cell) and
+// type. At t = 0 the patch is exactly a, at t = 1 exactly b; in between it is
+// the union: modules of either side exist (where a and b put different modules
+// in the same cell, the nearer side wins), knobs of modules in both glide
+// (switches and sequencer data change half way), cables fade from a's amount
+// to b's (a cable only on one side fades from / to 0). So a crossfader can go
+// back and forth and every point is reproducible.
 void Engine::morphBetween(const Snapshot& a, const Snapshot& b, float t) {
     t = clampf(t, 0.0f, 1.0f);
     bool changed = false;
-    auto live = [&](uint16_t key, uint8_t type) -> int {
-        const int s = slotAtCell(key / kCells, key % kCells);
-        return (s >= 0 && mods_[s].type == type) ? s : -1;
+    auto typeIn = [](const Snapshot& sn, uint16_t key) -> int {
+        const int i = sn.find(key);
+        return (i >= 0 && sn.mod[i].type < kTypeCount) ? sn.mod[i].type : -1;
     };
-    // 1. at the end, remove modules that b does not have
-    if (t >= 1.0f)
-        for (int s = 0; s < kMaxSlots; ++s) {
-            if (!mods_[s].used) continue;
-            const uint16_t key = uint16_t(mods_[s].patch * kCells + mods_[s].cell);
-            const int bi = b.find(key);
-            if (bi < 0 || b.mod[bi].type != mods_[s].type) {
-                remove(s);
-                changed = true;
-            }
-        }
-    // 2. modules of b: create when missing, interpolate knobs
-    for (int i = 0; i < b.nMod; ++i) {
-        const SnapMod& bm = b.mod[i];
-        int s = live(bm.key(), bm.type);
-        if (s < 0) {
-            const int occ = slotAtCell(bm.patch, bm.cell);
-            if (occ >= 0) {
-                if (t < 1.0f) continue;   // a different module sits there until the end
-                remove(occ);
-            }
-            s = add(bm.type, bm.patch, bm.cell);
-            if (s < 0) continue;
-            mods_[s].number = bm.number;
-            std::memcpy(mods_[s].ext, bm.ext, sizeof bm.ext);
+    auto wanted = [&](uint16_t key) -> int {
+        const int ta = a.valid ? typeIn(a, key) : -1, tb = b.valid ? typeIn(b, key) : -1;
+        if (t <= 0.0f) return ta;
+        if (t >= 1.0f) return tb;
+        if (ta < 0) return tb;
+        if (tb < 0 || ta == tb) return ta;
+        return t < 0.5f ? ta : tb;
+    };
+    // 1. modules that are not wanted here
+    for (int s = 0; s < kMaxSlots; ++s) {
+        if (!mods_[s].used) continue;
+        const uint16_t key = uint16_t(mods_[s].patch * kCells + mods_[s].cell);
+        if (wanted(key) != mods_[s].type) {
+            remove(s);
             changed = true;
         }
-        const int ai = a.find(bm.key());
-        const bool both = ai >= 0 && a.mod[ai].type == bm.type;
+    }
+    // 2. wanted modules that are missing
+    auto ensure = [&](const Snapshot& sn) {
+        for (int i = 0; i < sn.nMod; ++i) {
+            const SnapMod& sm = sn.mod[i];
+            if (sm.type >= kTypeCount || wanted(sm.key()) != sm.type) continue;
+            if (slotAtCell(sm.patch, sm.cell) >= 0) continue;
+            const int s = add(sm.type, sm.patch, sm.cell);
+            if (s < 0 || mods_[s].cell != sm.cell) {
+                if (s >= 0) remove(s);
+                continue;
+            }
+            mods_[s].number = sm.number;
+            std::memcpy(mods_[s].ext, sm.ext, sizeof sm.ext);
+            changed = true;
+        }
+    };
+    if (a.valid) ensure(a);
+    if (b.valid) ensure(b);
+    // 3. knobs and sequencer data
+    for (int s = 0; s < kMaxSlots; ++s) {
         Module& m = mods_[s];
+        if (!m.used) continue;
+        const uint16_t key = uint16_t(m.patch * kCells + m.cell);
+        int ai = a.valid ? a.find(key) : -1, bi = b.valid ? b.find(key) : -1;
+        if (ai >= 0 && a.mod[ai].type != m.type) ai = -1;
+        if (bi >= 0 && b.mod[bi].type != m.type) bi = -1;
+        if (ai < 0 && bi < 0) continue;
         const ModDef& d = def(m.type);
         for (int p = 0; p < d.nParam; ++p) {
-            float k = bm.k[p];
-            if (both) {
-                if (d.p[p].kind == kInt) k = t < 0.5f ? a.mod[ai].k[p] : bm.k[p];
-                else k = lerpf(a.mod[ai].k[p], bm.k[p], t);
+            float k;
+            if (ai >= 0 && bi >= 0) {
+                k = d.p[p].kind == kInt ? (t < 0.5f ? a.mod[ai].k[p] : b.mod[bi].k[p])
+                                        : lerpf(a.mod[ai].k[p], b.mod[bi].k[p], t);
+            } else {
+                k = ai >= 0 ? a.mod[ai].k[p] : b.mod[bi].k[p];
             }
-            m.k[p] = k;
-            m.v[p] = mapParam(d.p[p], k);
+            if (k != m.k[p]) setParamK(s, p, k);
         }
-        if (both && t >= 0.5f) std::memcpy(m.ext, bm.ext, sizeof m.ext);
-        else if (both) std::memcpy(m.ext, a.mod[ai].ext, sizeof m.ext);
+        const uint8_t* ext = (ai >= 0 && (bi < 0 || t < 0.5f)) ? a.mod[ai].ext : b.mod[bi].ext;
+        if (std::memcmp(m.ext, ext, kExtBytes) != 0) std::memcpy(m.ext, ext, kExtBytes);
     }
-    // 3. cables: union of a and b with faded amounts
+    // 4. cables
     auto amountIn = [](const Snapshot& sn, uint16_t src, uint8_t so, uint16_t dst, uint8_t di, float* amt) {
+        if (!sn.valid) return false;
         for (int c = 0; c < sn.nCab; ++c) {
             const SnapCable& k = sn.cab[c];
             if (k.src == src && k.dst == dst && k.srcOut == so && k.dstIn == di) {
@@ -802,9 +1048,10 @@ void Engine::morphBetween(const Snapshot& a, const Snapshot& b, float t) {
         float aa = 0.0f, bb = 0.0f;
         const bool inA = amountIn(a, k.src, k.srcOut, k.dst, k.dstIn, &aa);
         const bool inB = amountIn(b, k.src, k.srcOut, k.dst, k.dstIn, &bb);
+        const bool want = t <= 0.0f ? inA : (t >= 1.0f ? inB : (inA || inB));
         const float amt = lerpf(inA ? aa : 0.0f, inB ? bb : 0.0f, t);
         int c = cableFind(s0, k.srcOut, s1, k.dstIn);
-        if (!inB && t >= 1.0f) {
+        if (!want) {
             if (c >= 0) {
                 disconnect(c);
                 changed = true;
@@ -819,10 +1066,38 @@ void Engine::morphBetween(const Snapshot& a, const Snapshot& b, float t) {
             cables_[c].amount = amt;
         }
     };
-    for (int c = 0; c < a.nCab; ++c) apply(a.cab[c]);
-    for (int c = 0; c < b.nCab; ++c) apply(b.cab[c]);
-    for (int p = 0; p < kPatches; ++p) mix[p].level = lerpf(a.level[p], b.level[p], t);
+    if (a.valid)
+        for (int c = 0; c < a.nCab; ++c) apply(a.cab[c]);
+    if (b.valid)
+        for (int c = 0; c < b.nCab; ++c) apply(b.cab[c]);
+    // at the ends, cables that the target snapshot does not have go
+    if (t <= 0.0f || t >= 1.0f) {
+        const Snapshot& tg = t <= 0.0f ? a : b;
+        for (int c = 0; c < kMaxCables; ++c) {
+            const Cable& k = cables_[c];
+            if (!k.used) continue;
+            float x;
+            const uint16_t ks = uint16_t(mods_[k.src].patch * kCells + mods_[k.src].cell);
+            const uint16_t kd = uint16_t(mods_[k.dst].patch * kCells + mods_[k.dst].cell);
+            if (tg.valid && !amountIn(tg, ks, k.srcOut, kd, k.dstIn, &x)) {
+                disconnect(c);
+                changed = true;
+            }
+        }
+    }
+    for (int p = 0; p < kPatches; ++p) {
+        const float la = a.valid ? a.level[p] : mix[p].level, lb = b.valid ? b.level[p] : mix[p].level;
+        mix[p].level = lerpf(la, lb, t);
+    }
     if (changed || dirtyPlan_) rebuild();
+}
+
+// A crossfader between two snapshots (the X-FADE parameter).
+void Engine::crossfade(int sa, int sb, float t) {
+    if (sa < 0 || sa >= kSnaps || sb < 0 || sb >= kSnaps) return;
+    if (!snaps_[sa].valid || !snaps_[sb].valid) return;
+    morphTo_ = -1;
+    morphBetween(snaps_[sa], snaps_[sb], t);
 }
 
 void Engine::recallSnap(int i, uint32_t ms, uint32_t nowMs) {
@@ -946,16 +1221,17 @@ bool Engine::loadSample(int slot, lab::IStorage* fs, const char* dir) {
 uint32_t Engine::bankFrames(int slot) const { return sampleFrames[slot]; }
 
 // ------------------------------------------------------------------ files
-// Format "GRAF" v1, little endian:
-//   magic "GRAF", u16 version, u8 rack, u8 songOn, u8 songLen
+// Format "GRAF", little endian (v2; v1 files still load):
+//   magic "GRAF", u16 version, u8 rack, u8 songOn, u8 songLen, [v2: u8 flags: bit 0 = snapshots + song present]
 //   8 x mix strip: f32 level, f32 pan, u8 mute
 //   u8 module count, per module: u8 slot, type, patch, cell, number, nParam, f32 k[nParam], ext[64],
 //                                char sample[40]
 //   u16 cable count, per cable: u8 src slot, srcOut, dst slot, dstIn, f32 amount
-//   8 x snapshot: u8 valid; if valid: u8 nMod, u16 nCab, per mod: u8 type, patch, cell, number,
+//   [v2] 8 x tap: i8 slot, u8 out
+//   (flags bit 0) 8 x snapshot: u8 valid; if valid: u8 nMod, u16 nCab, per mod: u8 type, patch, cell, number,
 //                 nParam, f32 k[nParam], ext[64]; per cable: u16 src key, u16 dst key, u8 out,
 //                 u8 in, f32 amount; f32 level[8]
-//   32 x song step: u8 snap, morphBars, holdBars
+//   (flags bit 0) 32 x song step: u8 snap, morphBars, holdBars
 //   u32 checksum (sum of all previous bytes)
 namespace {
 struct Writer {
@@ -1020,16 +1296,17 @@ struct Reader {
         return (f == f) ? f : 0.0f;
     }
 };
-constexpr uint16_t kFileVersion = 1;
+constexpr uint16_t kFileVersion = 2;
 }  // namespace
 
-uint32_t Engine::serialize(uint8_t* buf, uint32_t cap) const {
+uint32_t Engine::serialize(uint8_t* buf, uint32_t cap, bool withSnaps) const {
     Writer w{buf, cap};
     w.bytes("GRAF", 4);
     w.u16(kFileVersion);
     w.u8(rack ? 1 : 0);
     w.u8(songOn ? 1 : 0);
     w.u8(uint8_t(songLen));
+    w.u8(withSnaps ? 1 : 0);
     for (int p = 0; p < kPatches; ++p) {
         w.f32(mix[p].level);
         w.f32(mix[p].pan);
@@ -1062,37 +1339,43 @@ uint32_t Engine::serialize(uint8_t* buf, uint32_t cap) const {
         w.u8(k.dstIn);
         w.f32(k.amount);
     }
-    for (int i = 0; i < kSnaps; ++i) {
-        const Snapshot& s = snaps_[i];
-        w.u8(s.valid ? 1 : 0);
-        if (!s.valid) continue;
-        w.u8(s.nMod);
-        w.u16(s.nCab);
-        for (int k = 0; k < s.nMod; ++k) {
-            const SnapMod& m = s.mod[k];
-            const ModDef& d = def(m.type);
-            w.u8(m.type);
-            w.u8(m.patch);
-            w.u8(m.cell);
-            w.u8(m.number);
-            w.u8(d.nParam);
-            for (int p = 0; p < d.nParam; ++p) w.f32(m.k[p]);
-            w.bytes(m.ext, kExtBytes);
-        }
-        for (int k = 0; k < s.nCab; ++k) {
-            const SnapCable& c = s.cab[k];
-            w.u16(c.src);
-            w.u16(c.dst);
-            w.u8(c.srcOut);
-            w.u8(c.dstIn);
-            w.f32(c.amount);
-        }
-        for (int p = 0; p < kPatches; ++p) w.f32(s.level[p]);
+    for (int t = 0; t < kTaps; ++t) {
+        w.u8(uint8_t(tapSlot[t]));
+        w.u8(tapOut[t]);
     }
-    for (int i = 0; i < kSongSteps; ++i) {
-        w.u8(song[i].snap);
-        w.u8(song[i].morphBars);
-        w.u8(song[i].holdBars);
+    if (withSnaps) {
+        for (int i = 0; i < kSnaps; ++i) {
+            const Snapshot& s = snaps_[i];
+            w.u8(s.valid ? 1 : 0);
+            if (!s.valid) continue;
+            w.u8(s.nMod);
+            w.u16(s.nCab);
+            for (int k = 0; k < s.nMod; ++k) {
+                const SnapMod& m = s.mod[k];
+                const ModDef& d = def(m.type);
+                w.u8(m.type);
+                w.u8(m.patch);
+                w.u8(m.cell);
+                w.u8(m.number);
+                w.u8(d.nParam);
+                for (int p = 0; p < d.nParam; ++p) w.f32(m.k[p]);
+                w.bytes(m.ext, kExtBytes);
+            }
+            for (int k = 0; k < s.nCab; ++k) {
+                const SnapCable& c = s.cab[k];
+                w.u16(c.src);
+                w.u16(c.dst);
+                w.u8(c.srcOut);
+                w.u8(c.dstIn);
+                w.f32(c.amount);
+            }
+            for (int p = 0; p < kPatches; ++p) w.f32(s.level[p]);
+        }
+        for (int i = 0; i < kSongSteps; ++i) {
+            w.u8(song[i].snap);
+            w.u8(song[i].morphBars);
+            w.u8(song[i].holdBars);
+        }
     }
     uint32_t sum = 0;
     for (uint32_t i = 0; i < w.n && w.ok; ++i) sum += buf[i];
@@ -1100,7 +1383,7 @@ uint32_t Engine::serialize(uint8_t* buf, uint32_t cap) const {
     return w.ok ? w.n : 0;
 }
 
-bool Engine::deserialize(const uint8_t* buf, uint32_t len) {
+bool Engine::deserialize(const uint8_t* buf, uint32_t len, bool keepState) {
     if (len < 16 || std::memcmp(buf, "GRAF", 4) != 0) {
         err_ = "Not a GRAF file";
         return false;
@@ -1120,93 +1403,160 @@ bool Engine::deserialize(const uint8_t* buf, uint32_t len) {
         err_ = "File from a newer GRAF";
         return false;
     }
-    clear();
-    quiesce();
-    allNotesOff();
+    if (!keepState) {
+        clear();
+        quiesce();
+        allNotesOff();
+    }
     rack = r.u8() != 0;
-    songOn = r.u8() != 0;
-    songLen = r.u8();
-    if (songLen < 1) songLen = 1;
-    if (songLen > kSongSteps) songLen = kSongSteps;
+    const bool sOn = r.u8() != 0;
+    const int sLen = r.u8();
+    const bool hasSnaps = ver < 2 ? true : (r.u8() & 1) != 0;
+    if (hasSnaps) {
+        songOn = sOn;
+        songLen = sLen < 1 ? 1 : (sLen > kSongSteps ? kSongSteps : sLen);
+    }
     for (int p = 0; p < kPatches; ++p) {
         mix[p].level = clampf(r.f32(), 0.0f, 1.0f);
         mix[p].pan = clampf(r.f32(), -1.0f, 1.0f);
-        mix[p].mute = r.u8() != 0;
+        mix[p].mute = r.u8() != 0 ? 1 : 0;
     }
+    // modules: slot numbers of the file map to live slots (a reserved slot may
+    // force another one while the audio side lets go of it)
+    int8_t remap[kMaxSlots];
+    bool keep[kMaxSlots] = {};
+    uint8_t keepCell[kMaxSlots] = {};
+    for (int i = 0; i < kMaxSlots; ++i) remap[i] = -1;
     const int nMod = r.u8();
-    for (int i = 0; i < nMod && r.ok; ++i) {
-        const int slot = r.u8(), type = r.u8(), patch = r.u8() & 7, cell = r.u8(), number = r.u8(), np = r.u8();
-        float k[kMaxParam] = {};
-        for (int p = 0; p < np; ++p) {
-            const float v = r.f32();
-            if (p < kMaxParam) k[p] = v;
-        }
+    struct Rec {
+        uint8_t slot, type, patch, cell, number, np;
+        float k[kMaxParam];
         uint8_t ext[kExtBytes];
-        r.bytes(ext, kExtBytes);
         char nm[40];
-        r.bytes(nm, sizeof nm);
-        nm[39] = 0;
-        if (type >= kTypeCount || slot >= kMaxSlots || cell >= kCells) continue;
-        const int s = addAt(slot, type, patch, cell);
-        if (s < 0) continue;
+    };
+    // first pass (keepState): which live modules stay
+    const uint32_t modStart = r.n;
+    auto readRec = [&](Rec& q) {
+        q.slot = r.u8();
+        q.type = r.u8();
+        q.patch = r.u8() & 7;
+        q.cell = r.u8();
+        q.number = r.u8();
+        q.np = r.u8();
+        for (int p = 0; p < kMaxParam; ++p) q.k[p] = 0.0f;
+        for (int p = 0; p < q.np; ++p) {
+            const float v = r.f32();
+            if (p < kMaxParam) q.k[p] = v;
+        }
+        r.bytes(q.ext, kExtBytes);
+        r.bytes(q.nm, sizeof q.nm);
+        q.nm[39] = 0;
+    };
+    if (keepState) {
+        for (int i = 0; i < nMod && r.ok; ++i) {
+            Rec q;
+            readRec(q);
+            if (q.slot < kMaxSlots && q.type < kTypeCount && mods_[q.slot].used && mods_[q.slot].type == q.type &&
+                mods_[q.slot].patch == q.patch && q.cell < kCells) {
+                keep[q.slot] = true;
+                keepCell[q.slot] = q.cell;
+            }
+        }
+        for (int s = 0; s < kMaxSlots; ++s)
+            if (mods_[s].used && !keep[s]) remove(s);
+        for (int s = 0; s < kMaxSlots; ++s)
+            if (keep[s]) mods_[s].cell = keepCell[s];
+        for (int c = 0; c < kMaxCables; ++c) cables_[c].used = false;
+        // free the cells of the kept modules so they can be placed again
+        r.n = modStart;
+    }
+    for (int i = 0; i < nMod && r.ok; ++i) {
+        Rec q;
+        readRec(q);
+        if (q.type >= kTypeCount || q.slot >= kMaxSlots || q.cell >= kCells) continue;
+        int s = -1;
+        if (keepState && keep[q.slot]) {
+            s = q.slot;
+        } else {
+            s = addAt(q.slot, q.type, q.patch, q.cell);
+            if (s < 0) s = add(q.type, q.patch, q.cell);
+            if (s < 0) continue;
+        }
         Module& m = mods_[s];
-        m.number = uint8_t(number);
-        const ModDef& d = def(type);
-        for (int p = 0; p < d.nParam && p < np; ++p) m.k[p] = clampf(k[p], 0.0f, 1.0f);
-        refresh(s);
-        std::memcpy(m.ext, ext, kExtBytes);
-        if (type == kSmpl) lab::copyStr(sampleName[s], sizeof sampleName[s], nm);
+        m.number = q.number;
+        m.cell = q.cell;
+        const ModDef& d = def(q.type);
+        for (int p = 0; p < d.nParam && p < q.np; ++p)
+            if (m.k[p] != clampf(q.k[p], 0.0f, 1.0f) || !keepState) setParamK(s, p, clampf(q.k[p], 0.0f, 1.0f));
+        if (!keepState) refresh(s);
+        std::memcpy(m.ext, q.ext, kExtBytes);
+        if (q.type == kSmpl && (!keepState || std::strcmp(sampleName[s], q.nm) != 0)) {
+            lab::copyStr(sampleName[s], sizeof sampleName[s], q.nm);
+            sampleLoaded[s] = -1;
+        }
+        remap[q.slot] = int8_t(s);
     }
     const int nCab = r.u16();
     for (int i = 0; i < nCab && r.ok; ++i) {
         const int s0 = r.u8(), so = r.u8(), s1 = r.u8(), di = r.u8();
         const float a = r.f32();
-        connect(s0, so, s1, di, a);
+        if (s0 < kMaxSlots && s1 < kMaxSlots && remap[s0] >= 0 && remap[s1] >= 0) connect(remap[s0], so, remap[s1], di, a);
     }
-    for (int i = 0; i < kSnaps && r.ok; ++i) {
-        Snapshot& s = snaps_[i];
-        s.valid = r.u8() != 0;
-        if (!s.valid) continue;
-        s.nMod = r.u8();
-        s.nCab = r.u16();
-        if (s.nMod > kMaxSlots) s.nMod = kMaxSlots;
-        if (s.nCab > kMaxCables) s.nCab = kMaxCables;
-        for (int k = 0; k < s.nMod; ++k) {
-            SnapMod& m = s.mod[k];
-            m.type = r.u8();
-            m.patch = r.u8() & 7;
-            m.cell = r.u8();
-            m.number = r.u8();
-            const int np = r.u8();
-            for (int p = 0; p < kMaxParam; ++p) m.k[p] = 0.0f;
-            for (int p = 0; p < np; ++p) {
-                const float v = r.f32();
-                if (p < kMaxParam) m.k[p] = clampf(v, 0.0f, 1.0f);
+    if (ver >= 2)
+        for (int t = 0; t < kTaps; ++t) {
+            const int8_t ts = int8_t(r.u8());
+            const uint8_t to = r.u8();
+            tapSlot[t] = (ts >= 0 && ts < kMaxSlots) ? remap[ts] : int8_t(-1);
+            tapOut[t] = to;
+        }
+    if (hasSnaps) {
+        for (int i = 0; i < kSnaps && r.ok; ++i) {
+            Snapshot& s = snaps_[i];
+            s.valid = r.u8() != 0;
+            if (!s.valid) continue;
+            s.nMod = r.u8();
+            s.nCab = r.u16();
+            if (s.nMod > kMaxSlots) s.nMod = kMaxSlots;
+            if (s.nCab > kMaxCables) s.nCab = kMaxCables;
+            for (int k = 0; k < s.nMod; ++k) {
+                SnapMod& m = s.mod[k];
+                m.type = r.u8();
+                m.patch = r.u8() & 7;
+                m.cell = r.u8();
+                m.number = r.u8();
+                const int np = r.u8();
+                for (int p = 0; p < kMaxParam; ++p) m.k[p] = 0.0f;
+                for (int p = 0; p < np; ++p) {
+                    const float v = r.f32();
+                    if (p < kMaxParam) m.k[p] = clampf(v, 0.0f, 1.0f);
+                }
+                r.bytes(m.ext, kExtBytes);
+                if (m.type >= kTypeCount || m.cell >= kCells) m.type = 0xFF;
             }
-            r.bytes(m.ext, kExtBytes);
-            if (m.type >= kTypeCount || m.cell >= kCells) m.type = 0xFF;
+            for (int k = 0; k < s.nCab; ++k) {
+                SnapCable& c = s.cab[k];
+                c.src = r.u16();
+                c.dst = r.u16();
+                c.srcOut = r.u8();
+                c.dstIn = r.u8();
+                c.amount = clampf(r.f32(), -2.0f, 2.0f);
+            }
+            for (int p = 0; p < kPatches; ++p) s.level[p] = clampf(r.f32(), 0.0f, 1.0f);
+            if (!r.ok) s.valid = false;
         }
-        for (int k = 0; k < s.nCab; ++k) {
-            SnapCable& c = s.cab[k];
-            c.src = r.u16();
-            c.dst = r.u16();
-            c.srcOut = r.u8();
-            c.dstIn = r.u8();
-            c.amount = clampf(r.f32(), -2.0f, 2.0f);
+        for (int i = 0; i < kSongSteps && r.ok; ++i) {
+            song[i].snap = r.u8() & 7;
+            song[i].morphBars = r.u8();
+            song[i].holdBars = r.u8();
+            if (song[i].morphBars > 32) song[i].morphBars = 32;
+            if (song[i].holdBars > 64) song[i].holdBars = 64;
         }
-        for (int p = 0; p < kPatches; ++p) s.level[p] = clampf(r.f32(), 0.0f, 1.0f);
-        if (!r.ok) s.valid = false;
+        morphTo_ = -1;
+        songLastStep_ = -1;
     }
-    for (int i = 0; i < kSongSteps && r.ok; ++i) {
-        song[i].snap = r.u8() & 7;
-        song[i].morphBars = r.u8();
-        song[i].holdBars = r.u8();
-        if (song[i].morphBars > 32) song[i].morphBars = 32;
-        if (song[i].holdBars > 64) song[i].holdBars = 64;
-    }
-    morphTo_ = -1;
-    songLastStep_ = -1;
     rebuild();
+    refreshLanes();
+    if (onModules) onModules(onKnobCtx);
     if (!r.ok) err_ = "File cut short: loaded what was there";
     return true;
 }

@@ -1351,7 +1351,7 @@ void Nav::drawMap(Canvas& g) {
         int rows = maxRows;
         if (!on) {   // fair share of the words left between the columns still to draw
             const int share = int(g.left() / (uint32_t(n - o) * kRowWords));
-            if (share < 3) {   // too little room for names: just how many there are
+            if (share < 3 || colW < 80) {   // too little room for names: just how many there are
                 if (g.room(16)) {
                     g.color(t.dim);
                     g.textf(x + 9, listY + 6, font::kTiny, Canvas::kCenterY, colW >= 80 ? "%d params" : "%d", cnt);

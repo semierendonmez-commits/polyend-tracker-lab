@@ -55,7 +55,12 @@ struct Section {
     int lead = 1;      // 0 off, 1..4 = phrase A..D
     int chaos = 0;     // 0..100 live jungle edits
     int filter = 0;    // -100..100 break DJ filter (added to the mixer's)
+    // v2
+    int cut = 0;       // CutMode: how the break is cut in this section
+    int fill = 35;     // 0..100 phrase-end fill budget (TURNAROUND)
+    int scene = 0;     // 0 none, 1..8: recall (morph to) this scene at the section start
 };
+enum CutMode : int { kCutUsul, kCutClassic, kCutWarp, kCutDna, kCutModes };
 struct Channel {
     int level = 80, pan = 0, dly = 0, rvb = 0, mute = 0;
 };
@@ -66,12 +71,16 @@ struct GenParams {
     int start = 0;     // 0 auto (from the seyir), 1 karar, 2 guclu, 3 tiz durak
     int live = 0;      // regenerate every time the phrase wraps
     int seed = 1;      // 1..999
+    int form = 0;      // 0 seyir, 1 call + response (the call stops on the guclu)
 };
 struct BassParams {
-    int model = 0;     // 0 Reese, 1 Sub, 2 Growl
+    int model = 0;     // BassModel
     int octave = -3;   // -4..-1 octaves from the makam's middle register
     int detune = 45, cutoff = 55, reso = 25, env = 40, decay = 50, drive = 35, glide = 30;
+    int sub = 55;      // v2: clean sine sub under the layers (NEUROSTACK), 0..100
+    int motion = 40;   // v2: neuro models' movement (LFO depth / formant sweep), 0..100
 };
+enum BassModel : int { kBassReese, kBassSub, kBassGrowl, kBassTalk, kBassFm, kBassHoover, kBassModels };
 struct LeadParams {
     int model = 0;     // 0 Ney, 1 Kanun, 2 Saz, 3 Zurna
     int octave = 0;    // -2..1
@@ -87,7 +96,7 @@ struct Song {
     int tuning = 0;        // Tuning
     int transpose = 0;     // -12..12 semitones (ahenk)
     int kit = 0;           // 0..2 built-in, 3 = WAV from the card
-    char wav[40] = {};     // WAV name in /Lab/MAKAM/Breaks
+    char wav[96] = {};     // the card break: a path on the card (v1: a name in /Lab/MAKAM/Breaks)
     int breakResample = 1; // 1: the break follows the tempo (pitch), 0: cut only
     int songMode = 1;      // 0 loop the selected section, 1 play the arrangement
     int sectionCount = 6;
@@ -111,7 +120,17 @@ struct Song {
     LeadParams lp;
     int midiBend = 2;      // pitch-bend range of the receiver, semitones (1..24)
     int midiOut = 1;       // 0 off, 1 bass on ch+0 / lead on ch+1
+    // v2
+    int intonation = 0;    // 0 written (AEU / 53 positions), 1 practice (performance pitches)
+    int dlyType = 1;       // DelayType
+    int rvbType = 0;       // ReverbType
+    int brkPitch = 0;      // -12..12 semitones, the whole break
+    int morphCycles = 2;   // scene morph time in usul cycles (0 = jump)
+    int autoSlice = 1;     // card WAVs: 0 equal 16ths, 1 onsets (spectral flux)
+    int brkStart = 0;      // 0..15 slice the break starts on (shifts the slice map)
 };
+enum DelayType : int { kDlyClean, kDlyTape, kDlyLofi, kDlyPing, kDlyTypes };
+enum ReverbType : int { kRvbPlate, kRvbHall, kRvbGated, kRvbTypes };
 
 constexpr int kDelaySyncCount = 6;
 extern const char* const kDelaySyncNames[kDelaySyncCount];
@@ -130,11 +149,16 @@ uint32_t songCycles(const Song& s);
 // File format: "MKMJ" magic, uint16 version, uint16 reserved, uint32 payload
 // bytes, payload (int16 per field, char arrays raw), uint32 CRC-32 of the
 // payload. Older payloads (shorter) load with defaults for the new fields.
-constexpr uint16_t kFileVersion = 1;
-constexpr uint32_t kFileMax = 16384;
+// Version 2 adds the fields marked v2 and a 96-byte break path; version 1
+// files (40-byte name) still load. After the CRC the workstation may append
+// tagged blocks ("LKIT" registry chunk, "SCEN" scenes): [tag 4][len 4][data].
+constexpr uint16_t kFileVersion = 2;
+constexpr uint32_t kFileMax = 32768;
 // Returns bytes written, 0 if cap is too small.
 size_t songSave(const Song& s, uint8_t* out, size_t cap);
 // false: bad magic / version / CRC (s unchanged).
 bool songLoad(Song& s, const uint8_t* data, size_t len);
+// Bytes of the song part (header + payload + CRC): the tagged blocks start there. 0 = not a song.
+size_t songPayloadEnd(const uint8_t* data, size_t len);
 
 }  // namespace makam

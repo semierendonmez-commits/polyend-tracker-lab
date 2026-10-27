@@ -94,14 +94,17 @@ void genBass(Song& s, int v) {
 }
 
 // ---------------------------------------------------------------------------
-void genPhrase(const Makam& m, const GenParams& p, int usul, Phrase& out, uint32_t seed) {
-    GenRng r(seed * 2654435761u + 12345u);
-    const int cycles = clampi(out.cycles, 1, 4);
-    out.cycles = cycles;
+namespace {
+// One seyir segment of `cycles` usul cycles into seg[0..n): ends on finalDeg
+// (0 = tam karar; the guclu for a call), starts from startOverride when it is
+// > -100, and takes its onsets from `rhythm` when given (the answer of a
+// call keeps the call's rhythm).
+int genSegment(const Makam& m, const GenParams& p, int usul, NoteStep* seg, int cycles, GenRng& r, int finalDeg,
+               int startOverride, const NoteStep* rhythm) {
     const int len = usulLength(usul);
     int n = cycles * len;
     if (n > kPhraseMax) n = kPhraseMax;
-    for (auto& x : out.s) x = NoteStep();
+    for (int i = 0; i < n; ++i) seg[i] = NoteStep();
     const char* st = kUsuls[usul].strokes;
     const int hi = clampi(p.range, 4, 14);
     const int guclu = m.guclu < hi ? m.guclu : hi;
@@ -113,7 +116,7 @@ void genPhrase(const Makam& m, const GenParams& p, int usul, Phrase& out, uint32
     for (int i = 0; i < n; ++i) {
         const Stroke k = strokeOf(st[i % len]);
         int pr = k == kDum ? 55 + dens / 2 : (k == kTek ? 25 + dens * 2 / 3 : (k == kKe ? 10 + dens / 2 : dens / 3));
-        onset[i] = r.chance(pr);
+        onset[i] = rhythm ? (rhythm[i].flags & kNoteOn) != 0 : r.chance(pr);
     }
     // The final note (tam karar): the last dum or tek of the last cycle in its
     // second half (single-dum usuls cadence on their last tek), held to the end.
@@ -136,6 +139,7 @@ void genPhrase(const Makam& m, const GenParams& p, int usul, Phrase& out, uint32
     if (st0 == 1) startDeg = r.chance(60) ? 0 : 1 + r.range(2);
     else if (st0 == 2) startDeg = guclu;
     else startDeg = hi >= 7 ? 7 : hi;
+    if (startOverride > -100) startDeg = clampi(startOverride, 0, hi);
     const int asma = clampi(m.asma[0] < 0 ? 1 : m.asma[0], 1, hi);
     struct Way { int at, deg; };
     Way way[6];
@@ -153,9 +157,15 @@ void genPhrase(const Makam& m, const GenParams& p, int usul, Phrase& out, uint32
     if (m.seyir == kSeyirAsc && peak != guclu) addWay(n / 2, peak);
     addWay(n * 7 / 10, asma);                                   // asma karar
     if (ways == 0) way[ways++] = Way{approachAt > 1 ? approachAt - 1 : 0, guclu};   // short cycle: guclu anyway
-    const bool yeden = m.yedenCadence ? r.chance(65) : r.chance(15);
-    way[ways++] = Way{approachAt, yeden ? -1 : 1};          // approach to the karar
-    way[ways++] = Way{finalAt, 0};                          // tam karar
+    if (finalDeg == 0) {
+        const bool yeden = m.yedenCadence ? r.chance(65) : r.chance(15);
+        way[ways++] = Way{approachAt, yeden ? -1 : 1};      // approach to the karar
+    } else {
+        int ap = finalDeg + ((r.chance(60) || finalDeg <= 1) ? 1 : -1);
+        if (ap > hi) ap = finalDeg - 1;
+        way[ways++] = Way{approachAt, ap};                  // to the guclu by step
+    }
+    way[ways++] = Way{finalAt, finalDeg};                   // tam karar (or the call's yarim karar)
     onset[0] = true;
     for (int w = 0; w < ways; ++w) onset[way[w].at] = true;
     if (startDeg == guclu) {}   // a guclu start already emphasises it
@@ -191,7 +201,7 @@ void genPhrase(const Makam& m, const GenParams& p, int usul, Phrase& out, uint32
             else if (deg < hi) flags |= kNoteGrace;                            // grace from the degree above
         }
         if (i == finalAt && r.chance(orn / 3)) flags |= kNoteGlide;   // slide into the karar
-        out.s[i] = NoteStep{deg, flags};
+        seg[i] = NoteStep{deg, flags};
         cur = deg;
         last = i;
     }
@@ -199,15 +209,56 @@ void genPhrase(const Makam& m, const GenParams& p, int usul, Phrase& out, uint32
     int starts[8];
     const int groups = usulGroups(usul, starts, 8);
     for (int i = 1; i < n; ++i) {
-        if (out.s[i].flags & kNoteOn) continue;
-        const NoteStep prev = out.s[i - 1];
+        if (seg[i].flags & kNoteOn) continue;
+        const NoteStep prev = seg[i - 1];
         if (!(prev.flags & (kNoteOn | kNoteTie))) continue;
         bool groupStart = false;
         for (int g = 0; g < groups; ++g)
             if (starts[g] == i % len) groupStart = true;
         const bool breath = i < finalAt && groupStart && r.chance(30 + (100 - dens) / 3);
-        if (!breath) out.s[i] = NoteStep{prev.deg, kNoteTie};
+        if (!breath) seg[i] = NoteStep{prev.deg, kNoteTie};
     }
+    return n;
+}
+}  // namespace
+
+void genPhrase(const Makam& m, const GenParams& p, int usul, Phrase& out, uint32_t seed) {
+    GenRng r(seed * 2654435761u + 12345u);
+    const int cycles = clampi(out.cycles, 1, 4);
+    out.cycles = cycles;
+    for (auto& x : out.s) x = NoteStep();
+    if (p.form == 1 && cycles >= 2) {
+        // Call + response: the call ends on the guclu (yarim karar), the
+        // response answers with the call's rhythm and closes on the karar.
+        const int half = cycles / 2;
+        const int len = usulLength(usul);
+        const int hi = clampi(p.range, 4, 14);
+        const int guclu = m.guclu < hi ? m.guclu : hi;
+        const int nCall = genSegment(m, p, usul, out.s, half, r, guclu, -100, nullptr);
+        NoteStep rhythm[kPhraseMax];
+        for (int i = 0; i < kPhraseMax; ++i) rhythm[i] = (i < nCall) ? out.s[i] : NoteStep();
+        // the answer may be longer than the call (3 cycles = 1 + 2): repeat the call's rhythm
+        for (int i = nCall; i < kPhraseMax; ++i) rhythm[i] = out.s[i % (nCall ? nCall : 1)];
+        int from = guclu;
+        for (int i = nCall - 1; i >= 0; --i)
+            if (out.s[i].flags & kNoteOn) { from = out.s[i].deg; break; }
+        GenParams q = p;
+        q.start = 2;
+        const int room = kPhraseMax - half * len;
+        int respCycles = cycles - half;
+        while (respCycles * len > room && respCycles > 1) --respCycles;
+        genSegment(m, q, usul, out.s + half * len, respCycles, r, 0, from > 1 ? from - 1 : from, rhythm);
+        return;
+    }
+    genSegment(m, p, usul, out.s, cycles, r, 0, -100, nullptr);
+}
+
+int phraseCallEnd(const Phrase& p, int usul) {
+    const int len = usulLength(usul);
+    const int half = (p.cycles < 2 ? 1 : p.cycles / 2) * len;
+    for (int i = half - 1; i >= 0; --i)
+        if (p.s[i].flags & kNoteOn) return p.s[i].deg;
+    return -100;
 }
 
 }  // namespace makam

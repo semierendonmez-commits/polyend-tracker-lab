@@ -70,4 +70,18 @@ bool inMakam(const Makam& m, int comma);
 // Nearest degree to an absolute comma (for MIDI-in quantising).
 int nearestDegree(const Makam& m, int comma);
 
+// Practice intonation (Settings / Makam page "Intonation: Practice"): the
+// perdes performers place off their written AEU position, in commas, per
+// makam (TDV: Saba's Hicaz 2-2.5 commas high, Huzzam's Hisar 1-1.5 high;
+// the Ussak-family Segah about a comma low). Returns the comma to play.
+int practiceComma(int makamIndex, int comma);
+// The 53-TET comma grid is used for a practice pitch that is not an AEU perde.
+struct PracticeShift {
+    const char* makam;
+    int8_t pitchClass;   // comma 0..52 above Cargah
+    int8_t delta;        // commas
+};
+constexpr int kPracticeShifts = 12;
+extern const PracticeShift kPractice[kPracticeShifts];
+
 }  // namespace makam

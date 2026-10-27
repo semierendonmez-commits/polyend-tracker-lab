@@ -231,7 +231,161 @@ void classifySlices(Kit& kit) {
     kit.index();
 }
 
-bool loadWavKit(Kit& kit, ot::IStorage& fs, const char* path) {
+// ---- onset slicer -------------------------------------------------------------
+// Spectral-flux onsets after the semi fork's "Breaks" auto-slice detector
+// (OpenTracker semi fork, src/core/app/auto_slice.cpp, GPL-3.0 per the lab):
+// 256-point Hann frames every 128 samples (2.9 ms), the half-wave rectified
+// rise of the square-rooted magnitudes, high bins weighted more, a peak over
+// its two neighbours each side and over 1.5 x the local mean, 46 ms spacing
+// (the stronger of two close onsets), the onset refined to the 32-sample
+// block where the energy doubles. Written again here for MAKAM's kit.
+namespace {
+constexpr int kFftN = 256, kHop = 128, kBins = kFftN / 2 + 1;
+void fft256(float* re, float* im, const float* cosT, const float* sinT) {
+    for (int i = 1, j = 0; i < kFftN; ++i) {   // bit reversal
+        int bit = kFftN >> 1;
+        for (; j & bit; bit >>= 1) j ^= bit;
+        j ^= bit;
+        if (i < j) {
+            float t = re[i]; re[i] = re[j]; re[j] = t;
+            t = im[i]; im[i] = im[j]; im[j] = t;
+        }
+    }
+    for (int len = 2; len <= kFftN; len <<= 1) {
+        const int step = kFftN / len;
+        for (int i = 0; i < kFftN; i += len)
+            for (int k = 0; k < len / 2; ++k) {
+                const float wr = cosT[k * step], wi = -sinT[k * step];
+                const int a = i + k, b = a + len / 2;
+                const float xr = re[b] * wr - im[b] * wi, xi = re[b] * wi + im[b] * wr;
+                re[b] = re[a] - xr;
+                im[b] = im[a] - xi;
+                re[a] += xr;
+                im[a] += xi;
+            }
+    }
+}
+}  // namespace
+
+int onsetSlices(Kit& kit, float* scratch) {
+    for (int i = 0; i <= kSlices; ++i) kit.start[i] = uint32_t(uint64_t(kit.frames) * uint32_t(i) / kSlices);
+    if (!scratch || !kit.data || kit.frames < 8192) return 0;
+    // scratch layout: win, cos, sin, re, im, prev, candidates
+    float* win = scratch;
+    float* cosT = win + kFftN;
+    float* sinT = cosT + kFftN;
+    float* re = sinT + kFftN;
+    float* im = re + kFftN;
+    float* prev = im + kFftN;
+    constexpr int kMaxCand = 96;
+    float* candVal = prev + kBins + 3;
+    uint32_t* candPos = reinterpret_cast<uint32_t*>(candVal + kMaxCand);
+    for (int i = 0; i < kFftN; ++i) {
+        const float a = 6.2831853f * float(i) / float(kFftN);
+        cosT[i] = cosf(a);
+        sinT[i] = sinf(a);
+        win[i] = 0.5f - 0.5f * cosf(6.2831853f * (float(i) + 0.5f) / float(kFftN));
+    }
+    for (int k = 0; k < kBins; ++k) prev[k] = 0.0f;
+    float hist[16] = {};
+    float peakMax = 0.0f;
+    int nCand = 0;
+    uint32_t lastCand = 0;
+    const uint32_t spacing = 2048;
+    uint32_t frame = 0;
+    for (uint32_t f0 = 0; f0 + kFftN <= kit.frames; f0 += kHop, ++frame) {
+        for (int i = 0; i < kFftN; ++i) {
+            re[i] = float(kit.data[f0 + uint32_t(i)]) * win[i];
+            im[i] = 0.0f;
+        }
+        fft256(re, im, cosT, sinT);
+        float flux = 0.0f;
+        for (int k = 0; k < kBins; ++k) {
+            const float m = sqrtf(sqrtf(re[k] * re[k] + im[k] * im[k]));
+            const float d = m - prev[k];
+            prev[k] = m;
+            if (k >= 1 && d > 0.0f) flux += d * (1.0f + float(k) / float(kBins));
+        }
+        for (int i = 0; i < 15; ++i) hist[i] = hist[i + 1];
+        hist[15] = flux;
+        if (flux > peakMax) peakMax = flux;
+        if (frame < 4) continue;
+        const float c = hist[13];
+        bool peak = c > 0.0f;
+        for (int i = 11; i <= 15; ++i)
+            if (i != 13 && hist[i] >= c) peak = false;
+        float mean = 0.0f;
+        for (int i = 0; i < 16; ++i) mean += hist[i];
+        mean *= 1.0f / 16.0f;
+        if (!peak || c <= 1.5f * mean + 0.04f * peakMax) continue;
+        // refine: the first 32-sample block whose energy doubles, one block early
+        uint32_t pos = (frame - 2) * kHop + kFftN / 2;
+        {
+            const uint32_t fr = (frame - 2) * kHop;
+            float prevE = 0.0f;
+            for (uint32_t b = 0; b * 32 < kFftN && fr + (b + 1) * 32 <= kit.frames; ++b) {
+                float e = 1.0f;
+                for (uint32_t i = 0; i < 32; ++i) {
+                    const float x = float(kit.data[fr + b * 32 + i]);
+                    e += x * x;
+                }
+                if (b > 0 && e > 2.0f * prevE && e > 2000.0f * 32.0f) {
+                    pos = fr + (b > 1 ? b - 1 : 0) * 32;
+                    break;
+                }
+                prevE = e;
+            }
+        }
+        if (nCand > 0 && pos < lastCand + spacing) {
+            if (c > candVal[nCand - 1]) {
+                candVal[nCand - 1] = c;
+                candPos[nCand - 1] = pos;
+                lastCand = pos;
+            }
+        } else if (nCand < kMaxCand) {
+            candVal[nCand] = c;
+            candPos[nCand] = pos;
+            ++nCand;
+            lastCand = pos;
+        }
+    }
+    // the strongest 15 after the start, back in time order
+    int idx[kMaxCand];
+    int n = 0;
+    for (int i = 0; i < nCand; ++i)
+        if (candPos[i] >= spacing && candPos[i] + spacing < kit.frames) idx[n++] = i;
+    const int found = n;
+    for (int i = 1; i < n; ++i)
+        for (int j = i; j > 0 && candVal[idx[j]] > candVal[idx[j - 1]]; --j) {
+            const int t = idx[j]; idx[j] = idx[j - 1]; idx[j - 1] = t;
+        }
+    if (n > kSlices - 1) n = kSlices - 1;
+    uint32_t pts[kSlices + 1];
+    int np = 0;
+    pts[np++] = 0;
+    for (int i = 0; i < n; ++i) pts[np++] = candPos[idx[i]];
+    for (int i = 1; i < np; ++i)
+        for (int j = i; j > 1 && pts[j] < pts[j - 1]; --j) {
+            const uint32_t t = pts[j]; pts[j] = pts[j - 1]; pts[j - 1] = t;
+        }
+    // fewer than 16: split the longest gap until there are 16 slices
+    while (np < kSlices) {
+        int best = 0;
+        uint32_t gap = 0;
+        for (int i = 0; i < np; ++i) {
+            const uint32_t end = i + 1 < np ? pts[i + 1] : kit.frames;
+            if (end - pts[i] > gap) { gap = end - pts[i]; best = i; }
+        }
+        for (int i = np; i > best + 1; --i) pts[i] = pts[i - 1];
+        pts[best + 1] = pts[best] + gap / 2;
+        ++np;
+    }
+    for (int i = 0; i < kSlices; ++i) kit.start[i] = pts[i];
+    kit.start[kSlices] = kit.frames;
+    return found;
+}
+
+bool loadWavKit(Kit& kit, ot::IStorage& fs, const char* path, bool autoSlice, float* scratch) {
     if (!kit.data) return false;
     ot::WavImportOptions opt;
     ot::WavImportResult res;
@@ -252,6 +406,7 @@ bool loadWavKit(Kit& kit, ot::IStorage& fs, const char* path) {
     }
     kit.bpm = best;
     for (int i = 0; i <= kSlices; ++i) kit.start[i] = uint32_t(uint64_t(kit.frames) * uint32_t(i) / kSlices);
+    if (autoSlice && scratch) onsetSlices(kit, scratch);
     const char* slash = path;
     for (const char* p = path; *p; ++p)
         if (*p == '/') slash = p + 1;

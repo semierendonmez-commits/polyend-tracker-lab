@@ -44,6 +44,11 @@ void genBass(Song& s, int v);
 // Degrees stay within -1 (yeden) .. params.range.
 void genPhrase(const Makam& m, const GenParams& p, int usul, Phrase& out, uint32_t seed);
 
+// Form = call + response (GenParams::form 1, 2+ cycles): the call (first
+// half) ends on the guclu, the response keeps its rhythm and ends on the karar.
+// The last degree played in the call half.
+int phraseCallEnd(const Phrase& p, int usul);
+
 // Last sounding degree of a phrase (the test checks the cadence).
 int phraseLastDegree(const Phrase& p, int usul);
 int phraseSteps(const Phrase& p, int usul);

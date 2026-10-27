@@ -115,6 +115,16 @@ void pVerb(Module&, Proc&);
 void pGrain(Module&, Proc&);
 void pOut(Module&, Proc&);
 
+// Shared tables of the round-2 modules (particle windows...), from the arena.
+bool initModuleTables(lab::Arena& a);
+// Plaits voices (graf_mod_plaits.cpp): one pooled voice per PLTS module.
+void* plaitsAlloc(lab::Arena& a);
+void plaitsReset(void* voice);
+int32_t plaitsCost(int model);   // M4 instructions per block of one Plaits model
+extern const char* const kPlaitsModels[24];
+// Which output of a sequencing module is its LABKIT lane.
+int laneOutput(int type);
+
 // Markov matrix from a seed (MARKOV ext bytes).
 void markovSeed(Module& m, int seed);
 // Pinball table layout (PINB ext bytes).
