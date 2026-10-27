@@ -662,7 +662,14 @@ void Shell::drawFrame() {
             ws_->draw(g);
             g.setLimit(Canvas::kBudgetWords);
         }
-        if (kit_) kit_->draw(g);
+        if (kit_) {
+            // BULUT fix: a full-screen view (MAP of a big registry) fills the
+            // budget; keep room for the toast and the REC badge drawn after it.
+            const bool toast = toast_[0] && int32_t(toastUntil_ - millis()) > 0;
+            if (toast || recOn_) g.setLimit(Canvas::kBudgetWords - 64u);
+            kit_->draw(g);
+            g.setLimit(Canvas::kBudgetWords);
+        }
         if (recOn_) {   // REC badge on top of every page
             g.color(t.warn);
             g.fillRound(700, 36, 92, 22, 6);

@@ -1,7 +1,7 @@
 // BULUT drawing: intro, the seven pages, particles, pad LEDs (bulut_ws.h).
 //
 // Display-list budget: the Shell may reserve words for its overlays
-// (Canvas::setLimit); every batch here asks g.room() first and the particle
+// (Canvas::setLimit); every batch here asks roomFor(g, ) first and the particle
 // renderer only gets what is left, so a frame never overflows.
 #include <cmath>
 #include <cstdio>
@@ -25,6 +25,11 @@ const Rgb kRed(0xFF6B6B);
 
 const char* const kPageName[kPages] = {"CLOUDS", "SOUND", "SOURCE", "FX", "MOTION", "FREEZE", "FILE"};
 const char* const kF8[kPages] = {"GEST REC", "ENGINE >", "REGION", "+ ROUTE", "GEST REC", "CAPTURE", "SAVE"};
+
+// The Shell draws its toast and REC badge after the page without reserving
+// words for them (~120): the variable parts of a page leave that much free.
+constexpr uint32_t kShellMargin = 130;
+inline bool roomFor(const Canvas& g, uint32_t w) { return g.room(w + kShellMargin); }
 
 inline float hash01(uint32_t x) {
     x ^= x >> 16;
@@ -187,7 +192,8 @@ void Bulut::drawBadges(Canvas& g, int c, int x, int y) {
     if (s.drone) x += pill(g, theme_, x, y, "DRONE", chColor(c), false);
     if (s.hold && par_[c].source != kSrcSample) x += pill(g, theme_, x, y, "HOLD", theme_.fg, false);
     if (s.mute) x += pill(g, theme_, x, y, "MUTE", theme_.dim, true);
-    if (eng_->soloMask & (1u << c)) pill(g, theme_, x, y, "SOLO", theme_.ok, true);
+    if (eng_->soloMask & (1u << c)) x += pill(g, theme_, x, y, "SOLO", theme_.ok, true);
+    if (((eng_->cpuBypass | eng_->cpuHold) >> c) & 1) pill(g, theme_, x, y, "CPU", kRed, false);
 }
 
 // The grain field of a channel: the region's waveform (what the pads read),
@@ -201,14 +207,14 @@ void Bulut::drawField(Canvas& g, int c, int x, int y, int w, int h, bool big) {
     g.color(mix(theme_.bg, frz ? kLilac : col, 0.06f));
     g.fill(x, y, w, h);
     // soft glow under the pad columns where grains are born
-    if (g.room(40)) {
+    if (roomFor(g, 40)) {
         g.beginPoints();
         g.color(frz ? kLilac : col);
         for (int k = 0; k < 12; ++k) {
             const float gl = colGlow_[c][k];
             if (gl < 0.05f) continue;
-            g.alpha(uint8_t(gl * 46.0f));
-            g.pointSize(float(h) * (big ? 0.42f : 0.55f));
+            g.alpha(uint8_t(gl * 30.0f));
+            g.pointSize(float(h) * (big ? 0.34f : 0.42f));
             g.vtx(float(x) + (float(k) + 0.5f) * float(w) / 12.0f, float(y) + float(h) * 0.5f);
         }
         g.endBatch();
@@ -216,7 +222,7 @@ void Bulut::drawField(Canvas& g, int c, int x, int y, int w, int h, bool big) {
     }
     // waveform of the region (or the freeze loop / a pitch ruler)
     const int bars = big ? 64 : 48;
-    if (!synth && !empty && g.room(bars * 2 + 10)) {
+    if (!synth && !empty && roomFor(g, bars * 2 + 10)) {
         g.color(mix(theme_.bg, frz ? kLilac : col, big ? 0.42f : 0.34f));
         g.beginLines();
         const float cy = float(y) + float(h) * 0.5f;
@@ -229,7 +235,7 @@ void Bulut::drawField(Canvas& g, int c, int x, int y, int w, int h, bool big) {
             g.vtx(hx, cy + hh);
         }
         g.endBatch();
-    } else if (synth && g.room(30)) {
+    } else if (synth && roomFor(g, 30)) {
         g.color(mix(theme_.bg, col, 0.25f));
         g.beginLines();
         for (int k = 0; k <= 12; ++k) {
@@ -241,7 +247,7 @@ void Bulut::drawField(Canvas& g, int c, int x, int y, int w, int h, bool big) {
         g.endBatch();
     }
     // pad column grid (the pads read the region left to right)
-    if (big && g.room(40)) {
+    if (big && roomFor(g, 40)) {
         g.color(mix(theme_.bg, col, 0.18f));
         g.beginLines();
         for (int k = 1; k < 12; ++k) {
@@ -282,7 +288,11 @@ void Bulut::drawField(Canvas& g, int c, int x, int y, int w, int h, bool big) {
 // Particles of one channel: a soft halo, a bright core, fading motes; at most
 // `limit` vertices and never past the room the Shell leaves.
 void Bulut::drawParticles(Canvas& g, int c, int x, int y, int w, int h, bool big, uint32_t limit) {
-    if (!g.room(60)) return;
+    if (!deferDone_) {   // pages ask; draw() renders them after the overlays and the footer
+        if (nDefer_ < 4) deferReq_[nDefer_++] = PartReq{int16_t(c), int16_t(x), int16_t(y), int16_t(w), int16_t(h), big, limit};
+        return;
+    }
+    if (!roomFor(g, 60)) return;
     const Rgb col = st_[c].freeze ? mix(chColor(c), kLilac, 0.5f) : chColor(c);
     g.clip(x, y, w, h);
     uint32_t used = 0;
@@ -295,7 +305,7 @@ void Bulut::drawParticles(Canvas& g, int c, int x, int y, int w, int h, bool big
     for (int i = 0; i < kParticles && halos < (big ? 40 : 14); ++i) {
         const Particle& p = part_[i];
         if (p.life <= 0.0f || p.cloud != c || p.size < 2 || p.age > p.life * 0.4f) continue;
-        if (!g.room(30) || used >= limit) break;
+        if (!roomFor(g, 30) || used >= limit) break;
         g.vtx(float(x) + p.x * float(w), float(y) + p.y * float(h));
         ++halos;
         ++used;
@@ -313,7 +323,7 @@ void Bulut::drawParticles(Canvas& g, int c, int x, int y, int w, int h, bool big
                     if (p.life <= 0.0f || p.cloud != c || p.size != sz || p.live != bright) continue;
                     const int b = int((p.age / p.life) * 4.0f);
                     if ((b > 3 ? 3 : b) != ab) continue;
-                    if (!g.room(12) || used >= limit) break;
+                    if (!roomFor(g, 12) || used >= limit) break;
                     if (first) {
                         g.alpha(kA[ab]);
                         first = false;
@@ -394,7 +404,7 @@ void Bulut::drawKnob(Canvas& g, int c, int idx, int x, int y, int w, bool focuse
     const kit::ParamId id = pid_[c][idx];
     const float v = P.norm(id);
     const float ev = P.effectiveNorm(id);
-    const int h = 62;
+    const int h = knobH_;
     g.color(focused ? mix(theme_.panel, col, 0.28f) : theme_.panel);
     g.fill(x, y, w - 4, h);
     if (focused) {
@@ -410,19 +420,20 @@ void Bulut::drawKnob(Canvas& g, int c, int idx, int x, int y, int w, bool focuse
     }
     char t[24];
     paramText(c, idx, t, sizeof t);
+    const int by = y + h - 12;   // the bar sits at the bottom of the cell
     g.color(focused ? kWhite : theme_.fg);
-    g.text(x + 10, y + 32, font::kBody, t, Canvas::kCenterY);
+    g.text(x + 10, y + 11 + (by - y - 11) / 2, h > 70 ? font::kLarge : font::kBody, t, Canvas::kCenterY);
     // bar: base value, and a tick where modulation takes it
     const int bw = w - 24;
     g.color(mix(theme_.bg, col, 0.25f));
-    g.fill(x + 10, y + 50, bw, 4);
+    g.fill(x + 10, by, bw, 4);
     const bool bip = idx == CP::Pan;
     g.color(col);
-    if (bip) g.fill(x + 10 + int(float(bw - 4) * v), y + 48, 4, 8);
-    else g.fill(x + 10, y + 50, int(float(bw) * v), 4);
+    if (bip) g.fill(x + 10 + int(float(bw - 4) * v), by - 2, 4, 8);
+    else g.fill(x + 10, by, int(float(bw) * v), 4);
     if (ev < v - 0.005f || ev > v + 0.005f) {
         g.color(theme_.accent2);
-        g.fill(x + 10 + int(float(bw - 2) * clamp01(ev)), y + 46, 2, 12);
+        g.fill(x + 10 + int(float(bw - 2) * clamp01(ev)), by - 4, 2, 12);
     }
 }
 
@@ -436,6 +447,8 @@ void Bulut::draw(Canvas& g) {
     else
         std::snprintf(title, sizeof title, "%s", kPageName[page_]);
     lab::drawHeader(g, theme_, *ctx_->shell, title);
+    deferDone_ = false;
+    nDefer_ = 0;
     switch (page_) {
         case kPgClouds: drawPageClouds(g); break;
         case kPgSound: drawPageSound(g); break;
@@ -477,6 +490,14 @@ void Bulut::draw(Canvas& g) {
                Canvas::kCenterY);
     }
     drawFooter(g);
+    // particles last: they get the words that are left
+    deferDone_ = true;
+    for (int i = 0; i < nDefer_; ++i) {
+        const PartReq& q = deferReq_[i];
+        if (shift_ && q.y + q.h > 396) continue;   // under the pad map
+        drawParticles(g, q.c, q.x, q.y, q.w, q.h, q.big, q.limit);
+    }
+    nDefer_ = 0;
 }
 
 // ---- CLOUDS: the four channels ---------------------------------------------------------------
@@ -585,7 +606,9 @@ void Bulut::drawPageSound(Canvas& g) {
     g.textf(782, fy + 12, font::kTiny, Canvas::kCenterY | Canvas::kRight, "%d grains", eng_->rt[c].active);
     drawBadges(g, c, 586, fy + 6);
     // the 12 knobs: 3 rows of 4
-    for (int i = 0; i < kKnobs; ++i) drawKnob(g, c, i, 8 + (i % 4) * 196, 176 + (i / 4) * 68, 196, i == cur_[kPgSound]);
+    knobH_ = 84;
+    for (int i = 0; i < kKnobs; ++i) drawKnob(g, c, i, 8 + (i % 4) * 196, 174 + (i / 4) * 91, 196, i == cur_[kPgSound]);
+    knobH_ = 62;
     drawParticles(g, c, fx, fy, fw, fh, true, 420u);
 }
 
@@ -604,7 +627,7 @@ void Bulut::drawPageSource(Canvas& g) {
     g.fill(wx + int(a0 * float(ww)), wy, int((a1 - a0) * float(ww)) + 1, wh);
     // the whole source, 96 columns
     const bool empty = par_[c].source == kSrcSample && r.sampleLen == 0;
-    if (!empty && g.room(220)) {
+    if (!empty && roomFor(g, 220)) {
         g.beginLines();
         const float cy = float(wy) + float(wh) * 0.5f;
         bool in = false;
@@ -628,7 +651,7 @@ void Bulut::drawPageSource(Canvas& g) {
     g.fill(wx + int(a0 * float(ww - 2)), wy, 2, wh);
     g.fill(wx + int(a1 * float(ww - 2)), wy, 2, wh);
     // where grains are born right now (particles mapped into the region)
-    if (g.room(140)) {
+    if (roomFor(g, 140)) {
         g.clip(wx, wy, ww, wh);
         g.beginPoints();
         g.color(mix(col, kWhite, 0.5f));
@@ -637,7 +660,7 @@ void Bulut::drawPageSource(Canvas& g) {
         for (int i = 0; i < kParticles && n < 90; ++i) {
             const Particle& p = part_[i];
             if (p.life <= 0.0f || p.cloud != c || p.size == 0) continue;
-            if (!g.room(40)) break;
+            if (!roomFor(g, 40)) break;
             g.alpha(uint8_t(220.0f * (1.0f - p.age / p.life)));
             g.vtx(float(wx) + (a0 + p.x * (a1 - a0)) * float(ww), float(wy) + p.y * float(wh));
             ++n;
@@ -697,7 +720,7 @@ void Bulut::drawPageSource(Canvas& g) {
         char v[40];
         if (i < 8) {
             const int idx = (i == 0 ? CP::Source : i == 1 ? CP::Gain : i == 2 ? CP::Start : i == 3 ? CP::End :
-                             i == 4 ? CP::GenType : i == 5 ? CP::GenA : i == 6 ? CP::GenB : CP::Bed);
+                             i == 4 ? CP::Bed : i == 5 ? CP::GenType : i == 6 ? CP::GenA : CP::GenB);
             label = idx == CP::GenA ? genLabel(par_[c].genType, 0) : (idx == CP::GenB ? genLabel(par_[c].genType, 1) : paramName(c, idx));
             paramText(c, idx, v, sizeof v);
             if (idx == CP::GenA || idx == CP::GenB || idx == CP::GenType) {
@@ -740,7 +763,10 @@ void Bulut::drawPageFx(Canvas& g) {
                 else std::snprintf(v, sizeof v, "OFF");
                 break;
             case 4: on = p.fxMode != kFxOff; std::snprintf(v, sizeof v, "%s", fxName(p.fxMode)); break;
-            default: std::snprintf(v, sizeof v, "%d%%", int(p.level * 100.0f + 0.5f)); break;
+            default:
+                std::snprintf(v, sizeof v, "%d D%d R%d", int(p.level * 100.0f + 0.5f), int(p.dly * 100.0f + 0.5f),
+                              int(p.rev * 100.0f + 0.5f));
+                break;
         }
         g.color(on ? mix(theme_.panel, col, 0.3f) : theme_.panel);
         g.fillRound(x, y, 118, 48, 6.0f);
@@ -754,11 +780,14 @@ void Bulut::drawPageFx(Canvas& g) {
         }
     }
     g.color(theme_.dim);
-    g.textf(792, 96, font::kTiny, Canvas::kCenterY | Canvas::kRight, "then sends: DLY %d%%  REV %d%%  -> master",
-            int(p.dly * 100.0f + 0.5f), int(p.rev * 100.0f + 0.5f));
+    if ((eng_->cpuBypass >> c) & 1) {
+        g.color(kRed);
+        g.text(792, 96, font::kTiny, "CPU: FX bypassed (too many heavy chains)", Canvas::kCenterY | Canvas::kRight);
+        g.color(theme_.dim);
+    }
     g.text(8, 96, font::kTiny, "INSERT", Canvas::kCenterY);
     g.text(270, 96, font::kTiny, "FX MODE", Canvas::kCenterY);
-    g.text(532, 96, font::kTiny, "CHANNEL LFO + ROUTES", Canvas::kCenterY);
+    if (!((eng_->cpuBypass >> c) & 1)) g.text(532, 96, font::kTiny, "CHANNEL LFO + ROUTES", Canvas::kCenterY);
     // three columns of param cells (cursor runs down a column, Left/Right jumps)
     const int cur = cur_[kPgFx];
     for (int i = 0; i < 10; ++i) {
@@ -871,22 +900,31 @@ void Bulut::drawPageMotion(Canvas& g) {
         if (!ge.len) continue;
         const float x0 = 76.0f, wl = 516.0f;
         const int maxEv = selc ? 160 : 60;
-        if (g.room(maxEv * 2 + 40)) {
-            g.color(mix(theme_.bg, col, st_[c].gestOn ? 0.9f : 0.4f));
-            g.beginLines();
+        if (roomFor(g, maxEv * 2 + 40)) {
+            // each pad press: a bar from down to up, its height = the pad row
+            g.color(mix(theme_.bg, col, st_[c].gestOn ? 0.75f : 0.35f));
+            g.beginRects();
             int shown = 0;
             for (int i = 0; i < ge.count && shown < maxEv; ++i) {
                 const GestEvent& e = ge.ev[i];
                 if (e.type != kGPadDown) continue;
-                const float ex = x0 + wl * float(e.t) / float(ge.len);
-                const float top = float(y + 4 + (e.a / 12) * 6);
-                g.vtx(ex, top);
-                g.vtx(ex, top + 7.0f);
+                uint32_t tUp = ge.len;
+                for (int j = i + 1; j < ge.count; ++j)
+                    if (ge.ev[j].type == kGPadUp && ge.ev[j].a == e.a) {
+                        tUp = ge.ev[j].t;
+                        break;
+                    }
+                const float x0e = x0 + wl * float(e.t) / float(ge.len);
+                float x1e = x0 + wl * float(tUp) / float(ge.len);
+                if (x1e < x0e + 2.0f) x1e = x0e + 2.0f;
+                const float top = float(y + 4 + (e.a / 12) * 7);
+                g.vtx(x0e, top);
+                g.vtx(x1e, top + 5.0f);
                 ++shown;
             }
             g.endBatch();
         }
-        if (g.room(maxEv + 40)) {
+        if (roomFor(g, maxEv + 40)) {
             g.color(theme_.accent2);
             g.pointSize(1.5f);
             g.beginPoints();
@@ -1085,7 +1123,7 @@ void Bulut::drawPageFreeze(Canvas& g) {
         const bool cur = i == frzCur_ && frzFocus_ == 0;
         g.color(cur ? mix(theme_.panel, kLilac, 0.3f) : theme_.panel);
         g.fill(x, y, 94, 82);
-        if (fs.used && g.room(40)) {
+        if (fs.used && roomFor(g, 40)) {
             g.color(cur ? kWhite : mix(kLilac, chColor(fs.cloud), 0.4f));
             g.beginStrip();
             for (int k = 0; k < 22; ++k) {
@@ -1178,7 +1216,7 @@ void Bulut::drawPageFile(Canvas& g) {
     }
     if (rsLabel_[0]) {
         g.color(theme_.dim);
-        g.text(x + 12, 246, font::kTiny, "LAST", Canvas::kCenterY);
+        g.text(x + 12, 246, font::kTiny, rsState_ ? "THIS TAKE" : "LAST TAKE", Canvas::kCenterY);
         g.color(theme_.fg);
         g.text(x + 12, 262, font::kTiny, rsLabel_, Canvas::kCenterY);
     }

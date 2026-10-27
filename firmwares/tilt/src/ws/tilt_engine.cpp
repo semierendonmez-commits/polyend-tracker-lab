@@ -219,23 +219,6 @@ void Engine::tick(double beat) {
     if (tiltLeft > 0) --tiltLeft;
     if (shakeLeft > 0) --shakeLeft;
     if (fillLeft > 0) --fillLeft;
-    // memory back to neutral (only while some edge remembers something)
-    const float rec = float(p_->ev.recover) * 0.0005f;
-    if (rec > 0.0f && memActive_) {
-        float dev = 0.0f;
-        for (int r = 0; r < kStates; ++r)
-            for (int c = 0; c < kStates; ++c) {
-                float& m = mem[r][c];
-                m += (1.0f - m) * rec;
-                const float d = m > 1.0f ? m - 1.0f : 1.0f - m;
-                dev = d > dev ? d : dev;
-            }
-        if (dev < 1e-3f) {
-            for (int r = 0; r < kStates; ++r)
-                for (int c = 0; c < kStates; ++c) mem[r][c] = 1.0f;
-            memActive_ = false;
-        }
-    }
     for (auto& h : heat) h *= 0.94f;
     if (replay_) replayHits(beat);
     computeOdds();
@@ -264,27 +247,61 @@ void Engine::onBar(int64_t bar, double beat) {
             }
         }
     }
-    // mutation: the page's weights drift, and are pulled back home. The rows
-    // are worked through over the next moves (a few per move), not all at once.
-    mutPage_ = uint8_t(clampi(ev.page, 0, kPages - 1));
+    // memory recovers towards neutral: Recover % of the way, once per bar
+    const float rec = float(ev.recover) * 0.01f;
+    if (rec > 0.0f && memActive_) {
+        float dev = 0.0f;
+        for (int r = 0; r < kStates; ++r)
+            for (int c = 0; c < kStates; ++c) {
+                float& m = mem[r][c];
+                m += (1.0f - m) * rec;
+                const float d = m > 1.0f ? m - 1.0f : 1.0f - m;
+                dev = d > dev ? d : dev;
+            }
+        if (dev < 1e-3f) {
+            for (int r = 0; r < kStates; ++r)
+                for (int c = 0; c < kStates; ++c) mem[r][c] = 1.0f;
+            memActive_ = false;
+        }
+    }
+    // mutation (the TILT readme): up to 24 weights of the page drift by up to
+    // +-30 every bar (both scale with Amount); Spread lets empty cells drift too
+    const int pg = clampi(ev.page, 0, kPages - 1);
+    if (ev.mutate) {
+        const float a = float(ev.mutate) * 0.01f;
+        const int count = int(24.0f * a + 0.5f);
+        uint16_t picked[24];
+        int np = 0;
+        for (int k = 0; k < count; ++k) {
+            int r = 0, c = 0;
+            bool ok = false;
+            for (int tries = 0; tries < 12 && !ok; ++tries) {
+                r = rng_.below(kStates);
+                c = rng_.below(kStates);
+                ok = p_->w[pg][r][c] > 0 || mut[pg][r][c] != 0.0f || (ev.mutSpread && rng_.pct(ev.mutSpread));
+                for (int q = 0; q < np && ok; ++q) ok = picked[q] != uint16_t(r * kStates + c);   // each weight once a bar
+            }
+            if (!ok) continue;
+            picked[np++] = uint16_t(r * kStates + c);
+            float& m = mut[pg][r][c];
+            const int base = p_->w[pg][r][c];
+            m = clampf(m + (rng_.uni() * 2.0f - 1.0f) * 30.0f * a, -float(base), 100.0f - float(base));
+        }
+    }
+    // Home pulls the drift back: the rows are worked through over the next moves
+    mutPage_ = uint8_t(pg);
     mutRow_ = 0;
 }
 
 void Engine::mutateRows(int rows) {
-    const Evolve& ev = p_->ev;
+    const float home = float(p_->ev.mutHome) * 0.01f;
     const int pg = mutPage_;
-    const float amt = float(ev.mutate) * 0.35f;
-    const float home = float(ev.mutHome) * 0.01f;
     for (; rows > 0 && mutRow_ < kStates; --rows, ++mutRow_) {
-        if (amt <= 0.0f && home <= 0.0f) continue;
-        const int r = mutRow_;
+        if (home <= 0.0f) continue;
         for (int c = 0; c < kStates; ++c) {
-            float& m = mut[pg][r][c];
-            const int base = p_->w[pg][r][c];
-            if (amt > 0.0f && (base > 0 || m != 0.0f || (ev.mutSpread && rng_.pct(ev.mutSpread / 4))))
-                m += (rng_.uni() * 2.0f - 1.0f) * amt;
+            float& m = mut[pg][mutRow_][c];
+            if (m == 0.0f) continue;
             m -= m * home;
-            m = clampf(m, -float(base), 100.0f - float(base));
             if (m > -0.05f && m < 0.05f) m = 0.0f;
         }
     }

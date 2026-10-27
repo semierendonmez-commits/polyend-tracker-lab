@@ -1,16 +1,24 @@
 # TILT lab-gate simulator check: the intro, every page and overlay, the perform
 # pads (flips, flippers, multiball, nudge, combos, capture / replay), MIDI in
-# and out, every sound engine, melody mode, files, settings, the display budget.
+# and out, every sound engine, melody mode, files (slots, kits, JSON through the
+# browser and the keyboard, MIDI file), the LABKIT views (PARAM pads with a route,
+# MAP, MACRO, MOD, HELP), and the display budget. Only keys of the original
+# Tracker are used: no Aux, Help or encoder push.
+mkdir Lab
+mkdir Lab/TILT
+mkdir Lab/TILT/Samples
+mkwav Lab/TILT/Samples/loop.wav 1.0 110
 wait 3000
 budget
-# ---- GRAPH: play the default groove ----
+# ---- GRAPH: play the default groove (CHAIN) ----
 tap Play
 peak-reset
 wait 3000
 expect-sound 1000
 expect-midi-notes 8
+expect-overlay none
 budget
-# perform pads: flip to step 6, the flipper keys, a second and third ball, a nudge
+# perform pads: flip to step 6, the flipper keys, two more balls, a nudge (pad and Song)
 pad 5 tap 100
 tap Note
 tap Instr
@@ -18,12 +26,15 @@ tap FX1
 pad 38 tap
 pad 38 tap
 pad 39 tap 90
+tap Song
 wait 1200
 budget
-# the encoder sets the tempo, arrows the move rate, Shift shows the page actions
+# the encoder sets the tempo, arrows the move rate, Insert relaunches, Copy adds a ball
 enc 4
 tap Right
 tap Left
+tap Insert
+tap Copy
 press Shift
 wait 100
 budget
@@ -36,12 +47,12 @@ wait 600
 tap File
 wait 100
 budget
-pad 6 tap
+pad 3 tap
 tap File
 peak-reset
 wait 2500
 expect-sound 500
-# fire the combos from the perform pads, then a hard flip tilts the table
+# fire the combos, then hard flips (Shift) and a hard nudge tilt the table
 pad 32 tap
 pad 33 tap
 pad 34 tap
@@ -51,13 +62,12 @@ budget
 press Shift
 tap Note
 tap Note
-tap Note
-tap Note
+tap Song
 release Shift
 pad 47 tap
 wait 1500
 budget
-# ---- MATRIX: edit cells from the pads and the encoder, shapes, pages ----
+# ---- MATRIX: pads and encoder, shapes, pages, the live view ----
 tap F2
 pad 26 tap
 pad 3 tap 90
@@ -74,7 +84,7 @@ press Shift
 tap F5
 release Shift
 enc 3
-tap Push
+tap Insert
 pad 35 tap
 pad 22 tap
 press Shift
@@ -86,7 +96,7 @@ press Shift
 tap F8
 release Shift
 pad 11 tap
-# ---- STEPS: channels from the pads, rows, bumpers, ramps, melody ----
+# ---- STEPS: lanes from the pads, rows, bumpers, ramps, melody ----
 tap F3
 pad 2 tap
 pad 29 tap
@@ -102,7 +112,7 @@ tap Down
 tap Right
 enc -3
 pad 46 tap
-tap Push
+tap Insert
 tap Right
 enc 3
 wait 300
@@ -114,7 +124,9 @@ tap F5
 release Shift
 tap Copy
 tap Right
-tap Insert
+press Shift
+tap Copy
+release Shift
 peak-reset
 wait 1500
 expect-sound 300
@@ -132,6 +144,43 @@ pad 37 tap
 pad 40 tap
 wait 400
 budget
+# ---- LABKIT: PARAM pads on TABLE (pad 19 = Gravity), a route from LFO 1, MIDI learn ----
+tap INSTRPARAMS
+expect-overlay param
+wait 100
+budget
+pad 19 down
+enc 5
+pad 19 up
+expect-param o6026 5 0.6
+expect-routes 0
+pad 36 down
+pad 19 down
+enc 10
+wait 100
+budget
+pad 19 up
+pad 36 up
+expect-routes 1
+pad 36 down
+pad 19 down
+tap DELETE
+pad 19 up
+pad 36 up
+expect-routes 0
+tap INSTRPARAMS
+expect-overlay none
+# ---- MAP: hold Master, jump to the EVOLVE column (row 1, pad 5), release ----
+press MASTER
+wait 100
+expect-overlay map
+budget
+pad 4 down
+pad 4 up
+wait 100
+budget
+release MASTER
+expect-overlay none
 # ---- EVOLVE: memory, mutation, meta, locks, the randomizer and undo ----
 tap F5
 enc 30
@@ -154,6 +203,33 @@ press Shift
 tap F1
 tap F8
 release Shift
+# ---- MACRO, MOD, HELP (LABKIT) ----
+press SHIFT
+tap INSTRPARAMS
+release SHIFT
+expect-overlay macro
+wait 100
+budget
+press SHIFT
+tap INSTRPARAMS
+release SHIFT
+expect-overlay none
+press SHIFT
+tap MASTER
+release SHIFT
+expect-overlay mod
+wait 100
+budget
+tap F8
+expect-overlay none
+press SHIFT
+tap CONFIG
+release SHIFT
+expect-overlay help
+wait 100
+budget
+tap F8
+expect-overlay none
 # ---- COMBOS: a path from the step pads, an action, fire it ----
 tap F6
 pad 25 tap
@@ -163,6 +239,7 @@ pad 8 tap
 pad 31 tap
 enc 2
 pad 37 tap
+tap Insert
 wait 600
 budget
 # ---- CHANNELS: every engine plays from the pad keyboard ----
@@ -200,9 +277,21 @@ tap Down
 enc 5
 tap Down
 enc -3
-tap Push
+tap Insert
 wait 200
 budget
+# the sample browser (S.Load) loads a WAV from the card into channel 8
+tap SAMPLELOADER
+expect-overlay browser
+wait 300
+budget
+tap F8
+wait 300
+expect-overlay none
+peak-reset
+pad 24 tap 120
+wait 400
+expect-sound 200
 # ---- MIX: levels, sends, mutes, FX ----
 tap F8
 enc -4
@@ -218,6 +307,8 @@ pad 1 tap
 pad 1 tap
 pad 8 tap
 enc 2
+tap Insert
+tap Insert
 tap F1
 peak-reset
 wait 1500
@@ -225,7 +316,7 @@ expect-sound 300
 tap F8
 wait 200
 budget
-# ---- capture the last bars, replay, MIDI file, save / load ----
+# ---- capture the last bars, replay, MIDI file, save / load, JSON ----
 tap Rec
 wait 1500
 budget
@@ -241,7 +332,9 @@ tap F7
 tap Left
 tap Left
 tap F2
+press Shift
 tap F4
+release Shift
 tap Left
 tap Down
 tap F1
@@ -249,12 +342,31 @@ tap Right
 tap F1
 wait 300
 budget
-tap F8
-# ---- HELP, settings ----
-tap Help
-wait 200
+# JSON: save through the keyboard, load the factory MULTIBALL file through the browser
+tap F4
+expect-overlay keyboard
+wait 100
 budget
-tap Help
+tap F8
+expect-overlay none
+tap F3
+expect-overlay browser
+wait 300
+budget
+tap F8
+wait 200
+tap Down
+tap Down
+tap Down
+tap Down
+tap F8
+wait 300
+expect-overlay none
+tap F8
+peak-reset
+wait 2000
+expect-sound 300
+# settings
 tap Config
 tap Down
 tap Down

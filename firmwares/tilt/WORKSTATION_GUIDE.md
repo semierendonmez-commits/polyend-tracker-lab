@@ -32,12 +32,20 @@ workstation's.
 ## Buttons the workstation receives
 
 All buttons except **Config** (settings), **Play** (transport) and
-**Shift + Rec** (recorder). Ids are in `ot::btn` (`src/core/ui/buttons.h`):
-F1..F8 under the screen, the module keys (InstrParams, Performance, File,
-Master, SampleLoader, SamplePlayback, SampleEditor, SampleRecorder, Song,
-Pattern), Note / Instr / Fx1 / Fx2, Copy, Insert, Delete, Rec, Shift,
-arrows, EncPush, Aux, Help. `Event::kHold` fires once after 500 ms.
+**Shift + Rec** (recorder) -- and, once the workstation uses LABKIT v2, the
+LABKIT keys (I.Param, Master, Shift + Config; NAV.md). Ids are in `ot::btn`
+(`src/core/ui/buttons.h`): F1..F8 under the screen, the module keys
+(InstrParams, Performance, File, Master, SampleLoader, SamplePlayback,
+SampleEditor, SampleRecorder, Song, Pattern), Note / Instr / Fx1 / Fx2, Copy,
+Insert, Delete, Rec, Shift, arrows. `Event::kHold` fires once after 500 ms.
 Pads: 48, `pad = row * 12 + col`, row 0 at the top, with velocity.
+
+**EncPush, Aux and Help are not on the original Tracker's key matrix**
+(`src/hal/input.cpp`): the simulator has them, the hardware never sends them.
+Never make an action reachable only through them -- use Insert or an F-key.
+A release (or hold) always goes to whoever received the press, so a note or
+modifier the workstation saw always ends there even if a LABKIT view opened
+in between; Shift press / release always reach the workstation.
 
 ## Rules
 
@@ -89,3 +97,149 @@ make lab-shots LAB_FW=<NAME>             # docs/screenshots/*.png
 ```
 
 Each firmware's `Makefile` already sets its `LAB_FW` / `LAB_ID`.
+
+## LABKIT v2
+
+LABKIT is the shared navigation of every lab firmware (`src/lab/params.h`,
+`mod.h`, `nav.h`, `browser.h`, `keyboard.h`; NAV.md is the user's side). It
+turns on as soon as the workstation registers a parameter or describes its
+pages; a workstation that does neither runs exactly as before.
+
+### Parameters (`ctx.params()`, in `init()`)
+
+```cpp
+kit::Registry& P = ctx.params();
+P.setPage(kPgFilter);                         // defaults for the following add()s
+P.setGroup("FILTER", Rgb(0xFF8A3D));          // group = colour on the pads
+cutoff_ = P.add("flt.cut", "Cutoff", &cut_).range(40, 16000).exp().unit("Hz");
+P.add("flt.res", "Reso", &res_).percent();                 // 0..1 shown as %
+P.add("osc.wave", "Wave", &wave_).names(kWaveNames, 5);    // int or float, enum
+P.add("osc.oct", "Octave", &oct_).range(-2, 2).bipolar();  // int binding = integer
+P.add("amp.level", "Level", [](void* c, float db) { static_cast<Me*>(c)->gain_ = dsp::dbToGain(db); },
+      this, -6.0f).range(-40, 6).step(0.5f).unit("dB");   // setter binding
+P.add("arp.swing", "Swing", &swing_).range(0, 0.5f).percent().pad(12);   // fixed pad
+```
+
+- **Key** (first argument): stable, it is what saves store (hashed). Never
+  reuse a key for a different meaning; renaming the display name is free.
+- **Binding**: `float*` or `int*` into your own state, or a setter. The
+  registry writes the *effective* value (base + modulation) there once per
+  audio block, before `render()` -- your DSP keeps reading its own fields.
+  Pointer bindings are also written at once from the main loop when the
+  param is not modulated. **Setters run in the audio interrupt**: keep them
+  short (no I/O, no allocation).
+- **Curves**: linear (default, `range`), `exp()` (lo > 0), `integer()`,
+  `names()` (enum). `step(s)` = encoder step in units (default 1 % of the
+  range, Shift = fine), `def(v)` = Delete / reset value (default: the bound
+  value at `add()`), `unit()`, `percent()`, `bipolar()`, `noMod()` (never a
+  route target), `pad(n)` (0..35 on its page).
+- **Edits** from your own UI go through the registry so the HUD, MIDI learn
+  and the save chunk see them: `P.nudge(id, e.delta, e.shift)`,
+  `P.set(id, value)`, `P.reset(id)`. If you still write a bound field
+  directly (preset code, generators), the registry follows it within 50 ms
+  (`sync()`); a modulated field is overwritten every block, so modulated
+  params must be changed through the registry.
+- **Reading**: `get()` / `norm()` (base), `effective()` / `effectiveNorm()`
+  (after modulation, for drawing), `format(id, buf, n)`.
+- Up to 512 params (`reserve(n)` before the first `add()` to change it).
+  Everything lives in the arena; nothing is allocated after `init()`.
+
+### Pages (new `Workstation` virtuals, all optional)
+
+```cpp
+int navPages(kit::PageInfo* out, int cap) override;  // name, help line, F-key lines, colour
+int navPage() const override { return page_; }       // the page on screen
+void navGoto(int page) override { page_ = page; }    // the MAP jumped here
+void navFocus(kit::ParamId id) override;             // PARAM pads / MAP focused a param
+void navParamChanged(kit::ParamId id) override;      // a Shell view changed a value
+void navKeys(kit::NavKeys& k) override;              // move I.Param / Master if you must
+```
+
+Params name their page with `setPage()` / `.page()`; without `navPages()` the
+pages are called PAGE 1.. . The Shell adds two pages of its own after yours:
+MACRO and MOD.
+
+### Modulation and macros (`ctx.mod()`)
+
+- Export your own sources in `init()`: `ctx.mod().addSource("ENV", &env_)`
+  (a float you update, 0..1; `bipolar = true` for -1..1). They appear on the
+  PARAM pads' second source bank (Shift + a bottom pad) and in the MOD page.
+- First-boot patches can be set from code: `mod.setMacroName(0, "BRIGHT")`,
+  `mod.route(kit::kSrcMacro + 0, cutoff_, 0.45f)`, `mod.setWindow(i, true, lo, hi)`,
+  `mod.route(kit::kSrcLfo + 1, res_, 0.2f)`.
+- Cost: the LABKIT block (4 LFOs, 2 random, 8 macros, the routes and the
+  registry writes) runs before `render()`; 64 routes on 32 params measure
+  ~2,500 M4 instructions per block (`lab.labkit-mod64` in the bench, limit 3,000).
+
+### Saving
+
+One versioned chunk holds the base values, the macro names, the routes and the
+MIDI learn table. Put it in your own project file, or use the file helpers:
+
+```cpp
+uint32_t n = ctx.params().saveChunk(buf, cap);   // 0 = no room (chunkSize() tells)
+ctx.params().loadChunk(buf, n);                 // unknown keys are skipped
+ctx.params().saveFile(ctx.fs, path);  ctx.params().loadFile(ctx.fs, path);
+```
+
+Load **after** registering your params and sources (in `init()` is fine: the
+Shell's own MACRO / MOD params are created on demand). A load marks every
+param; the audio side writes them 32 per block.
+
+### The browser (`ctx.browser()`)
+
+```cpp
+ctx.browser().reserve(256, 4.0f);   // init(): listing + 4 s preview buffer (0 = no preview)
+kit::BrowserRequest q;
+q.title = "Load sample"; q.folder = "Samples"; q.exts = ".wav";   // ";"-separated, "" = all
+q.ctx = this; q.onPick = [](void* c, const char* path) { /* main loop */ };
+ctx.browser().open(q);
+```
+
+Full-screen modal; folders, size, WAV length / rate / channels, a thumbnail of
+the whole file, auto-preview (mixed into the output by the Shell), favourites,
+recent files, sort by name / size / type, pads as letters, Shift + pad =
+audition at that pitch. The last folder, favourites and recent files are kept
+in `/Lab/<FW>/labkit.bin`. Load the picked file yourself in the main loop
+(`update()`), never in `render()`. (IStorage gives no file dates, so there is
+no date sort.)
+
+### The keyboard (`ctx.keyboard()`)
+
+```cpp
+kit::KeyboardRequest q;
+q.title = "Patch name"; q.initial = name_; q.maxLen = 16;
+q.ctx = this; q.onDone = [](void* c, const char* text) { /* copy it */ };
+ctx.keyboard().open(q);
+```
+
+### Drawing helpers
+
+`kit::drawParamKnob(g, theme, P, id, cx, cy, r, focused)` and
+`kit::drawParamBar(...)` draw a registered param (base arc, modulated dot,
+name, value); `kit::fitText()` / `kit::textWidth()` cut text to a width in a
+ROM font. While the PARAM pads are open the Shell keeps ~600..900 display
+words for its panel: your page is cut there (not counted as over budget).
+
+### Rules
+
+1. Register in `init()`; edit from the main loop only.
+2. A registered field may be *read* in `render()`; write it there only if it
+   is not registered (or not modulatable: `noMod()`).
+3. Never depend on EncPush / Aux / Help (not on the hardware). Prefer F1..F7
+   for pages and F8 for the page's action, Insert for "confirm / add".
+4. Keep I.Param and Master free; if you cannot, move LABKIT's keys with
+   `navKeys()` and say so in your MANUAL.
+5. After syncing a new `src/lab` (`labkit/tools/sync_labkit.sh <fw>`), rebuild
+   from clean simulator objects (the sync script removes them: the simulator
+   makefile does not track header dependencies for src/lab and src/ws) and
+   rebuild PLATFORM's stations (`make stations`): the `lab.h` layout changed.
+
+### Testing
+
+Simulator script commands: `expect-overlay none|param|map|macro|mod|help|browser|keyboard`,
+`expect-param KEY VALUE [EPS]`, `expect-effective KEY VALUE [EPS]`,
+`expect-routes N`, `expect-learn N`, `cc CH CC VALUE`, `mkdir PATH`,
+`mkwav PATH SECONDS [HZ] [CHANNELS]` (see `labkit/sim/lab/check.txt`).
+Host tests: `tests/lab/labkit_test.cpp` (registry, routes, macros, save /
+load, nav keys, MIDI learn, browser on a fake card, keyboard).

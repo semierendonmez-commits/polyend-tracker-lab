@@ -17,7 +17,9 @@ namespace {
 inline int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 inline float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
 const Rgb kGold(0xFFC83A), kBallCore(0xFFF6D8), kCyan(0x2EE6FF), kPink(0xFF2E88), kViolet(0x7B5CFF);
-const Rgb kBallColors[kBalls] = {Rgb(0xFFC83A), Rgb(0x2EE6FF), Rgb(0xFF5FD2), Rgb(0xC6FF3D)};
+// the main ball red, the multiballs blue (the TILT readme's heat + trail colours)
+const Rgb kBallColors[kBalls] = {Rgb(0xFF3B30), Rgb(0x3B7BFF), Rgb(0x5AA9FF), Rgb(0x2E4BFF)};
+const Rgb kBallCores[kBalls] = {Rgb(0xFFD6D2), Rgb(0xD6E4FF), Rgb(0xDDF0FF), Rgb(0xD0D8FF)};
 constexpr int kMetaCellsTotal = 16;
 const char* const kRowNames[kStepRows + 1] = {"TRIG", "TRIG %", "DELAY", "DELAY %", "VELO", "LENGTH",
                                               "BUMPER", "RAMP", "DEGREE", "LOCK", "MELODY"};
@@ -168,14 +170,18 @@ void Tilt::draw(Canvas& g) {
         drawFile(g);
         return;
     }
-    if (help_) {
-        drawHelp(g);
-        return;
-    }
     char title[48];
     std::snprintf(title, sizeof title, "%s   page %c%s", kPages_[page_].title, 'A' + pat_->ev.page,
                   eng_->replaying() ? "   REPLAY" : "");
     lab::drawHeader(g, theme_, *ctx_->shell, title);
+    // Under the PARAM pads the Shell gives the page fewer words: the F-key bar
+    // (still visible below the overlay) goes first, the page's lower half is covered.
+    // The page also keeps 2 words to reset the line width and alpha, so a page cut
+    // by the limit never leaves a wide line / translucent state for the overlay.
+    const bool covered = ctx_->shell->labkit().nav.overlay() == lab::kit::Nav::kParam;
+    const uint32_t limit = Canvas::kBudgetWords - ctx_->shell->labkit().reserveWords();
+    if (covered) drawKeys(g);
+    g.setLimit(limit - 2);
     switch (page_) {
         case kPgGraph: drawGraph(g); break;
         case kPgMatrix: drawMatrix(g); break;
@@ -188,7 +194,10 @@ void Tilt::draw(Canvas& g) {
         default: break;
     }
     drawBanner(g);
-    drawKeys(g);
+    if (!covered) drawKeys(g);
+    g.setLimit(limit);
+    g.lineWidth(1.0f);
+    g.alpha(255);
 }
 
 void Tilt::drawKeys(Canvas& g) {
@@ -423,8 +432,9 @@ void Tilt::drawGraphView(Canvas& g, int cx, int cy, float rad, bool big) {
         g.alpha(e.tilted() ? 140 : 80);
         g.point(x, y, big ? 15.0f : 9.0f);
         g.alpha(255);
-        g.color(e.tilted() ? theme_.warn : kBallCore);
-        g.point(x, y, big ? 7.0f : 4.0f);
+        g.point(x, y, big ? 9.0f : 5.5f);
+        g.color(e.tilted() ? Rgb(0xFFFFFF) : kBallCores[bi]);
+        g.point(x - (big ? 2.0f : 1.0f), y - (big ? 2.0f : 1.0f), big ? 3.5f : 2.0f);
     }
 }
 
@@ -1180,21 +1190,10 @@ void Tilt::drawChannels(Canvas& g) {
         const char* nm = c.sample[0] ? c.sample : kBuiltinNames[clampi(c.p[0], 0, kBuiltins - 1)];
         const char* base = std::strrchr(nm, '/');
         g.text(rx + 70, y, font::kSmall, base ? base + 1 : nm, Canvas::kCenterY);
-        if (f) {
-            if (!wavCount_) {
-                g.color(theme_.dim);
-                g.text(rx, y + 24, font::kTiny, ctx_->fs ? "no WAV in /Lab/TILT/Samples or /Samples" : "no card",
-                       Canvas::kCenterY);
-            }
-            for (int k = -1; k <= 1 && wavCount_; ++k) {
-                const int i = wavSel_ + k;
-                if (i < 0 || i >= wavCount_) continue;
-                const char* b = std::strrchr(wavs_[i], '/');
-                g.color(k == 0 ? theme_.fg : theme_.dim);
-                g.textf(rx, y + 24 + (k + 1) * 18, font::kTiny, Canvas::kCenterY, "%s %s", k == 0 ? ">" : " ",
-                        b ? b + 1 : wavs_[i]);
-            }
-        }
+        g.color(f ? kCyan : theme_.dim);
+        g.text(rx, y + 24, font::kTiny, ctx_->fs ? "Insert / S.Load: browse the card (preview, favourites)" : "no card: built-in samples",
+               Canvas::kCenterY);
+        g.text(rx, y + 42, font::kTiny, "Delete: back to the built-in sample", Canvas::kCenterY);
         // waveform: 96 columns of peaks
         const SampleSlot* src = audio_.sourceOf(chSel_);
         const int wx = rx, wy = 380, ww = 300, wh = 52;
@@ -1371,37 +1370,10 @@ void Tilt::drawFile(Canvas& g) {
     g.color(theme_.fg);
     g.text(436, 330, font::kTiny, kFactoryIdeas[fileSel_[0]], Canvas::kCenterY);
     g.color(theme_.dim);
-    g.text(436, 356, font::kTiny, "pads: top row + 2 = factory, row 3 + 4 = user", Canvas::kCenterY);
-    g.text(436, 374, font::kTiny, "Shift + pad = save there; row 2 right = kits", Canvas::kCenterY);
-    static const char* const kKeys[8] = {"LOAD", "SAVE", "LOAD KIT", "SAVE KIT", "CAPTURE", "REPLAY", "MIDI FILE", "CLOSE"};
+    g.text(436, 356, font::kTiny, "pads: rows 1-2 factory | kits, rows 3-4 user | JSON", Canvas::kCenterY);
+    g.text(436, 374, font::kTiny, "Shift + pad saves; Shift + F3 / F4: kit load / save", Canvas::kCenterY);
+    static const char* const kKeys[8] = {"LOAD", "SAVE", "JSON LOAD", "JSON SAVE", "CAPTURE", "REPLAY", "MIDI FILE", "CLOSE"};
     lab::drawFKeyBar(g, theme_, kKeys, -1);
-}
-
-void Tilt::drawHelp(Canvas& g) {
-    lab::drawHeader(g, theme_, *ctx_->shell, "Help");
-    g.color(kPink);
-    g.text(16, 50, font::kLarge, kPages_[page_].title, Canvas::kCenterY);
-    g.color(theme_.fg);
-    g.text(16, 78, font::kSmall, kPages_[page_].help, Canvas::kCenterY);
-    static const char* const kLines[] = {
-        "F1..F8          pages          Shift + F1..F8   the page's actions (shown while Shift is held)",
-        "Play            launch / stop  Rec              capture the last bars and replay (again: stop)",
-        "Note Instr FX1 FX2   flippers 1-4 (Shift = hard: may TILT)      Aux   nudge (Shift = hard)",
-        "Performance (hold)   the perform pads on any page        Pattern   next matrix page A-D",
-        "File            patterns, kits, capture, MIDI file    Master  MIX    S.Load  sample browser",
-        "Arrows / encoder     move / change     Push   toggle, apply     Delete   reset value",
-        "",
-        "PERFORM PADS (GRAPH page)",
-        "rows 1-2 left: 16 steps = flip the ball there      right: flippers 1-4, pages A-D",
-        "row 3 left: channels (tap = play, Shift = mute)     right: fire combos 1-4",
-        "row 4: relaunch, halt, +ball, nudge, capture 1/2/4/8 bars, replay, random, undo, TILT",
-    };
-    for (int i = 0; i < int(sizeof kLines / sizeof kLines[0]); ++i) {
-        g.color(i == 7 ? kCyan : theme_.dim);
-        g.text(16, 114 + i * 26, font::kSmall, kLines[i], Canvas::kCenterY);
-    }
-    g.color(theme_.dim);
-    g.text(16, 436, font::kTiny, "any key closes", Canvas::kCenterY);
 }
 
 // ---- pad LEDs ---------------------------------------------------------------------------------------------
@@ -1416,7 +1388,7 @@ void Tilt::ledsPerform(Rgb* pads) {
         Rgb c = lab::scale(trigColor(p.steps[s].trig), 0.12f + 0.45f * h + 0.6f * odd);
         for (int k = 1; k < kBalls; ++k)
             if (e.balls[k].active && e.balls[k].state == s + 1) c = kBallColors[k];
-        if (b.active && !b.resting && b.state == s + 1) c = Rgb(0xFFFFFF);
+        if (b.active && !b.resting && b.state == s + 1) c = kBallColors[0];
         pads[pad] = c;
     }
     for (int i = 0; i < kFlips; ++i) pads[8 + i] = e.tilted() ? Rgb(0x500000) : lab::scale(kGold, 0.8f);
@@ -1442,11 +1414,16 @@ void Tilt::ledsPerform(Rgb* pads) {
 void Tilt::leds(Rgb* pads) {
     for (int i = 0; i < lab::kPads; ++i) pads[i] = Rgb();
     const Pattern& p = *pat_;
-    if (file_) {
-        for (int i = 0; i < kFactoryCount; ++i) pads[i] = lab::scale(kCyan, 0.4f);
-        for (int i = 0; i < kKitSlots; ++i) pads[16 + i] = kitUsed_[i] ? lab::scale(kGold, 0.6f) : lab::scale(kGold, 0.06f);
+    if (file_) {   // rows 1-2: factory | kits, rows 3-4: user slots | JSON, MIDI, replay, capture
+        for (int i = 0; i < kFactoryCount; ++i) pads[(i / 8) * 12 + i % 8] = lab::scale(kCyan, 0.4f);
+        for (int i = 0; i < kKitSlots; ++i)
+            pads[(i / 4) * 12 + 8 + i % 4] = kitUsed_[i] ? lab::scale(kGold, 0.6f) : lab::scale(kGold, 0.06f);
         for (int i = 0; i < kUserSlots; ++i)
-            pads[(i < 12 ? 24 + i : 36 + i - 12)] = slotUsed_[i] ? lab::scale(theme_.ok, 0.6f) : lab::scale(theme_.ok, 0.05f);
+            pads[24 + (i / 8) * 12 + i % 8] = slotUsed_[i] ? lab::scale(theme_.ok, 0.6f) : lab::scale(theme_.ok, 0.05f);
+        pads[32] = lab::scale(kPink, 0.6f);
+        pads[33] = lab::scale(kPink, 0.35f);
+        pads[34] = lab::scale(kViolet, 0.5f);
+        pads[35] = eng_->replaying() ? kCyan : lab::scale(kCyan, 0.2f);
         for (int i = 0; i < 4; ++i) pads[44 + i] = lab::scale(kCyan, 0.5f);
         return;
     }

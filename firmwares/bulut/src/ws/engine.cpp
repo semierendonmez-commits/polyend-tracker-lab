@@ -20,7 +20,7 @@
 
 namespace bulut {
 #ifdef BULUT_PROF
-double gProf[12], gProfMax[12], gProfBlock[12];
+double gProf[20], gProfMax[20], gProfBlock[20];
 int gProfBlocks = 0;
 uint32_t gProfLast = 0;
 #endif
@@ -402,7 +402,18 @@ void defaultEngineKnobs(int engine, float* k, int ch) {
 }
 
 // ---- init ---------------------------------------------------------------------
+// DIRTY TAPE's recording format: Beads' mu-law round trip, tabulated on
+// 12 bits (8 KB in SRAM) at init: a lookup per sample instead of the codec.
+static int16_t sMuLaw[4096];
+static void buildMuLaw() {
+    for (int i = 0; i < 4096; ++i) {
+        const int16_t v = int16_t(i * 16 - 32768 + 8);
+        sMuLaw[i] = int16_t(beads::MuLaw2Lin(beads::Lin2MuLaw(v)) * 32768.0f);
+    }
+}
+
 bool Engine::init(lab::Arena& arena, ChParams* params, ChState* st, ChSource* src, Gesture* gestures, FxState* fx) {
+    buildMuLaw();
     buildSine();
     p_ = params;
     st_ = st;
@@ -1105,7 +1116,7 @@ void Engine::writeBuffer(int c, const int16_t* x) {
         if (m == kMediaLofi) {
             for (uint32_t i = 0; i < kBlock; ++i) d[i] = int16_t(d[i] & ~15);   // 12-bit
         } else if (m == kMediaDirtyTape) {
-            for (uint32_t i = 0; i < kBlock; ++i) d[i] = int16_t(beads::MuLaw2Lin(beads::Lin2MuLaw(d[i])) * 32768.0f);
+            for (uint32_t i = 0; i < kBlock; ++i) d[i] = sMuLaw[uint16_t(d[i] + 32768) >> 4];   // Beads' mu-law, tabulated
         } else if (m == kMediaCleanTape) {
             for (uint32_t i = 0; i < kBlock; ++i) {   // tape saturation: a soft knee above -6 dBFS
                 const int32_t v = d[i];
@@ -1182,21 +1193,104 @@ void Engine::render(const lab::Transport& t, const lab::AudioIn& in, float* outL
     std::memset(cl, 0, sizeof cl);
     std::memset(cr, 0, sizeof cr);
 
-    // the budget: what the chains and generators cost leaves this many grains
-    float units = 0.0f;
+    // The CPU guard (config based, so it does not flicker with activity): every
+    // channel's mixing, bed, drive / filter / media count; then the FX modes in
+    // channel order and the generators, while they fit under kChainCap.
+    float cfg = 0.0f;
+    float base[kCh];
     for (int c = 0; c < kCh; ++c) {
         const ChParams& p = p_[c];
         const bool beadsTape = p.engine == kBeads && enumIndex(p.k[K::Mode], kMedias) == kMediaDirtyTape;
-        const bool sounding = rt[c].active > 0 || rt[c].quiet > 0 || st_[c].freeze;
-        if (sounding) units += chainUnits(p, beadsTape);
-        if (p.source == kSrcGen && !st_[c].hold) units += genUnits(p.genType);
+        base[c] = baseUnits(p, beadsTape) + kMixUnits + (st_[c].freeze && rt[c].frzReady && p.bed > 0.01f ? kBedUnits : 0.0f);
+        cfg += base[c];
     }
+    uint8_t bypass = 0, hold = 0;
+    for (int c = 0; c < kCh; ++c) {
+        const float u = fxUnits(p_[c].fxMode);
+        if (u <= 0.0f) continue;
+        if (cfg + u <= kChainCap) cfg += u;
+        else bypass = uint8_t(bypass | (1u << c));
+    }
+    for (int c = 0; c < kCh; ++c) {
+        const ChParams& p = p_[c];
+        if (p.source != kSrcGen || st_[c].hold) continue;
+        const float u = genUnits(p.genType);
+        if (cfg + u <= kChainCap) cfg += u;
+        else hold = uint8_t(hold | (1u << c));
+    }
+    cpuBypass = bypass;
+    cpuHold = hold;
+    // the grains get what the configuration leaves (whether the channels sound
+    // yet or not: a grain spawned now still runs when a silent chain wakes up)
+    const float units = cfg;
     unitsUsed = units;
     int lim = int(kUnits - units);
     if (lim > grainBudget) lim = grainBudget;
     if (lim < kMinGrains) lim = kMinGrains;
     if (lim > kMaxGrains) lim = kMaxGrains;
     grainLimit = lim;
+    // The configuration got heavier than the running grains allow (an FX mode,
+    // a generator switched on): the most advanced grains fade out within this
+    // block, and what was not running last block waits one more block, so no
+    // block pays for both.
+    int alive = 0;
+    uint8_t baseOff = 0;
+    for (int i = 0; i < nActive_; ++i) alive += pool_[i].reserved ? 0 : 1;
+    if (alive > lim) {
+        for (int excess = alive - lim; excess > 0; --excess) {
+            int best = -1;
+            float bw = -1.0f;
+            for (int i = 0; i < nActive_; ++i) {
+                const Grain& g = pool_[i];
+                if (g.reserved) continue;
+                const float prog = g.delay > 0 ? 2.0f : g.wph * (1.0f / float(kWin));
+                if (prog > bw) {
+                    bw = prog;
+                    best = i;
+                }
+            }
+            if (best < 0) break;
+            Grain& g = pool_[best];
+            if (g.delay > 0) {   // not started yet: gone
+                pool_[best] = pool_[--nActive_];
+                continue;
+            }
+            g.reserved = 1;
+            if (g.left > kBlock) g.left = kBlock;
+            const float rest = kWinEnd - g.wph;
+            g.winc = rest > 0.0f ? rest / float(g.left) : 0.0f;
+        }
+        bypass = uint8_t(bypass | (fxWanted_ & ~fxRan_));
+        hold = uint8_t(hold | (genWanted_ & ~genRan_));
+        // drive / filter / media that got heavier wait too
+        for (int c = 0; c < kCh; ++c) {
+            const ChParams& p = p_[c];
+            const bool beadsTape = p.engine == kBeads && enumIndex(p.k[K::Mode], kMedias) == kMediaDirtyTape;
+            const float now = baseUnits(p, beadsTape) + ((bypass >> c) & 1 ? 0.0f : fxUnits(p.fxMode));
+            if (now > chainRan_[c] + 0.01f) {
+                baseOff = uint8_t(baseOff | (1u << c));
+                bypass = uint8_t(bypass | (1u << c));
+            }
+        }
+        cpuBypass = bypass;
+        cpuHold = hold;
+    }
+    for (int c = 0; c < kCh; ++c) {
+        const ChParams& p = p_[c];
+        const bool beadsTape = p.engine == kBeads && enumIndex(p.k[K::Mode], kMedias) == kMediaDirtyTape;
+        chainRan_[c] = (baseOff >> c) & 1 ? 0.0f : baseUnits(p, beadsTape) + ((bypass >> c) & 1 ? 0.0f : fxUnits(p.fxMode));
+    }
+    {
+        uint8_t fxW = 0, genW = 0;
+        for (int c = 0; c < kCh; ++c) {
+            if (p_[c].fxMode != kFxOff) fxW = uint8_t(fxW | (1u << c));
+            if (p_[c].source == kSrcGen && !st_[c].hold) genW = uint8_t(genW | (1u << c));
+        }
+        fxWanted_ = fxW;
+        genWanted_ = genW;
+        fxRan_ = uint8_t(fxW & ~bypass);
+        genRan_ = uint8_t(genW & ~hold);
+    }
 
     // clouds take turns at the head of the spawn queue (the per-block spawn budget is shared)
     spawnRot_ = spawnRot_ + 1 >= kCh ? 0 : spawnRot_ + 1;
@@ -1205,7 +1299,7 @@ void Engine::render(const lab::Transport& t, const lab::AudioIn& in, float* outL
         ChRt& r = rt[c];
         const ChParams& p = p_[c];
         const ChState& s = st_[c];
-        if (!r.busy && p.source != kSrcSample && !s.hold) {
+        if (!r.busy && p.source != kSrcSample && !s.hold && !((hold >> c) & 1)) {
             PROF_MARK(2);
             if (p.source == kSrcInput) writeBuffer(c, inS16);
             else if (p.source == kSrcOutput) writeBuffer(c, mixS16);
@@ -1317,7 +1411,7 @@ void Engine::render(const lab::Transport& t, const lab::AudioIn& in, float* outL
         }
         const int med = p.engine == kBeads ? enumIndex(p.k[K::Mode], kMedias) : kMediaHifi;
         PROF_MARK(5);
-        chain[c].process(L, R, p, med, clock_);
+        if (!((baseOff >> c) & 1)) chain[c].process(L, R, p, med, clock_, !((bypass >> c) & 1));
         PROF_MARK(4);
         const bool audible = !s.mute && (solo == 0 || (solo >> c) & 1);
         const float lvl = audible ? p.level * p.level * 1.6f : 0.0f;

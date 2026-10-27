@@ -30,7 +30,7 @@ struct WsSettings {
 const uint8_t kFxRows[10] = {CP::Drive, CP::Flt, CP::Cutoff, CP::Reso, CP::FxMode,
                              CP::FxTime, CP::FxAmt, CP::FxFb, CP::LfoRate, CP::LfoShape};
 // The SOURCE page's rows (cursor 0..8; 8 = the radio, not a param).
-const uint8_t kSrcRows[8] = {CP::Source, CP::Gain, CP::Start, CP::End, CP::GenType, CP::GenA, CP::GenB, CP::Bed};
+const uint8_t kSrcRows[8] = {CP::Source, CP::Gain, CP::Start, CP::End, CP::Bed, CP::GenType, CP::GenA, CP::GenB};
 }  // namespace
 
 // ---- init ---------------------------------------------------------------------
@@ -146,16 +146,17 @@ void Bulut::loadAutosave() {
 }
 
 #ifdef BULUT_PROF
-extern double gProf[12], gProfMax[12];
+extern double gProf[20], gProfMax[20];
 extern int gProfBlocks;
 #endif
 
 const char* Bulut::benchName(int i) const {
 #ifdef BULUT_PROF
     if (gProfBlocks) {
-        static const char* const kSec[12] = {"bufwr", "gen", "emit", "grains", "fx", "mix", "sndset", "master", "dly", "rev", "drive", "filter"};
+        static const char* const kSec[20] = {"bufwr", "gen", "emit", "grains", "media", "mix", "sndset", "master", "dly", "rev", "drive", "filter",
+                                             "m0", "tex", "shift", "flang", "pan", "crush", "slice", "frz"};
         std::printf("prof:");
-        for (int q = 0; q < 12; ++q) {
+        for (int q = 0; q < 20; ++q) {
             std::printf(" %s %.0f/%.0f", kSec[q], gProf[q] / gProfBlocks, gProfMax[q]);
             gProf[q] = gProfMax[q] = 0.0;
         }
@@ -163,9 +164,9 @@ const char* Bulut::benchName(int i) const {
         gProfBlocks = 0;
     }
 #endif
-    static const char* const k[] = {"idle-live",  "granular-max", "quanta-max", "beads-tape", "tape-max",
-                                    "fx-texture", "fx-modes",     "gen-rete",   "freeze-max", "everything"};
-    return k[i < 0 ? 0 : (i > 9 ? 9 : i)];
+    static const char* const k[] = {"idle-live",  "granular-max", "quanta-max", "beads-tape", "tape-max",   "fx-texture",
+                                    "fx-modes",   "gen-rete",     "freeze-max", "everything", "fx-gen-mix"};
+    return k[i < 0 ? 0 : (i > 10 ? 10 : i)];
 }
 
 // Bench: every channel busy, the grain budget full, the heavy paths on.
@@ -198,7 +199,7 @@ void Bulut::benchSetup(int i) {
         set(3, CP::GenType, float(kGenRete));
         return;
     }
-    static const int kEng[10] = {kGranular, kGranular, kQuanta, kBeads, kTape, kGranular, kGranular, kGranular, kGranular, -1};
+    static const int kEng[11] = {kGranular, kGranular, kQuanta, kBeads, kTape, kGranular, kGranular, kGranular, kGranular, -1, -1};
     for (int c = 0; c < kCh; ++c) {
         const int e = kEng[i] >= 0 ? kEng[i] : c;   // everything: one of each engine
         set(c, CP::Engine, float(e));
@@ -281,6 +282,21 @@ void Bulut::benchSetup(int i) {
         set(1, CP::FxMode, float(kFxTexture));
         set(0, CP::FxAmt, 1.0f);
         set(1, CP::FxAmt, 1.0f);
+    }
+    if (i == 10) {
+        // the lighter FX modes and generators: PANNER, SLICER, CRUSHER, FLANGER; TONE, NOISE
+        static const int kModes[4] = {kFxPanner, kFxSlicer, kFxCrusher, kFxFlanger};
+        for (int c = 0; c < kCh; ++c) {
+            set(c, CP::FxMode, float(kModes[c]));
+            set(c, CP::FxAmt, 0.9f);
+            set(c, CP::FxFb, 0.8f);
+            set(c, CP::FxTime, 0.6f);
+            set(c, CP::Flt, float(kFltHp));
+        }
+        set(0, CP::Source, float(kSrcGen));
+        set(0, CP::GenType, float(kGenTone));
+        set(2, CP::Source, float(kSrcGen));
+        set(2, CP::GenType, float(kGenNoise));
     }
     if (i == 9) {
         // one of each engine, a different FX on each, a generator, a freeze,
@@ -1378,10 +1394,10 @@ void Bulut::arrows(int id) {
             }
             break;
         case kPgFreeze:
+            // Left / Right walk the 16 slots, Down: the tools row, Up: back
             if (frzFocus_ == 0) {
                 if (dx) frzCur_ = (frzCur_ + dx + kFreezeSlots) % kFreezeSlots;
-                if (dy > 0 && frzCur_ >= 8) frzFocus_ = 1;
-                else if (dy) frzCur_ = (frzCur_ + dy * 8 + kFreezeSlots) % kFreezeSlots;
+                if (dy > 0) frzFocus_ = 1;
             } else {
                 if (dx) frzTool_ = (frzTool_ + dx + 7) % 7;
                 if (dy < 0) frzFocus_ = 0;

@@ -29,10 +29,14 @@ struct BlockClock {
     float bpm = 120.0f;
 };
 
-// CPU weight of the chain, in grain units (engine.cpp: the grain budget is
-// what is left of the block after the chains).
-float chainUnits(const ChParams& p, bool beadsTape);
+// CPU weights in grain units (one unit = one running grain, ~3,500 M4
+// instructions a block; measured under QEMU with -DBULUT_PROF, see prof.h).
+// engine.cpp: the grain budget is what is left of the block after these.
+float baseUnits(const ChParams& p, bool beadsTape);   // drive + filter + DIRTY TAPE media
+float fxUnits(int fxMode);                            // the FX mode
 float genUnits(int genType);
+constexpr float kMixUnits = 0.95f;   // a sounding channel's fader / sends / feedback
+constexpr float kBedUnits = 0.55f;   // the freeze bed
 
 class ChannelChain {
 public:
@@ -40,7 +44,8 @@ public:
     bool init(lab::Arena& a, float* diffuserSram);
     void reset();
     // In place on one channel's block (pre fader).
-    void process(float* L, float* R, const ChParams& p, int media, const BlockClock& bc);
+    // fxOn = false: the FX mode is bypassed (the CPU guard, engine.cpp).
+    void process(float* L, float* R, const ChParams& p, int media, const BlockClock& bc, bool fxOn = true);
     bool tail() const { return tail_ > 0; }   // still ringing after the input went quiet
     // Display: the FX mode's own time read-out (Hz, ms, pattern...).
     float uiValue = 0.0f;
@@ -64,7 +69,7 @@ private:
     int tail_ = 0;
     // TEXTURE
     clouds::Diffuser diff_;
-    float texFb_[2] = {}, texLp_[2] = {}, texPrev_[2] = {};
+    float texFb_[2] = {}, texLp_[2] = {}, texPrev_[2] = {}, wowPrev_[2] = {};
     // SHIFTER
     clouds::PitchShifter shift_;
     float shFb_[2] = {};

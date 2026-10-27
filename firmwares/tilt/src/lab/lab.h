@@ -106,7 +106,13 @@ public:
     void end();   // DISPLAY + swap
     uint32_t words() const { return words_; }
     uint32_t dropped() const { return dropped_; }
-    bool room(uint32_t w) const { return words_ + w <= kBudgetWords; }
+    bool room(uint32_t w) const { return words_ + w <= limit_; }
+    uint32_t left() const { return limit_ > words_ ? limit_ - words_ : 0u; }
+    // The Shell keeps words for its own overlays (LABKIT HUD, PARAM pads):
+    // primitives past the limit are skipped like over-budget ones, but they are
+    // counted in clipped(), not dropped(). begin() resets the limit.
+    void setLimit(uint32_t w) { limit_ = w > kBudgetWords ? kBudgetWords : w; }
+    uint32_t clipped() const { return clipped_; }
 
     void color(Rgb c);
     void alpha(uint8_t a);
@@ -146,6 +152,7 @@ private:
     IDisplay* d_ = nullptr;
     uint32_t words_ = 0, dropped_ = 0;
     bool inBatch_ = false;
+    uint32_t limit_ = kBudgetWords, clipped_ = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -242,6 +249,21 @@ struct AudioIn {
 
 class Shell;
 
+// LABKIT v2 (params.h, mod.h, nav.h, browser.h, keyboard.h): the shared
+// parameter registry, modulation, macros, navigation (MAP, PARAM pads, HUD,
+// HELP), the sample / file browser and the text entry. Everything lives in
+// lab::kit; a workstation that registers nothing keeps working exactly as before.
+namespace kit {
+class Registry;
+class Mod;
+class Browser;
+class Keyboard;
+struct Kit;
+struct PageInfo;
+struct NavKeys;
+using ParamId = int16_t;
+}  // namespace kit
+
 // Context handed to the workstation: everything it may use.
 struct Context {
     Shell* shell = nullptr;
@@ -266,6 +288,11 @@ struct Context {
     // (call once per block per stem, before render returns). Ignored when not recording.
     static constexpr int kStems = 4;
     void stem(int index, const float* l, const float* r);
+    // LABKIT v2 services (main loop; see WORKSTATION_GUIDE.md "LABKIT v2").
+    kit::Registry& params();     // register parameters in init()
+    kit::Mod& mod();             // LFOs, random, macros, routes, exported sources
+    kit::Browser& browser();     // sample / file browser modal
+    kit::Keyboard& keyboard();   // text entry modal
 };
 
 // ---------------------------------------------------------------------------
@@ -304,6 +331,20 @@ public:
     virtual int benchScenarios() const { return 1; }
     virtual const char* benchName(int i) const { (void)i; return "idle"; }
     virtual void benchSetup(int i) { (void)i; }
+
+    // ---- LABKIT v2 navigation (nav.h). All optional; the defaults keep a
+    // workstation that registers no parameters exactly as it was.
+    // Describe the pages (name, one-line help, a line per F-key); return the count.
+    virtual int navPages(kit::PageInfo* out, int cap) { (void)out; (void)cap; return 0; }
+    // The page on screen now (-1 = none / unknown) and a jump request from the MAP.
+    virtual int navPage() const { return -1; }
+    virtual void navGoto(int page) { (void)page; }
+    // The MAP / PARAM pads focused a parameter (highlight it on your page if you like).
+    virtual void navFocus(kit::ParamId id) { (void)id; }
+    // A parameter's base value was changed by the Shell (pads, MAP, macro page, MIDI learn, load).
+    virtual void navParamChanged(kit::ParamId id) { (void)id; }
+    // Move the LABKIT keys away from keys this workstation needs (NAV.md).
+    virtual void navKeys(kit::NavKeys& keys) { (void)keys; }
 };
 
 // Each firmware defines this (src/ws/).
@@ -381,6 +422,14 @@ public:
     uint32_t overBudgetFrames() const { return overBudget_; }
     void resetFrameStats() { maxWords_ = 0; overBudget_ = 0; }
 
+    // LABKIT v2 (nav.h): the kit (registry, mod engine, nav, browser, keyboard).
+    kit::Kit& labkit() { return *kit_; }
+    bool shiftHeld() const { return held_[btn::Shift]; }
+    bool buttonHeld(uint8_t id) const { return id < btn::kCount && held_[id]; }
+    // One LABKIT audio block (mod sources, routes, registry writes) -- fill() runs
+    // it before render(); public for the CPU bench.
+    void kitBlock(const Transport& t);
+
 private:
     struct Settings {
         int version = 3;
@@ -421,6 +470,8 @@ private:
     Context ctx_;
     Canvas canvas_;
     Workstation* ws_ = nullptr;
+    kit::Kit* kit_ = nullptr;
+    uint64_t wsButtons_ = 0, wsPads_ = 0;   // presses the workstation received (their releases go there too)
     Settings set_;
     char fwName_[16] = {};
     char home_[32] = {};
@@ -499,3 +550,10 @@ void copyStr(char* dst, uint32_t cap, const char* src);
 bool endsWithCi(const char* s, const char* suffix);
 
 }  // namespace lab
+
+// LABKIT v2 API (after the shell types it builds on).
+#include "lab/params.h"
+#include "lab/mod.h"
+#include "lab/nav.h"
+#include "lab/browser.h"
+#include "lab/keyboard.h"

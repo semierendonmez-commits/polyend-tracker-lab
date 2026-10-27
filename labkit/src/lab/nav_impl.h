@@ -1207,6 +1207,8 @@ void Nav::drawLayer(Canvas& g) {
     const Kit& k = *kit_;
     const Theme& t = theme();
     const int y0 = 258;
+    g.alpha(255);        // the page may have left a wide line or a fade set
+    g.lineWidth(1.0f);
     g.color(t.bg);
     g.fill(0, y0, kScreenW, kScreenH - 30 - y0);
     g.color(t.accent);
@@ -1306,6 +1308,7 @@ void Nav::drawMap(Canvas& g) {
     const int listY = 70, rowH = 15, maxRows = (gy - 24 - listY) / rowH;
     ParamId list[64];
     char nm[24];
+    // headers first, so every page stays reachable however big the registry is
     for (int c = 0; c < n; ++c) {
         const int page = pageAt(c);
         const int x = c * colW;
@@ -1320,6 +1323,14 @@ void Nav::drawMap(Canvas& g) {
             g.color(scale(pc, 0.12f));
             g.fill(x + 2, listY - 4, colW - 4, gy - 22 - listY + 4);
         }
+    }
+    // then the lists: the selected column in full, the others share what is left
+    constexpr uint32_t kRowWords = 18u;   // a tiny name (~10 chars + 4) + colour changes
+    for (int o = 0; o < n; ++o) {
+        const int c = o == 0 ? mapCol_ : (o <= mapCol_ ? o - 1 : o);
+        const int page = pageAt(c);
+        const int x = c * colW;
+        const bool on = c == mapCol_;
         if (page == kPageMod) {   // the MOD page: its sources and the routes, not 26 fields
             for (int s = 0; s < kLfos + kRands && g.room(24); ++s) {
                 const int nr = k.mod.routesFrom(s, nullptr, 0);
@@ -1330,15 +1341,28 @@ void Nav::drawMap(Canvas& g) {
                     g.textf(x + colW - 8, listY + s * rowH + 6, font::kTiny, Canvas::kCenterY | Canvas::kRight, "%d", nr);
                 }
             }
-            g.color(on ? t.fg : t.dim);
-            g.textf(x + 9, listY + 7 * rowH + 6, font::kTiny, Canvas::kCenterY, "%d routes", k.mod.routeCount());
+            if (g.room(16)) {
+                g.color(on ? t.fg : t.dim);
+                g.textf(x + 9, listY + 7 * rowH + 6, font::kTiny, Canvas::kCenterY, "%d routes", k.mod.routeCount());
+            }
             continue;
         }
         const int cnt = r.onPage(page, list, 64);
-        const int show = cnt > maxRows ? maxRows - 1 : cnt;
-        const uint32_t keep = uint32_t(n - c - 1) * 24u;   // the later columns' headers
+        int rows = maxRows;
+        if (!on) {   // fair share of the words left between the columns still to draw
+            const int share = int(g.left() / (uint32_t(n - o) * kRowWords));
+            if (share < 3) {   // too little room for names: just how many there are
+                if (g.room(16)) {
+                    g.color(t.dim);
+                    g.textf(x + 9, listY + 6, font::kTiny, Canvas::kCenterY, colW >= 80 ? "%d params" : "%d", cnt);
+                }
+                continue;
+            }
+            if (share < rows) rows = share;
+        }
+        const int show = cnt > rows ? rows - 1 : cnt;
         for (int i = 0; i < show; ++i) {
-            if (!g.room(24 + keep)) break;
+            if (!g.room(kRowWords)) break;
             fitText(nm, sizeof nm, font::kTiny, r.name(list[i]), colW - 12);
             if (list[i] == focus_) {
                 g.color(t.accent);
@@ -1347,7 +1371,7 @@ void Nav::drawMap(Canvas& g) {
             g.color(list[i] == focus_ ? t.accent : (on ? t.fg : t.dim));
             g.text(x + 9, listY + i * rowH + 6, font::kTiny, nm, Canvas::kCenterY);
         }
-        if (cnt > show && g.room(16 + keep)) {
+        if (cnt > show && g.room(16)) {
             g.color(t.dim);
             g.textf(x + 9, listY + show * rowH + 6, font::kTiny, Canvas::kCenterY, "+%d more", cnt - show);
         }

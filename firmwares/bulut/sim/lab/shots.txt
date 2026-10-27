@@ -3,7 +3,11 @@ wait 1700
 panelshot docs/screenshots/intro.png
 wait 1800
 
-# radio as the input, cloud 1 granular on it
+# samples on the card, the radio as the input
+mkdir Samples
+mkwav Samples/choir-pad.wav 3 220
+mkwav Samples/glass-bell.wav 2 660
+mkwav Samples/tape-loop.wav 2.5 110
 tap Config
 tap Down
 tap Down
@@ -13,14 +17,26 @@ tap Down
 tap Down
 tap Right
 tap Config
-wait 2500
+wait 1500
 
-# cloud page with particles: two held pads on cloud 1
+# CH1: a sample from the LABKIT browser
+tap S.Load
+wait 800
+panelshot docs/screenshots/browser.png
+tap Insert
+wait 400
+
+# every channel breathes (Shift + pad row 4, columns 5-8 = drone)
+press Shift
+pad 40 tap
+pad 41 tap
+pad 42 tap
+pad 43 tap
+release Shift
 pad 15 down 120
 pad 20 down 90
-pad 32 down 70
-wait 1400
-panelshot docs/screenshots/cloud.png
+wait 1800
+panelshot docs/screenshots/clouds.png
 
 # the pad map while Shift is held
 press Shift
@@ -29,53 +45,110 @@ panelshot docs/screenshots/padmap.png
 release Shift
 pad 15 up
 pad 20 up
-pad 32 up
 
-# GRANULAR engine page
-tap F2
+# SOUND, GRANULAR on CH1
+tap S.Play
+tap Right
+tap Right
+tap Right
 pad 17 down 110
 pad 22 down 110
-wait 900
-panelshot docs/screenshots/grain-granular.png
+wait 1000
+panelshot docs/screenshots/sound-granular.png
 pad 17 up
 pad 22 up
 
-# QUANTA engine page (cloud 3), pulsars
+# SOUND, QUANTA pulsars on CH3
 press Shift
 pad 2 tap
 release Shift
-tap F2
+tap Down
+tap Down
+tap Left
+tap Left
+tap Left
 enc 2
-tap Right
-enc 6
 pad 26 down 110
 pad 29 down 100
 pad 33 down 90
-wait 900
-panelshot docs/screenshots/grain-quanta.png
+wait 1000
+panelshot docs/screenshots/sound-quanta.png
 pad 26 up
 pad 29 up
 pad 33 up
 
-# gestures on clouds 1 and 3
+# SOUND, BEADS on CH2 (it reads BULUT's own output)
+press Shift
+pad 1 tap
+release Shift
+pad 16 down 110
+pad 21 down 100
+wait 1200
+panelshot docs/screenshots/sound-beads.png
+pad 16 up
+pad 21 up
+
+# SOURCE on CH1: the sample, a region set with the pads
+press Shift
+pad 0 tap
+release Shift
+tap S.Edit
+tap F8
+pad 8 tap
+pad 31 tap
+tap F8
+pad 14 down 120
+pad 19 down 100
+wait 1200
+panelshot docs/screenshots/source.png
+pad 14 up
+pad 19 up
+tap F8
+pad 12 tap
+wait 300
+panelshot docs/screenshots/source-region.png
+pad 36 tap
+tap F8
+
+# FX on CH1: TEXTURE after a low pass, a route from the channel LFO to the cutoff
 tap F4
+press Shift
+tap F2
+release Shift
+press Shift
+tap F3
+release Shift
+tap Down
+tap Down
+tap F8
+tap Up
+tap Up
+tap Right
+tap Down
+enc 6
+pad 15 down 120
+wait 1200
+panelshot docs/screenshots/fx.png
+pad 15 up
+
+# gestures on CH1 and CH3, two scenes, a timeline
+tap F1
 tap Rec
 pad 28 down
 wait 250
-tap F2
-enc 8
+enc 4
 wait 200
 pad 28 up
 pad 31 down
 wait 300
-enc -12
+enc -6
 pad 31 up
 pad 35 down
 wait 400
 pad 35 up
 tap Rec
 press Shift
-pad 0 tap
+pad 2 tap
 release Shift
 tap Rec
 pad 13 down
@@ -83,71 +156,59 @@ wait 400
 pad 13 up
 pad 18 down
 wait 300
-tap F1
-enc 10
 pad 18 up
 pad 22 down
 wait 500
 pad 22 up
 tap Rec
-tap F4
-wait 1500
-panelshot docs/screenshots/gesture.png
-
-# freeze library: three frozen moments
+press Shift
+pad 12 tap
+pad 13 tap
+release Shift
 tap F5
-press Shift
-tap F1
-release Shift
-tap Right
-press Shift
-tap F5
-release Shift
-wait 300
-press Shift
-tap F1
-release Shift
-tap Right
-press Shift
-tap F5
-release Shift
-wait 400
-press Shift
-tap F1
-release Shift
-tap Left
-tap Left
-tap EncPush
-wait 2600
-panelshot docs/screenshots/freeze.png
-
-# mixer
-tap F6
-tap Right
-tap Right
 tap Down
-wait 2600
-panelshot docs/screenshots/mix.png
-
-# scenes and a timeline
-tap F7
-tap Insert
-tap Right
-press Shift
-pad 2 tap
-release Shift
-tap F7
-tap Insert
 tap Down
+tap Insert
 tap Insert
 enc 4
-tap Insert
-tap Insert
-enc -2
-wait 2600
-panelshot docs/screenshots/scene.png
+tap Up
+tap Right
+tap Right
+wait 1500
+panelshot docs/screenshots/motion.png
 
-# resample panel on the file page, while recording
+# freeze library: three frozen moments, CH1 frozen on one
+press Shift
+pad 0 tap
+release Shift
+tap F6
+tap F8
+wait 300
+tap Right
+press Shift
+tap F3
+release Shift
+tap F8
+wait 300
+tap Right
+press Shift
+tap F3
+release Shift
+tap F8
+wait 300
+tap Left
+tap Left
+tap Insert
+tap Down
+tap Down
+tap Right
+tap Right
+enc 6
+wait 2000
+panelshot docs/screenshots/freeze.png
+
+# FILE: projects and the resample loop while it records
+tap F7
 tap F8
 tap Down
 tap Down
@@ -157,14 +218,23 @@ tap Down
 tap Down
 tap Down
 tap Down
-tap Down
-tap EncPush
-wait 1200
+tap Insert
+wait 1300
 panelshot docs/screenshots/file.png
-tap EncPush
-wait 300
+tap Insert
+wait 400
 
-# the source page with the sample browser
-tap F3
-wait 2600
-panelshot docs/screenshots/source.png
+# LABKIT views: PARAM pads of CH1, the MAP
+press Shift
+pad 0 tap
+release Shift
+tap S.Play
+tap I.Param
+wait 600
+panelshot docs/screenshots/params.png
+tap I.Param
+tap Master
+wait 600
+panelshot docs/screenshots/map.png
+tap Master
+wait 300

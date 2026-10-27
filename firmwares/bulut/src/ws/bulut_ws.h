@@ -54,7 +54,7 @@ public:
     void onTransport(bool playing) override;
     int settings(lab::SettingRow* rows, int cap) override;
     void save() override;
-    int benchScenarios() const override { return 10; }
+    int benchScenarios() const override { return 11; }
     const char* benchName(int i) const override;
     void benchSetup(int i) override;
     // LABKIT
@@ -212,6 +212,16 @@ private:
     uint8_t regWave_[kCh][64] = {};    // the grain region (lanes, SOUND field)
     uint32_t lastMs_ = 0, lastPeakMs_ = 0;
     float gestFlash_[kCh] = {};
+    // particles are drawn after everything else on the page (draw.cpp)
+    struct PartReq {
+        int16_t c, x, y, w, h;
+        bool big;
+        uint32_t limit;
+    };
+    PartReq deferReq_[4] = {};
+    int nDefer_ = 0;
+    bool deferDone_ = true;
+    int knobH_ = 62;                   // drawKnob cell height
     float specView_[kSpecBins];        // the selected slot after the tools (drawn)
     int specViewSlot_ = -1;
     float specViewKey_ = -1.0f;

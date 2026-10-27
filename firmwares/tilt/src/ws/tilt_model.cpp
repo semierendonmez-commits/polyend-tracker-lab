@@ -590,9 +590,10 @@ void sanitize(Pattern& p) {
         s.lock = s.lock ? 1 : 0;
     }
     for (auto& c : p.combos) {
-        c.len = uint8_t(c.len < 2 ? 0 : clampi(c.len, 2, kComboLen));
-        for (auto& s : c.path) s = uint8_t(clampi(s, 1, 16));
+        for (int k = 0; k < kComboLen; ++k) c.path[k] = uint8_t(k < c.len ? clampi(c.path[k], 0, 16) : 0);
+        comboFixLen(c);
         c.action = uint8_t(clampi(c.action, 0, kComboActions - 1));
+        c.on = c.on ? 1 : 0;
     }
     for (auto& f : p.flips) f.step = uint8_t(clampi(f.step, 1, 16));
     for (int i = 0; i < kParamCount; ++i)
@@ -620,6 +621,25 @@ uint32_t patternToBytes(const Pattern& p, uint8_t* out, uint32_t cap) {
     return uint32_t(sizeof(Pattern));
 }
 
+namespace {
+// Version 1 (round 1): the same layout, but 48-character sample paths.
+constexpr uint32_t kChHead = uint32_t(offsetof(Channel, sample));
+constexpr uint32_t kChV1 = kChHead + kPathLenV1;
+constexpr uint32_t kChOff = uint32_t(offsetof(Pattern, ch));
+constexpr uint32_t kSizeV1 = kChOff + kChV1 * kCh + uint32_t(sizeof(Fx));
+void channelsFromV1(Channel* ch, Fx* fx, const uint8_t* src, uint32_t avail) {
+    for (int i = 0; i < kCh; ++i) {
+        if (avail < kChV1 * uint32_t(i + 1)) return;
+        const uint8_t* c = src + kChV1 * uint32_t(i);
+        std::memcpy(static_cast<void*>(&ch[i]), c, kChHead);
+        std::memset(ch[i].sample, 0, sizeof ch[i].sample);
+        std::memcpy(ch[i].sample, c + kChHead, kPathLenV1);
+        ch[i].sample[kPathLenV1 - 1] = 0;
+    }
+    if (fx && avail >= kChV1 * kCh + sizeof(Fx)) std::memcpy(fx, src + kChV1 * kCh, sizeof(Fx));
+}
+}  // namespace
+
 bool patternFromBytes(Pattern& p, const uint8_t* data, uint32_t len) {
     if (len < 8) return false;
     uint32_t magic;
@@ -630,8 +650,15 @@ bool patternFromBytes(Pattern& p, const uint8_t* data, uint32_t len) {
     if (magic != kPatternMagic || version == 0 || size < 64) return false;
     defaultPattern(p);
     uint32_t n = size < len ? size : len;
-    if (n > sizeof(Pattern)) n = sizeof(Pattern);
-    std::memcpy(&p, data, n);
+    if (version == 1) {   // round-1 files: everything up to the channels, then convert them
+        const uint32_t head = n < kChOff ? n : kChOff;
+        std::memcpy(&p, data, head);
+        if (n > kChOff) channelsFromV1(p.ch, &p.fx, data + kChOff, n - kChOff);
+        (void)kSizeV1;
+    } else {
+        if (n > sizeof(Pattern)) n = sizeof(Pattern);
+        std::memcpy(&p, data, n);
+    }
     p.magic = kPatternMagic;
     p.version = kPatternVersion;
     p.size = uint16_t(sizeof(Pattern));
@@ -639,25 +666,65 @@ bool patternFromBytes(Pattern& p, const uint8_t* data, uint32_t len) {
     return true;
 }
 
+constexpr uint32_t kKitMagic = 0x4B544C54u;   // "TLTK"
+uint32_t kitToBytes(const Pattern& p, uint8_t* out, uint32_t cap) {
+    const uint16_t size = uint16_t(sizeof(Channel) * kCh + sizeof(Fx));
+    if (cap < 8u + size) return 0;
+    std::memcpy(out, &kKitMagic, 4);
+    std::memcpy(out + 4, &kPatternVersion, 2);
+    std::memcpy(out + 6, &size, 2);
+    std::memcpy(out + 8, p.ch, sizeof(Channel) * kCh);
+    std::memcpy(out + 8 + sizeof(Channel) * kCh, &p.fx, sizeof(Fx));
+    return 8u + size;
+}
+
+bool kitFromBytes(Pattern& p, const uint8_t* data, uint32_t len) {
+    if (len < 8) return false;
+    uint32_t magic;
+    uint16_t version, size;
+    std::memcpy(&magic, data, 4);
+    std::memcpy(&version, data + 4, 2);
+    std::memcpy(&size, data + 6, 2);
+    if (magic != kKitMagic || version == 0 || uint32_t(size) + 8 > len) return false;
+    if (version == 1) {
+        channelsFromV1(p.ch, &p.fx, data + 8, size);
+    } else {
+        uint32_t chBytes = sizeof(Channel) * kCh;
+        if (chBytes > size) chBytes = size;
+        std::memcpy(p.ch, data + 8, chBytes);
+        if (size >= sizeof(Channel) * kCh + sizeof(Fx)) std::memcpy(&p.fx, data + 8 + sizeof(Channel) * kCh, sizeof(Fx));
+    }
+    sanitize(p);
+    return true;
+}
+
+void comboFixLen(Combo& c) {
+    int n = 0;
+    while (n < kComboLen && c.path[n] >= 1 && c.path[n] <= kSteps) ++n;
+    for (int k = n; k < kComboLen; ++k) c.path[k] = 0;
+    c.len = uint8_t(n);
+}
+
 // ---- factory patterns ------------------------------------------------------------------------
-const char* const kFactoryNames[kFactoryCount] = {"CHAIN", "PINGPONG", "DRUNK", "FLIPPERS", "BUMPERS",
-                                                  "RAMPS", "COMBOS", "GRAVITY", "MEMORY", "MUTATION",
-                                                  "META", "EDGES", "RULES", "TILT"};
+const char* const kFactoryNames[kFactoryCount] = {"FLIPPERS", "BUMPERS", "RAMPS", "COMBOS",   "MULTIBALL",
+                                                  "TILT",     "GRAVITY", "MEMORY", "META",     "MELODY",
+                                                  "CHAIN",    "DRUNK",   "MUTATION", "EDGES", "RULES"};
 const char* const kFactoryIdeas[kFactoryCount] = {
-    "Pinball's default: 1 > 2 > .. > 16, a plain groove",
-    "Up the odd steps, down the even: an acid line in melody mode",
-    "A drunk walk, one step left or right, FM in Hijaz",
     "The ball stays put: steer it with the flippers",
     "Jungle hats and snares: bumpers ratchet inside the move",
     "Ramps force the next move: 8 > 1 and 16 > 9 loops",
     "Hit 1-5-9 for MULTIBALL, 4-8 for a FILL, 13-16 for the next page",
-    "Random walk, gravity pulls the ball home on every bar",
+    "Four balls on a jumping table: every 1-5 adds two more",
+    "Twitchy table: 3 flips a bar tilt it (shake, then freeze)",
+    "Random walk, gravity pulls the ball home at every bar end",
     "Fatigue: used edges tire, the ball finds new routes",
-    "The weights drift every bar and are pulled back home",
     "Four pages A-D, the meta matrix picks one every 2 bars",
+    "Up the odd steps, down the even: an acid line in D minor",
+    "Pinball's default: 1 > 2 > .. > 16, a plain groove",
+    "A drunk walk, one step left or right, FM in Hijaz",
+    "Up to 24 weights drift every bar and are pulled back home",
     "Edges transpose, delay and accent the notes they lead to",
     "Anchor on 1 every 8 moves, no bounce back, max 2 repeats",
-    "Twitchy table: 3 flips a bar tilt it (shake, then freeze)",
 };
 
 namespace {
@@ -674,9 +741,12 @@ void factoryPattern(int i, Pattern& p) {
     defaultPattern(p);
     i = clampi(i, 0, kFactoryCount - 1);
     std::snprintf(p.name, sizeof p.name, "%s", kFactoryNames[i]);
+    // the recipes below are numbered as in round 1 (14 = MULTIBALL)
+    static const int kRecipe[kFactoryCount] = {3, 4, 5, 6, 14, 13, 7, 8, 10, 1, 0, 2, 9, 11, 12};
+    const int recipe = kRecipe[i];
     Rng32 r;
-    r.seed(0x7117u + uint32_t(i) * 7919u);
-    switch (i) {
+    r.seed(0x7117u + uint32_t(recipe) * 7919u);
+    switch (recipe) {
         case 0:   // CHAIN: the default groove
             p.bpmX10 = 1240;
             p.table.swing = 12;
@@ -811,7 +881,7 @@ void factoryPattern(int i, Pattern& p) {
             break;
         }
         case 9: {   // MUTATION
-            p.ev.mutate = 45;
+            p.ev.mutate = 70;
             p.ev.mutHome = 10;
             p.ev.mutSpread = 40;
             for (int s = 1; s <= kSteps; ++s) W(p, 0, s, wrapStep(s + 2)) = 20;
@@ -853,6 +923,26 @@ void factoryPattern(int i, Pattern& p) {
             p.ev.noBounce = 1;
             p.ev.maxRepeat = 2;
             p.bpmX10 = 1500;
+            break;
+        }
+        case 14: {   // MULTIBALL: a jumping table that keeps splitting the ball
+            applyShape(p, 0, kShJumps, r);
+            static const uint8_t t[16] = {1, 3, 8, 3, 2, 3, 4, 3, 1, 8, 3, 3, 2, 3, 4, 3};
+            steps(p, t);
+            p.steps[3].bumper = 1;
+            p.steps[11].bumper = 1;
+            p.combos[0] = Combo();
+            p.combos[0].len = 2;
+            p.combos[0].path[0] = 1;
+            p.combos[0].path[1] = 5;
+            p.combos[0].action = kCaMultiball;
+            p.combos[0].a = 2;
+            p.table.mbMax = 4;
+            p.table.mbLife = 24;
+            p.ch[2].pan = 30;
+            p.ch[3].pan = 98;
+            p.ch[7].p[2] = 1;
+            p.bpmX10 = 1680;
             break;
         }
         case 13: {   // TILT

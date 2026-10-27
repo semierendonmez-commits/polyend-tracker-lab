@@ -35,7 +35,8 @@ const Rgb kChColors[kCh] = {Rgb(0xFF4D4D), Rgb(0xFFA62B), Rgb(0x3DF2A0), Rgb(0x2
 }  // namespace
 
 const char* Tilt::modSourceName(int i) {
-    static const char* const k[kModSources] = {"Ball step", "Entropy", "Heat", "Tilt", "Balls", "Page", "Velocity"};
+    static const char* const k[kModSources] = {"BALL", "BALL X", "BALL Y", "HEAT", "ENTROPY",
+                                              "BALLS", "TILT", "PAGE", "VELO"};
     return (i >= 0 && i < kModSources) ? k[i] : "";
 }
 
@@ -61,10 +62,11 @@ bool Tilt::init(lab::Context& c) {
     undo_ = c.arena->make<Pattern>();
     eng_ = c.arena->make<Engine>();
     io_ = static_cast<uint8_t*>(c.arena->alloc(kIoBytes));
-    if (!pat_ || !staged_ || !undo_ || !eng_ || !io_) return false;
+    toks_ = c.arena->make<JsonTok>(kJsonTokens);
+    if (!pat_ || !staged_ || !undo_ || !eng_ || !io_ || !toks_) return false;
     if (!audio_.init(*c.arena)) return false;
     rng_.seed(0x7117u ^ c.millis());
-    factoryPattern(0, *pat_);
+    factoryPattern(10, *pat_);   // CHAIN
     eng_->attach(pat_);
     eng_->reset();
     eng_->seed(0x5EEDu);
@@ -78,7 +80,6 @@ bool Tilt::init(lab::Context& c) {
             c.fs->mkdir(p);
         }
         scanSlots();
-        scanWavs();
         std::snprintf(p, sizeof p, "%s/tilt.cfg", c.home);
         uint8_t cfg[4] = {1, 1, 1, 1};
         if (readFile(*c.fs, p, cfg, 4) == 4) {
@@ -95,6 +96,17 @@ bool Tilt::init(lab::Context& c) {
             eng_->reset();
         }
         loadSamplesFor();
+    }
+    // LABKIT: every parameter, the pages, the sources; the browser and keyboard
+    registerParams();
+    c.browser().reserve(256, 4.0f);
+    if (c.fs) {
+        // routes, macros and MIDI learn of the last session (their bases match the pattern)
+        char p[96];
+        std::snprintf(p, sizeof p, "%s/labkit-patch.bin", c.home);
+        c.params().loadFile(c.fs, p);
+        syncRegistry(true);   // the values come from the pattern, the routes from the chunk
+        writeFactoryJson();
     }
     c.setBpm(float(pat_->bpmX10) * 0.1f);
     return true;
@@ -152,8 +164,7 @@ void Tilt::applyCommands(double beat) {
                 for (int i = 0; i < nOffs_; ++i) ctx_->midiOut(lab::MidiMsg{uint8_t(0x80 | (offs_[i].status & 15)), offs_[i].note, 0});
                 nOffs_ = 0;
                 break;
-            case Cmd::kSwap:
-                std::memcpy(pat_, staged_, sizeof(Pattern));
+            case Cmd::kSwap:   // the main loop copied the new pattern in
                 eng_->reset();
                 eng_->setReplay(false);
                 if (wasPlaying_) {
@@ -282,18 +293,26 @@ void Tilt::render(const lab::Transport& t, const lab::AudioIn& in, float* l, flo
         }
         beatNow_ = t.beat;
     }
-    // modulation sources
+    // modulation sources (0..1): ball step, ball x / y on the circle, heat under the
+    // ball, entropy, balls in play, tilt, page, the last velocity
     {
         const Ball& b = eng_->balls[0];
-        const int st = b.active ? b.state : 0;
+        const int st = b.active && !b.resting ? b.state : 0;
         mod_[0] = float(st) / 16.0f;
-        mod_[1] = eng_->entropy;
-        mod_[2] = st >= 1 ? (eng_->heat[st - 1] > 3.0f ? 1.0f : eng_->heat[st - 1] / 3.0f) : 0.0f;
-        mod_[3] = eng_->tilted() ? 1.0f : 0.0f;
-        mod_[4] = float(eng_->ballsActive()) / float(kBalls);
-        mod_[5] = float(pat_->ev.page) / float(kPages - 1);
+        if (st >= 1) {
+            const float a = -1.5707963f + float(st - 1) * 0.39269908f;
+            mod_[1] = 0.5f + 0.5f * cosf(a);
+            mod_[2] = 0.5f + 0.5f * sinf(a);
+        } else {
+            mod_[1] = mod_[2] = 0.5f;
+        }
+        mod_[3] = st >= 1 ? (eng_->heat[st - 1] > 3.0f ? 1.0f : eng_->heat[st - 1] / 3.0f) : 0.0f;
+        mod_[4] = eng_->entropy;
+        mod_[5] = float(eng_->ballsActive()) / float(kBalls);
+        mod_[6] = eng_->tilted() ? 1.0f : 0.0f;
+        mod_[7] = float(pat_->ev.page) / float(kPages - 1);
         for (int i = 0; i < audio_.nFired; ++i)
-            if (audio_.fired[i].kind == Hit::kNote) mod_[6] = float(audio_.fired[i].vel) / 127.0f;
+            if (audio_.fired[i].kind == Hit::kNote) mod_[8] = float(audio_.fired[i].vel) / 127.0f;
     }
     audio_.stemsOn = ctx_->shell && ctx_->shell->recording();
     audio_.render(sample_, t.bpm, l, r);
@@ -346,6 +365,30 @@ void Tilt::update(uint32_t ms) {
     bool any = false;
     for (int i = 0; i < kCh; ++i) any |= sampleDirty_[i];
     if (any) loadSamplesFor();
+    // a file picked in the browser: loaded here, never in render()
+    if (pendingKind_ && pendingPick_[0]) {
+        const int kind = pendingKind_;
+        pendingKind_ = 0;
+        if (kind == 1) {
+            Channel& c = pat_->ch[pickCh_];
+            if (c.type != kEnSample) {
+                engineDefaults(c, kEnSample);
+                refreshSlots(pickCh_);
+            }
+            lab::copyStr(c.sample, kPathLen, pendingPick_);
+            sampleDirty_[pickCh_] = true;
+            ctx_->toast("Sample loaded");
+        } else if (kind == 2) {
+            ctx_->toast(loadJson(pendingPick_, jsonErr_, sizeof jsonErr_) ? "Pattern loaded (JSON)" : jsonErr_);
+        }
+        pendingPick_[0] = 0;
+    }
+    // the registry follows the pattern (fields written by the pages, generators, loads)
+    if (ms - lastSyncMs_ >= 100) {
+        lastSyncMs_ = ms;
+        syncRegistry(false);
+        placeChannels();
+    }
     // the tempo is part of the pattern
     pat_->bpmX10 = uint16_t(ctx_->bpm() * 10.0f + 0.5f);
 }
@@ -389,30 +432,30 @@ int Tilt::settings(lab::SettingRow* rows, int cap) {
 
 // ---- bench -----------------------------------------------------------------------------------------
 const char* Tilt::benchName(int i) const {
-    static const char* const k[] = {"groove", "busy8", "multiball", "allfx", "p.sample", "p.kick", "p.snare",
-                                    "p.hat", "p.acid", "p.fm", "p.fxonly", "p.engine"};
-    return k[clampi(i, 0, 11)];
+    static const char* const k[] = {"groove", "busy8", "multiball", "allfx", "mods",   "p.sample", "p.kick",
+                                    "p.snare", "p.hat", "p.acid", "p.fm",  "p.fxonly", "p.engine"};
+    return k[clampi(i, 0, 12)];
 }
 
 void Tilt::benchSetup(int i) {
 #ifdef TILT_PROFILE
-    if (i >= 4) {   // profiling: 8 channels of one engine, or the FX alone, or the engine alone
-        factoryPattern(0, *pat_);
+    if (i >= 5) {   // profiling: 8 channels of one engine, or the FX alone, or the engine alone
+        factoryPattern(10, *pat_);
         Pattern& p = *pat_;
         p.table.rate = 1;
         for (int s = 0; s < kSteps; ++s) {
-            p.steps[s].trig = uint8_t(i == 11 ? 0 : 1 + s % 8);
+            p.steps[s].trig = uint8_t(i == 12 ? 0 : 1 + s % 8);
             p.steps[s].len = 16;
             p.steps[s].bumper = 0;
         }
         for (int c = 0; c < kCh; ++c) {
-            if (i < 4 + kEngines) engineDefaults(p.ch[c], i - 4);
+            if (i < 5 + kEngines) engineDefaults(p.ch[c], i - 5);
             p.ch[c].choke = 0;
             p.ch[c].sample[0] = 0;
-            p.ch[c].sendA = p.ch[c].sendB = uint8_t(i == 10 ? 127 : 0);
+            p.ch[c].sendA = p.ch[c].sendB = uint8_t(i == 11 ? 127 : 0);
             p.ch[c].p[2] = 127;
         }
-        if (i == 10) {
+        if (i == 11) {
             for (int s = 0; s < kSteps; ++s) p.steps[s].trig = s == 0 ? 1 : 0;
         }
         eng_->reset();
@@ -421,7 +464,7 @@ void Tilt::benchSetup(int i) {
         return;
     }
 #endif
-    factoryPattern(i == 0 ? 0 : 4, *pat_);
+    factoryPattern(i == 0 ? 10 : 1, *pat_);   // CHAIN, BUMPERS
     Pattern& p = *pat_;
     if (i >= 1) {
         // every channel sounding: long decays, all engines, a fast walk over all lanes
@@ -470,13 +513,37 @@ void Tilt::benchSetup(int i) {
         p.ev.maxRepeat = 2;
         p.table.gravity = 40;
     }
+    if (i == 4) {   // 8 channels + multiball + LABKIT modulation: LFOs, random, the ball on 40 targets
+        p.table.rate = 1;
+        for (auto& c : p.ch) c.sendA = c.sendB = 40;
+        p.ev.mutate = 50;
+        p.ev.fatigue = 30;
+    }
     eng_->reset();
     launched_ = false;
     nextMove_ = -1.0;
-    if (i >= 2) {
+    if (i >= 2 && i <= 4) {
         eng_->launch(0.0);
         launched_ = true;
         for (int k = 0; k < 3; ++k) eng_->addBall();
+    }
+    for (int c = 0; c < kCh; ++c) refreshSlots(c);
+    syncRegistry(true);
+    if (kitReady_) {
+        lab::kit::Mod& M = ctx_->mod();
+        M.clearRoutes();
+        if (i == 4) {
+            int made = 0;
+            for (int c = 0; c < kCh; ++c)
+                for (int k = 0; k < kParamsPerEngine && made < 40; ++k) {
+                    if (!refName_[slotRef_[c][k]][0]) continue;
+                    const int src = (c + k) % 6 < 4 ? (c + k) % 4 : lab::kit::kSrcWs + (c + k) % kModSources;
+                    if (M.route(src, refId_[slotRef_[c][k]], 0.15f) >= 0) ++made;
+                }
+            for (int s = 0; s < kSteps && made < 48; s += 2)
+                if (M.route(lab::kit::kSrcRnd, paramOf(&p.steps[s].vel), 0.2f) >= 0) ++made;
+        }
+        M.update(false);
     }
 }
 

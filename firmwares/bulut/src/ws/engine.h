@@ -83,8 +83,12 @@ constexpr uint32_t kMixHist = 16384;          // master history ring (freeze fro
 constexpr int kMaxGrains = 24;                // running grains, hard cap
 constexpr int kDefaultGrains = 20;
 constexpr int kMaxCloudGrains = 14, kDefaultCloudGrains = 10;
-constexpr float kUnits = 30.0f;               // grains + chains + generators, per block
+constexpr float kUnits = 30.0f;               // grains + chains + generators + mixing, per block
 constexpr int kMinGrains = 6;                 // never fewer than this, whatever the chains cost
+// The CPU guard: what the channels are set to (whether they sound or not) may
+// cost at most this; past it the FX of the last channels is bypassed and
+// generators stop writing (their buffer holds), shown as CPU on the pages.
+constexpr float kChainCap = kUnits - float(kMinGrains);
 constexpr int kSpawnsPerBlock = 8;
 constexpr int kGestBufs = 3;                  // per channel (see Engine::gestIdle)
 
@@ -179,6 +183,8 @@ public:
     volatile int totalActive = 0;
     volatile int grainLimit = kDefaultGrains;   // after the chains' units (display)
     volatile float unitsUsed = 0.0f;            // chains + generators this block (display)
+    volatile uint8_t cpuBypass = 0;             // CPU guard: channels whose FX mode is bypassed
+    volatile uint8_t cpuHold = 0;               // CPU guard: generators that do not write
     volatile uint32_t refusedTotal = 0;
     volatile double beat = 0.0;            // transport beat at the last block
     volatile uint32_t sampleClock = 0;     // samples rendered
@@ -229,6 +235,8 @@ private:
     int spawnRot_ = 0;
     int spawnsLeft_ = 0;
     uint8_t idle_[kCh] = {1, 1, 1, 1};
+    uint8_t fxWanted_ = 0, fxRan_ = 0, genWanted_ = 0, genRan_ = 0;   // CPU guard, last block
+    float chainRan_[kCh] = {};             // chain units each channel ran last block
     Grain pool_[kMaxGrains];
     int nActive_ = 0;
     float* win_ = nullptr;                 // kWindows * (kWin + 1), in the arena

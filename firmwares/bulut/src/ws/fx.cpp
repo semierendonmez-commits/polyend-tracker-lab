@@ -58,19 +58,22 @@ uint16_t rhythmPattern(int i) {
     return p;
 }
 
-// Grain units of each block (measured under QEMU, tests/lab/lab_bench.cpp:
-// one unit ~ one running grain, ~3,500 M4 instructions a block).
-float chainUnits(const ChParams& p, bool beadsTape) {
-    static const float kFx[kFxModes] = {0.0f, 3.2f, 2.4f, 1.6f, 1.0f, 1.2f, 0.8f, 1.4f};
+// Grain units (fx.h): instructions per block / 3,500, measured with the
+// BULUT_PROF bench build (TEXTURE 10.4k, SHIFTER 11.3k, FLANGER 12.3k,
+// CRUSHER 4.9k, FREEZER 4.0k, drive 3.9k, filter 3.3k, DIRTY TAPE media +
+// mu-law 9.5k, RETE 17.5k, TONE / NOISE ~9.5k a block).
+float baseUnits(const ChParams& p, bool beadsTape) {
     float u = 0.0f;
-    if (p.drive > 0.01f) u += 0.6f;
-    if (p.fltMode != kFltOff) u += 0.9f;
-    const int m = p.fxMode;
-    if (m > 0 && m < kFxModes) u += kFx[m];
-    if (beadsTape) u += 1.2f;
+    if (p.drive > 0.01f) u += 1.15f;
+    if (p.fltMode != kFltOff) u += 1.0f;
+    if (beadsTape) u += 2.75f;
     return u;
 }
-float genUnits(int genType) { return genType == kGenRete ? 3.0f : 0.5f; }
+float fxUnits(int m) {
+    static const float kFx[kFxModes] = {0.0f, 3.05f, 3.3f, 3.6f, 1.0f, 1.45f, 0.8f, 1.2f};
+    return (m > 0 && m < kFxModes) ? kFx[m] : 0.0f;
+}
+float genUnits(int genType) { return genType == kGenRete ? 5.1f : 2.8f; }
 
 // ---- chain ---------------------------------------------------------------------
 bool ChannelChain::init(lab::Arena& a, float* diffuserSram) {
@@ -82,16 +85,16 @@ bool ChannelChain::init(lab::Arena& a, float* diffuserSram) {
     if (!shBuf || !flg_[0] || !flg_[1] || !fz_[0] || !fz_[1] || !diffuserSram) return false;
     diff_.Init(diffuserSram);
     shift_.Init(shBuf);
-    wow_.Init(kSr);
-    wow_.set_lp(0.6f);
-    wow_.set_amount(1.0f);
+    wow_.Init(kSr * 0.5f);   // run at half rate (media())
+    wow_.set_lp(0.8f);
+    wow_.set_amount(0.5f);   // the same depth in time as at full rate
     reset();
     return true;
 }
 
 void ChannelChain::reset() {
     for (int c = 0; c < 2; ++c) {
-        texPrev_[c] = 0.0f;
+        texPrev_[c] = wowPrev_[c] = 0.0f;
         ic1[c] = ic2[c] = 0.0f;
         texFb_[c] = texLp_[c] = shFb_[c] = 0.0f;
         crPh_[c] = crHold_[c] = crLp_[c] = crY_[c] = 0.0f;
@@ -202,25 +205,35 @@ void ChannelChain::texture(float* L, float* R, const ChParams& p) {
     uiValue = p.fxAmt;
 }
 
-// SHIFTER: Clouds' pitch shifter. AMOUNT = -24 .. +24 semitones (centre 0,
-// whole semitones), TIME = window, FEEDBACK = shimmer (the shifted signal back in).
+// SHIFTER: Clouds' pitch shifter, at half rate (22.05 kHz, like TEXTURE: half
+// the cost) and fully wet. AMOUNT = -24 .. +24 semitones (centre 0, whole
+// semitones), TIME = window, FEEDBACK = shimmer (the shifted signal back in).
 void ChannelChain::shifter(float* L, float* R, const ChParams& p) {
+    constexpr uint32_t kHalf = kBlock / 2;
     const float semis = floorf((p.fxAmt - 0.5f) * 48.0f + 0.5f);
     shift_.set_ratio(fexp2(semis * (1.0f / 12.0f)));
     shift_.set_size(0.15f + 0.85f * p.fxTime);
     const float fb = p.fxFb * 0.8f;
-    for (uint32_t i = 0; i < kBlock; ++i) {
-        gFrames[i].l = L[i] + shFb_[0] * fb;
-        gFrames[i].r = R[i] + shFb_[1] * fb;
+    const float fl = shFb_[0] * fb, fr = shFb_[1] * fb;
+    for (uint32_t i = 0; i < kHalf; ++i) {
+        gFrames[i].l = 0.5f * (L[2 * i] + L[2 * i + 1]) + fl;
+        gFrames[i].r = 0.5f * (R[2 * i] + R[2 * i + 1]) + fr;
     }
-    shift_.Process(gFrames, kBlock);
-    for (uint32_t i = 0; i < kBlock; ++i) {
-        L[i] = gFrames[i].l;
-        R[i] = gFrames[i].r;
+    shift_.Process(gFrames, kHalf);
+    float pl = texPrev_[0], pr = texPrev_[1];
+    for (uint32_t i = 0; i < kHalf; ++i) {
+        const float wl = gFrames[i].l, wr = gFrames[i].r;
+        L[2 * i] = 0.5f * (pl + wl);
+        R[2 * i] = 0.5f * (pr + wr);
+        L[2 * i + 1] = wl;
+        R[2 * i + 1] = wr;
+        pl = wl;
+        pr = wr;
     }
-    shFb_[0] = soft(gFrames[kBlock - 1].l);
-    shFb_[1] = soft(gFrames[kBlock - 1].r);
-    // the shimmer loop: the whole block's mean level would be gentler, the last sample is enough
+    texPrev_[0] = pl;
+    texPrev_[1] = pr;
+    shFb_[0] = soft(gFrames[kHalf - 1].l);
+    shFb_[1] = soft(gFrames[kHalf - 1].r);
     uiValue = semis;
 }
 
@@ -232,30 +245,42 @@ void ChannelChain::flanger(float* L, float* R, const ChParams& p) {
     const float base = 5.5f * 0.001f * kSr, depth = 5.0f * flgDepth_ * 0.001f * kSr;
     const float fb = p.fxFb * 0.95f;
     const float w = hz * dsp::kInvSr;
+    // the sweep moves in 16-sample segments (a linear ramp of the delay inside)
+    constexpr uint32_t kSeg = 16;
     float sw, cw;
-    sincosTurns(w, sw, cw);
+    sincosTurns(w * float(kSeg), sw, cw);
+    const float dry = 1.0f - 0.5f * amt;
+    const float k3 = 1.0f / 6.75f;
     float* io[2] = {L, R};
-    uint32_t wpos = flgW_;
+    const uint32_t wpos = flgW_;
     for (int c = 0; c < 2; ++c) {
         float* x = io[c];
         float* line = flg_[c];
         float s, co;
         sincosTurns(modPh_[c], s, co);
         uint32_t wp = wpos;
-        for (uint32_t i = 0; i < kBlock; ++i) {
-            const float d = base + depth * s;
+        float d0 = base + depth * s;
+        for (uint32_t seg = 0; seg < kBlock; seg += kSeg) {
             const float t = co * cw - s * sw;
             s = s * cw + co * sw;
             co = t;
-            float rp = float(wp) - d;
-            if (rp < 0.0f) rp += float(kFlgLen);
-            const uint32_t i0 = uint32_t(rp);
-            const float fr = rp - float(i0);
-            const float a = line[i0 & kFlgMask], b = line[(i0 + 1) & kFlgMask];
-            const float wet = a + (b - a) * fr;
-            line[wp] = soft(x[i] + wet * fb);
-            wp = (wp + 1) & kFlgMask;
-            x[i] = x[i] * (1.0f - 0.5f * amt) + wet * amt;
+            const float d1 = base + depth * s;
+            const float dd = (d1 - d0) * (1.0f / float(kSeg));
+            float d = d0;
+            for (uint32_t i = seg; i < seg + kSeg; ++i) {
+                const float rp = float(wp + kFlgLen) - d;   // always positive
+                const uint32_t i0 = uint32_t(rp);
+                const float fr = rp - float(i0);
+                const float a = line[i0 & kFlgMask], bb = line[(i0 + 1) & kFlgMask];
+                const float wet = a + (bb - a) * fr;
+                float v = x[i] + wet * fb;
+                v = v > 1.5f ? 1.5f : (v < -1.5f ? -1.5f : v);
+                line[wp] = v - v * v * v * k3;
+                wp = (wp + 1) & kFlgMask;
+                x[i] = x[i] * dry + wet * amt;
+                d += dd;
+            }
+            d0 = d1;
         }
         modPh_[c] += w * float(kBlock);
         modPh_[c] -= floorf(modPh_[c]);
@@ -468,15 +493,25 @@ void ChannelChain::freezer(float* L, float* R, const ChParams& p, const BlockClo
 // CLEAN TAPE and LO-FI soften the top, DIRTY TAPE adds Beads' wow and flutter.
 void ChannelChain::media(float* L, float* R, int m) {
     if (m == kMediaDirtyTape) {
-        for (uint32_t i = 0; i < kBlock; ++i) {
-            frames_[i].l = L[i];
-            frames_[i].r = R[i];
+        // Beads' wow and flutter at half rate (it is a slow, band-limited wobble)
+        constexpr uint32_t kHalf = kBlock / 2;
+        for (uint32_t i = 0; i < kHalf; ++i) {
+            frames_[i].l = 0.5f * (L[2 * i] + L[2 * i + 1]);
+            frames_[i].r = 0.5f * (R[2 * i] + R[2 * i + 1]);
         }
-        wow_.Process(frames_, kBlock);
-        for (uint32_t i = 0; i < kBlock; ++i) {
-            L[i] = frames_[i].l;
-            R[i] = frames_[i].r;
+        wow_.Process(frames_, kHalf);
+        float pl = wowPrev_[0], pr = wowPrev_[1];
+        for (uint32_t i = 0; i < kHalf; ++i) {
+            const float wl = frames_[i].l, wr = frames_[i].r;
+            L[2 * i] = 0.5f * (pl + wl);
+            R[2 * i] = 0.5f * (pr + wr);
+            L[2 * i + 1] = wl;
+            R[2 * i + 1] = wr;
+            pl = wl;
+            pr = wr;
         }
+        wowPrev_[0] = pl;
+        wowPrev_[1] = pr;
     }
     const float a = m == kMediaCleanTape ? 0.75f : (m == kMediaLofi ? 0.85f : 0.55f);
     float zl = medLp_[0], zr = medLp_[1];
@@ -490,13 +525,13 @@ void ChannelChain::media(float* L, float* R, int m) {
     medLp_[1] = zr;
 }
 
-OT_FASTRUN_FN void ChannelChain::process(float* L, float* R, const ChParams& p, int med, const BlockClock& bc) {
+OT_FASTRUN_FN void ChannelChain::process(float* L, float* R, const ChParams& p, int med, const BlockClock& bc, bool fxOn) {
     PROF_MARK(4);
     if (p.drive > 0.01f) drive(L, R, p.drive);
     PROF_MARK(10);
     if (p.fltMode != kFltOff) filter(L, R, p.fltMode, p.cutoff, p.reso);
     PROF_MARK(11);
-    const int m = p.fxMode;
+    const int m = fxOn ? p.fxMode : int(kFxOff);
     if (m != lastFx_) {
         // a new mode starts from silence (no stale lines), the freezer re-arms
         lastFx_ = m;
@@ -514,7 +549,9 @@ OT_FASTRUN_FN void ChannelChain::process(float* L, float* R, const ChParams& p, 
         case kFxFreezer: freezer(L, R, p, bc); break;
         default: break;
     }
+    PROF_MARK(12 + (m & 7));
     if (med != kMediaHifi) media(L, R, med);
+    PROF_MARK(4);
     // tails: modes with memory keep running ~1.5 s after the input went quiet
     tail_ = (m == kFxTexture || m == kFxShifter || m == kFxFlanger || m == kFxFreezer || med == kMediaDirtyTape) ? 520 : 0;
 }
