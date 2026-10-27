@@ -3,15 +3,26 @@
 // tilt_ui.cpp (input), tilt_draw.cpp (pages, intro, LEDs), tilt_io.cpp (files).
 #pragma once
 
+#include "lab/browser.h"
 #include "lab/dsp.h"
+#include "lab/keyboard.h"
 #include "lab/lab.h"
+#include "lab/mod.h"
+#include "lab/nav.h"
+#include "lab/params.h"
 #include "ws/tilt_audio.h"
+#include "ws/tilt_json.h"
 #include "ws/tilt_engine.h"
 #include "ws/tilt_model.h"
 
 namespace tilt {
 
 enum Page : uint8_t { kPgGraph, kPgMatrix, kPgSteps, kPgTable, kPgEvolve, kPgCombos, kPgChannels, kPgMix, kPgCount };
+// LABKIT pages (MAP, PARAM pads): the 8 screen pages, then pages that only hold
+// parameters (they open STEPS or MIX on the screen), then hidden pages that hold
+// the channels that are not selected.
+enum NavPage : uint8_t { kNpLanes = kPgCount, kNpTiming, kNpLength, kNpPitch, kNpFxMutes, kNavPages };
+constexpr int kHiddenChPage = 40;   // + channel
 struct PageInfo {
     const char* name;      // F-key label
     const char* title;     // header
@@ -50,12 +61,18 @@ public:
     int settings(lab::SettingRow* rows, int cap) override;
     void save() override;
 #ifdef TILT_PROFILE
-    int benchScenarios() const override { return 4 + kEngines + 2; }
+    int benchScenarios() const override { return 5 + kEngines + 2; }
 #else
-    int benchScenarios() const override { return 4; }
+    int benchScenarios() const override { return 5; }
 #endif
     const char* benchName(int i) const override;
     void benchSetup(int i) override;
+    // LABKIT v2
+    int navPages(lab::kit::PageInfo* out, int cap) override;
+    int navPage() const override;
+    void navGoto(int page) override;
+    void navFocus(lab::kit::ParamId id) override;
+    void navParamChanged(lab::kit::ParamId id) override;
 
     // ---- tests / sim ---------------------------------------------------------------------
     Engine& engine() { return *eng_; }
@@ -68,12 +85,23 @@ public:
     bool loadKit(int slot);
     void loadFactory(int i);
     bool exportMidi(char* pathOut, int cap);
+    bool saveJson(const char* path);
+    bool loadJson(const char* path, char* err = nullptr, int errCap = 0);
+    int writeFactoryJson();          // the factory patterns as JSON on the card (missing ones)
+    void openJsonBrowser();
+    void openJsonSave();
+    void openSampleBrowser(int ch);
+    // the registry: the param of a pattern field (kNoParam if it is not registered)
+    lab::kit::ParamId paramOf(const void* field) const;
+    int paramCount() const { return nRefs_; }
+    // pattern fields -> registry bases; all = modulated params too (after a load / randomize)
+    void syncRegistry(bool all = false);
     void randomizeNow(uint8_t targets);
     void undoRandom();
     int capBars() const { return capBars_; }
 
     // ---- modulation sources (0..1 floats, updated every block; for the LABKIT mod layer) ----
-    static constexpr int kModSources = 7;
+    static constexpr int kModSources = 9;
     static const char* modSourceName(int i);
     const float* modSourceValue(int i) const { return (i >= 0 && i < kModSources) ? &mod_[i] : nullptr; }
 
@@ -93,7 +121,16 @@ private:
     void swapIn(const Pattern& p);
     void loadSamplesFor();
     void loadSample(int ch);
-    void scanWavs();
+    // LABKIT glue (tilt_nav.cpp)
+    void registerParams();
+    lab::kit::ParamId addRef(const char* key, const char* name, const void* field, uint8_t kind, uint8_t ch = 0,
+                             uint8_t slot = 0);
+    void refreshSlots(int ch);       // slot names follow the channel's engine
+    void placeChannels();            // the selected channel's params on the CHANNELS page
+    int fieldGet(const void* field) const;            // base value (registry) or the field
+    void fieldSet(void* field, int v);                // through the registry when registered
+    void kpSet(int kparam, int v, int index = 0);     // a kParams entry, through fieldSet
+    static void refSetter(void* ctx, float v);
     void scanSlots();
     void slotPath(bool kit, int slot, char* buf, int cap) const;
     void auditionCh(int ch, int note, int vel);
@@ -126,7 +163,6 @@ private:
     void drawChannels(lab::Canvas& g);
     void drawMix(lab::Canvas& g);
     void drawFile(lab::Canvas& g);
-    void drawHelp(lab::Canvas& g);
     void drawBanner(lab::Canvas& g);
     void drawKeys(lab::Canvas& g);
     void drawParamList(lab::Canvas& g, const int* ids, int n, int x0, int y0, int colW, int focus, int index);
@@ -163,7 +199,7 @@ private:
 
     // ui
     int page_ = kPgGraph;
-    bool help_ = false, file_ = false, shift_ = false, perform_ = false;
+    bool file_ = false, shift_ = false, perform_ = false;
     bool padDown_[lab::kPads] = {};
     uint8_t padVel_[lab::kPads] = {};
     int mxRow_ = 1, mxCol_ = 2, mxField_ = 0, mxShape_ = 0, mxRowFn_ = 1;
@@ -190,16 +226,38 @@ private:
     bool slotUsed_[kUserSlots] = {};
     char slotName_[kUserSlots][kNameLen] = {};
     bool kitUsed_[kKitSlots] = {};
-    char wavs_[kMaxWavs][kPathLen] = {};
-    int wavCount_ = 0, wavSel_ = 0;
     bool sampleDirty_[kCh] = {};
     int midiFiles_ = 0;
     // settings rows
     int setAutoload_ = 1, setMidiOut_ = 1, setStepNotes_ = 1, setTrail_ = 1;
     int activeSlot_ = -1;
-    float mod_[kModSources] = {};   // ball step, entropy, heat under the ball, tilt, balls, page, last velocity
+    float mod_[kModSources] = {};   // ball step, x, y, heat, entropy, balls, tilt, page, last velocity
+    // LABKIT registry refs: which pattern byte each param writes
+    struct FieldRef {
+        Tilt* t;
+        uint16_t off;
+        uint8_t kind, ch, slot;
+    };
+    enum RefKind : uint8_t { kRefU8, kRefI8, kRefSlot, kRefPath };
+    static constexpr int kMaxRefs = 460;
+    FieldRef* refs_ = nullptr;
+    lab::kit::ParamId* refId_ = nullptr;
+    uint16_t* offRef_ = nullptr;     // byte offset in Pattern -> ref + 1 (0 = none)
+    char (*refName_)[16] = nullptr;  // display names ("3 Velo")
+    int nRefs_ = 0;
+    int slotRef_[kCh][kParamsPerEngine] = {};   // ref of channel c's engine slot
+    int chRef_[kCh][6] = {};                    // type, note, MIDI ch, follow, legato, choke
+    uint32_t lastSyncMs_ = 0;
+    int placedFor_ = -1;
+    bool kitReady_ = false;
+    char pendingPick_[kPathLen] = {};   // browser result, handled in update()
+    int pendingKind_ = 0;               // 1 sample, 2 JSON load
+    int pickCh_ = 0;
+    char jsonErr_[48] = {};
+    lab::kit::ParamId fxIds_[2] = {};
+    JsonTok* toks_ = nullptr;
     char loaded_[kCh][kPathLen] = {};
-    static constexpr uint32_t kIoBytes = 32768;
+    static constexpr uint32_t kIoBytes = 49152;
     uint8_t* io_ = nullptr;          // file buffer (patterns, kits, MIDI files)
     char lastMidi_[64] = {};
 };

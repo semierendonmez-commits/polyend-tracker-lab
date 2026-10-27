@@ -107,6 +107,7 @@ public:
     uint32_t words() const { return words_; }
     uint32_t dropped() const { return dropped_; }
     bool room(uint32_t w) const { return words_ + w <= limit_; }
+    uint32_t left() const { return limit_ > words_ ? limit_ - words_ : 0u; }
     // The Shell keeps words for its own overlays (LABKIT HUD, PARAM pads):
     // primitives past the limit are skipped like over-budget ones, but they are
     // counted in clipped(), not dropped(). begin() resets the limit.

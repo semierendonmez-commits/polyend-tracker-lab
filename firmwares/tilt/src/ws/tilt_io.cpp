@@ -11,8 +11,6 @@ namespace tilt {
 
 namespace {
 inline int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
-constexpr uint32_t kKitMagic = 0x4B544C54u;   // "TLTK"
-constexpr uint16_t kKitVersion = 1;
 
 bool writeFile(ot::IStorage& fs, const char* path, const void* data, uint32_t n) {
     const ot::IStorage::Handle h = fs.open(path, ot::IStorage::kWrite);
@@ -79,7 +77,11 @@ bool Tilt::savePattern(int slot) {
     slotPath(false, slot, p, sizeof p);
     pat_->bpmX10 = uint16_t(ctx_->bpm() * 10.0f + 0.5f);
     if (!pat_->name[0] || std::strncmp(pat_->name, "U", 1) == 0) std::snprintf(pat_->name, kNameLen, "USER %02d", slot + 1);
-    const uint32_t n = patternToBytes(*pat_, io_, kIoBytes);
+    uint32_t n = patternToBytes(*pat_, io_, kIoBytes);
+    if (n) {   // + the LABKIT chunk: routes, macros, MIDI learn
+        syncRegistry(false);
+        n += ctx_->params().saveChunk(io_ + n, kIoBytes - n);
+    }
     const bool ok = n && writeFile(*ctx_->fs, p, io_, n);
     if (ok) activeSlot_ = slot;
     scanSlots();
@@ -87,9 +89,13 @@ bool Tilt::savePattern(int slot) {
 }
 
 void Tilt::swapIn(const Pattern& p) {
-    if (&p != staged_) std::memcpy(staged_, &p, sizeof(Pattern));
+    // copied here (the audio may see one torn block: harmless bytes), then the
+    // registry follows, then the audio side restarts the walk
+    std::memcpy(pat_, &p, sizeof(Pattern));
     for (int i = 0; i < kCh; ++i) sampleDirty_[i] = true;
-    ctx_->setBpm(float(staged_->bpmX10) * 0.1f);
+    ctx_->setBpm(float(pat_->bpmX10) * 0.1f);
+    for (int c = 0; c < kCh; ++c) refreshSlots(c);
+    syncRegistry(true);
     post(Cmd::kSwap);
 }
 
@@ -101,6 +107,10 @@ bool Tilt::loadPattern(int slot) {
     if (n <= 0 || !patternFromBytes(*staged_, io_, uint32_t(n))) return false;
     activeSlot_ = slot;
     swapIn(*staged_);
+    uint16_t size;
+    std::memcpy(&size, io_ + 6, 2);
+    if (uint32_t(n) > size + 8u && ctx_->params().loadChunk(io_ + size, uint32_t(n) - size))
+        syncRegistry(true);   // routes / macros / MIDI learn from the chunk, the values from the pattern
     return true;
 }
 
@@ -114,14 +124,8 @@ bool Tilt::saveKit(int slot) {
     if (!ctx_->fs || slot < 0 || slot >= kKitSlots) return false;
     char p[96];
     slotPath(true, slot, p, sizeof p);
-    uint8_t* b = io_;
-    std::memcpy(b, &kKitMagic, 4);
-    std::memcpy(b + 4, &kKitVersion, 2);
-    const uint16_t size = uint16_t(sizeof(Channel) * kCh + sizeof(Fx));
-    std::memcpy(b + 6, &size, 2);
-    std::memcpy(b + 8, pat_->ch, sizeof(Channel) * kCh);
-    std::memcpy(b + 8 + sizeof(Channel) * kCh, &pat_->fx, sizeof(Fx));
-    const bool ok = writeFile(*ctx_->fs, p, b, 8u + size);
+    const uint32_t n = kitToBytes(*pat_, io_, kIoBytes);
+    const bool ok = n && writeFile(*ctx_->fs, p, io_, n);
     scanSlots();
     return ok;
 }
@@ -132,22 +136,16 @@ bool Tilt::loadKit(int slot) {
     slotPath(true, slot, p, sizeof p);
     const int32_t n = readFile(*ctx_->fs, p, io_, kIoBytes);
     if (n < 8) return false;
-    uint32_t magic;
-    uint16_t version, size;
-    std::memcpy(&magic, io_, 4);
-    std::memcpy(&version, io_ + 4, 2);
-    std::memcpy(&size, io_ + 6, 2);
-    if (magic != kKitMagic || version == 0 || int32_t(size) + 8 > n) return false;
     std::memcpy(staged_, pat_, sizeof(Pattern));
-    uint32_t chBytes = sizeof(Channel) * kCh;
-    if (chBytes > size) chBytes = size;
-    std::memcpy(staged_->ch, io_ + 8, chBytes);
-    if (size >= sizeof(Channel) * kCh + sizeof(Fx)) std::memcpy(&staged_->fx, io_ + 8 + sizeof(Channel) * kCh, sizeof(Fx));
-    sanitize(*staged_);
-    // only the sound changes: copy it into the live pattern (the walk keeps going)
+    if (!kitFromBytes(*staged_, io_, uint32_t(n))) return false;
+    // only the sound changes (the walk keeps going)
     std::memcpy(pat_->ch, staged_->ch, sizeof(Channel) * kCh);
     pat_->fx = staged_->fx;
-    for (int i = 0; i < kCh; ++i) sampleDirty_[i] = true;
+    for (int i = 0; i < kCh; ++i) {
+        sampleDirty_[i] = true;
+        refreshSlots(i);
+    }
+    syncRegistry(true);
     return true;
 }
 
@@ -158,38 +156,15 @@ void Tilt::save() {
     pat_->bpmX10 = uint16_t(ctx_->bpm() * 10.0f + 0.5f);
     const uint32_t n = patternToBytes(*pat_, io_, kIoBytes);
     if (n) writeFile(*ctx_->fs, p, io_, n);
+    syncRegistry(false);
+    std::snprintf(p, sizeof p, "%s/labkit-patch.bin", ctx_->home);
+    ctx_->params().saveFile(ctx_->fs, p);
     std::snprintf(p, sizeof p, "%s/tilt.cfg", ctx_->home);
     const uint8_t cfg[4] = {uint8_t(setAutoload_), uint8_t(setMidiOut_), uint8_t(setStepNotes_), uint8_t(setTrail_)};
     writeFile(*ctx_->fs, p, cfg, 4);
 }
 
 // ---- samples ------------------------------------------------------------------------------------------
-void Tilt::scanWavs() {
-    wavCount_ = 0;
-    if (!ctx_->fs) return;
-    struct Ctx {
-        Tilt* t;
-        const char* dir;
-    };
-    char dir1[64];
-    std::snprintf(dir1, sizeof dir1, "%s/Samples", ctx_->home);
-    const char* dirs[2] = {dir1, "Samples"};
-    for (const char* d : dirs) {
-        Ctx cx{this, d};
-        ctx_->fs->listDir(
-            d,
-            [](const ot::IStorage::DirEntry& e, void* vc) {
-                Ctx* c = static_cast<Ctx*>(vc);
-                if (e.isDir || !lab::endsWithCi(e.name, ".wav")) return true;
-                if (c->t->wavCount_ >= kMaxWavs) return false;
-                const int n = std::snprintf(c->t->wavs_[c->t->wavCount_], kPathLen, "%s/%s", c->dir, e.name);
-                if (n > 0 && n < kPathLen) ++c->t->wavCount_;
-                return true;
-            },
-            &cx);
-    }
-}
-
 void Tilt::loadSample(int ch) {
     SampleSlot& s = audio_.userSlot(ch);
     const char* path = pat_->ch[ch].sample;
@@ -223,8 +198,6 @@ void Tilt::loadSample(int ch) {
 }
 
 void Tilt::loadSamplesFor() {
-    // wait until a pattern swap reached the audio side
-    if (cmds_.size()) return;
     for (int i = 0; i < kCh; ++i) {
         sampleDirty_[i] = false;
         if (pat_->ch[i].type == kEnSample) loadSample(i);
@@ -330,6 +303,9 @@ void Tilt::randomizeNow(uint8_t targets) {
     std::memcpy(undo_, pat_, sizeof(Pattern));
     haveUndo_ = true;
     randomize(*pat_, rng_, targets);
+    syncRegistry(true);
+    if (targets & kRtSound)
+        for (int c = 0; c < kCh; ++c) refreshSlots(c);
 }
 
 void Tilt::undoRandom() {
@@ -337,6 +313,116 @@ void Tilt::undoRandom() {
     std::memcpy(staged_, pat_, sizeof(Pattern));
     std::memcpy(pat_, undo_, sizeof(Pattern));
     std::memcpy(undo_, staged_, sizeof(Pattern));
+    for (int c = 0; c < kCh; ++c) refreshSlots(c);
+    syncRegistry(true);
+}
+
+// ---- JSON (MANUAL.md "Pattern JSON") ------------------------------------------------------------
+bool Tilt::saveJson(const char* path) {
+    if (!ctx_->fs) return false;
+    pat_->bpmX10 = uint16_t(ctx_->bpm() * 10.0f + 0.5f);
+    const uint32_t n = patternToJson(*pat_, reinterpret_cast<char*>(io_), kIoBytes);
+    return n && writeFile(*ctx_->fs, path, io_, n);
+}
+
+bool Tilt::loadJson(const char* path, char* err, int errCap) {
+    if (err && errCap) err[0] = 0;
+    if (!ctx_->fs) return false;
+    const int32_t n = readFile(*ctx_->fs, path, io_, kIoBytes);
+    if (n <= 0) {
+        if (err) std::snprintf(err, size_t(errCap), "cannot read the file");
+        return false;
+    }
+    if (uint32_t(n) >= kIoBytes) {
+        if (err) std::snprintf(err, size_t(errCap), "file too big");
+        return false;
+    }
+    if (!patternFromJson(*staged_, reinterpret_cast<const char*>(io_), uint32_t(n), toks_, kJsonTokens, err, errCap))
+        return false;
+    activeSlot_ = -1;
+    swapIn(*staged_);
+    return true;
+}
+
+int Tilt::writeFactoryJson() {
+    if (!ctx_->fs) return 0;
+    char dir[64], p[128];
+    std::snprintf(dir, sizeof dir, "%s/Patterns/Factory", ctx_->home);
+    ctx_->fs->mkdir(dir);
+    int written = 0;
+    for (int i = 0; i < kFactoryCount; ++i) {
+        std::snprintf(p, sizeof p, "%s/%02d-%s.json", dir, i + 1, kFactoryNames[i]);
+        if (ctx_->fs->exists(p)) continue;
+        factoryPattern(i, *staged_);
+        const uint32_t n = patternToJson(*staged_, reinterpret_cast<char*>(io_), kIoBytes);
+        if (n && writeFile(*ctx_->fs, p, io_, n)) ++written;
+    }
+    return written;
+}
+
+void Tilt::openJsonBrowser() {
+    if (!ctx_->fs) {
+        ctx_->toast("No card");
+        return;
+    }
+    static char folder[48];
+    std::snprintf(folder, sizeof folder, "%s/Patterns", ctx_->home);
+    lab::kit::BrowserRequest q;
+    q.title = "Load a pattern (JSON)";
+    q.folder = folder;
+    q.exts = ".json";
+    q.preview = false;
+    q.ctx = this;
+    q.onPick = [](void* c, const char* path) {
+        Tilt* t = static_cast<Tilt*>(c);
+        lab::copyStr(t->pendingPick_, sizeof t->pendingPick_, path);
+        t->pendingKind_ = 2;
+    };
+    ctx_->browser().open(q);
+}
+
+void Tilt::openJsonSave() {
+    if (!ctx_->fs) {
+        ctx_->toast("No card");
+        return;
+    }
+    lab::kit::KeyboardRequest q;
+    q.title = "Save the pattern as JSON";
+    q.initial = pat_->name;
+    q.maxLen = 24;
+    q.ctx = this;
+    q.onDone = [](void* c, const char* text) {
+        Tilt* t = static_cast<Tilt*>(c);
+        if (!text || !text[0]) return;
+        char p[128];
+        std::snprintf(p, sizeof p, "%s/Patterns/%s.json", t->ctx_->home, text);
+        std::snprintf(t->pat_->name, sizeof t->pat_->name, "%.11s", text);
+        t->ctx_->toast(t->saveJson(p) ? "Saved as JSON" : "Cannot write the file");
+    };
+    ctx_->keyboard().open(q);
+}
+
+void Tilt::openSampleBrowser(int ch) {
+    if (!ctx_->fs) {
+        ctx_->toast("No card: built-in samples only");
+        return;
+    }
+    static char folder[48];
+    std::snprintf(folder, sizeof folder, "%s/Samples", ctx_->home);
+    lab::kit::BrowserRequest q;
+    static char title[32];
+    std::snprintf(title, sizeof title, "Sample for channel %d", ch + 1);
+    q.title = title;
+    q.folder = pat_->ch[ch].sample[0] ? "" : folder;
+    q.exts = ".wav";
+    q.ctx = this;
+    pickCh_ = ch;
+    q.onPick = [](void* c, const char* path) {
+        Tilt* t = static_cast<Tilt*>(c);
+        lab::copyStr(t->pendingPick_, sizeof t->pendingPick_, path);
+        t->pendingKind_ = 1;
+    };
+    ctx_->browser().open(q);
 }
 
 }  // namespace tilt

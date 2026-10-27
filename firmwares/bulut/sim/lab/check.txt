@@ -1,48 +1,278 @@
-# BULUT lab-gate simulator check: boot, every page, clouds from line in /
-# radio / a resampled sample / QUANTA synthesis / MIDI, gestures, freezes,
-# scenes, projects, budget. (The gate runs without --line-in-tone: line in is
-# silent there, so the audible checks use the radio, synthesis and samples.)
+# BULUT lab-gate simulator check (round 2: four deep channels on LABKIT v2):
+# boot, the generator and QUANTA (no input needed), the sample flow (browser,
+# quick swap, REGION pads), every engine, the LABKIT views, FX + routes,
+# gestures, freezes, scenes, resample into a channel, the timeline, projects,
+# radio, MIDI, settings, the display budget. (The gate runs without
+# --line-in-tone: line in is silent there.)
 wait 3000
 budget
 
-# ---- line in (silent in the gate): pads on cloud 1 must not crash
-pad 18 down
-pad 21 down
-wait 600
-pad 18 up
-pad 21 up
+# ---- CH4: the rete generator writes a TAPE channel's buffer: sound, no input
+expect-param c4.source 3
+expect-param c4.engine 3
+press Shift
+pad 3 tap
+release Shift
+peak-reset
+pad 40 down 120
+pad 44 down 100
+wait 1200
+expect-sound 300
+pad 40 up
+pad 44 up
+budget
 
-# ---- QUANTA synthesis needs no input: cloud 3 is a QUANTA cloud
+# ---- CH3 QUANTA: synthetic particles, every type
 press Shift
 pad 2 tap
 release Shift
+tap F2
+tap Down
+tap Down
+enc 1
+expect-param c3.k9 0.6 0.01
 peak-reset
 pad 26 down 110
 pad 31 down 90
-wait 800
+wait 500
+enc 1
+wait 400
+enc 1
+wait 400
+enc 1
+wait 400
+enc 1
+wait 400
 expect-sound 300
 pad 26 up
 pad 31 up
 budget
 
-# every particle type of QUANTA
-tap F2
+# ---- samples: the LABKIT browser, load, quick swap with Copy
+mkdir Samples
+mkwav Samples/a-low.wav 2 110
+mkwav Samples/b-mid.wav 1.5 220
+mkwav Samples/c-high.wav 1 440
+press Shift
+pad 0 tap
+release Shift
+tap S.Load
+wait 400
+expect-overlay browser
+budget
+tap Insert
+wait 400
+expect-overlay none
+expect-param c1.source 2
 peak-reset
-pad 20 down
-wait 300
-enc 4
-wait 400
-enc 4
-wait 400
-enc 4
-wait 400
-enc 4
-wait 400
+pad 13 down 110
+pad 20 down 110
+wait 800
 expect-sound 300
+pad 13 up
+pad 20 up
+tap Copy
+wait 300
+expect-param c1.source 2
+peak-reset
+pad 15 down 120
+wait 700
+expect-sound 200
+pad 15 up
+press Shift
+tap Copy
+release Shift
+wait 300
+budget
+
+# ---- REGION pads on the SOURCE page: two taps set start and end
+tap S.Edit
+tap F8
+pad 30 tap
+pad 6 tap
+expect-param c1.start 0.125 0.002
+expect-param c1.end 0.6458 0.002
+budget
+tap F8
+peak-reset
+pad 2 down 120
+wait 700
+expect-sound 200
+pad 2 up
+
+# ---- the four engines on CH1 (Instr steps through them)
+tap Instr
+expect-param c1.engine 1
+tap Instr
+expect-param c1.engine 2
+tap S.Play
+peak-reset
+pad 18 down 120
+wait 1000
+expect-sound 200
+pad 18 up
+budget
+tap Instr
+expect-param c1.engine 3
+peak-reset
+pad 18 down 120
+wait 1000
+expect-sound 200
+pad 18 up
+budget
+tap Instr
+expect-param c1.engine 0
+
+# ---- LABKIT: PARAM pads, MAP, MOD, MACRO, HELP
+tap I.Param
+expect-overlay param
+budget
+tap I.Param
+expect-overlay none
+tap Master
+expect-overlay map
+budget
+tap Master
+expect-overlay none
+press Shift
+tap Master
+release Shift
+expect-overlay mod
+press Shift
+tap Master
+release Shift
+expect-overlay none
+press Shift
+tap I.Param
+release Shift
+expect-overlay macro
+press Shift
+tap I.Param
+release Shift
+expect-overlay none
+press Shift
+tap Config
+release Shift
+expect-overlay help
+budget
+tap Up
+expect-overlay none
+
+# ---- FX page: an FX mode, a filter, a route from the channel LFO
+tap F4
+press Shift
+tap F2
+release Shift
+expect-param c1.fx 1
+press Shift
+tap F3
+release Shift
+expect-param c1.flt 1
+tap Down
+tap Down
+tap F8
+expect-routes 1
+peak-reset
+pad 20 down 120
+wait 900
+expect-sound 200
 pad 20 up
 budget
 
-# ---- radio: Config > Input = Radio, then a granular cloud on it
+# ---- gesture: pads + encoder moves on CH1, then it plays alone
+tap F1
+tap Rec
+pad 14 down
+wait 300
+enc 6
+wait 200
+pad 14 up
+pad 19 down
+wait 400
+pad 19 up
+enc -6
+wait 200
+tap Rec
+wait 300
+peak-reset
+wait 1500
+expect-sound 200
+budget
+
+# ---- freeze: capture CH1's sample moment, recall, the bed sings
+tap F6
+tap F8
+wait 400
+tap Insert
+wait 400
+peak-reset
+wait 800
+expect-sound 200
+budget
+tap Fx1
+wait 200
+tap Fx1
+wait 200
+
+# ---- scenes: store with Shift + pad, change, morph back
+press Shift
+pad 12 tap
+release Shift
+tap F1
+enc -8
+press Shift
+pad 12 tap
+release Shift
+wait 1500
+budget
+
+# ---- resample the mix into CH2 (S.Rec on any page)
+tap S.Rec
+wait 1500
+tap S.Rec
+wait 800
+expect-param c2.source 2
+press Shift
+pad 1 tap
+release Shift
+peak-reset
+pad 15 down 120
+wait 1000
+expect-sound 200
+pad 15 up
+budget
+
+# ---- MOTION: scenes, timeline, song mode
+tap F5
+tap Down
+tap Right
+tap Insert
+tap Down
+tap Insert
+tap Insert
+enc 4
+press Shift
+tap Song
+release Shift
+tap Play
+wait 1500
+tap Play
+press Shift
+tap Song
+release Shift
+budget
+
+# ---- projects: save P01, load it back
+tap F7
+tap F8
+wait 300
+press Shift
+tap F1
+release Shift
+wait 600
+budget
+
+# ---- radio: Config > Input = Radio, CH1 back on INPUT
 tap Config
 tap Down
 tap Down
@@ -55,8 +285,16 @@ tap Config
 press Shift
 pad 0 tap
 release Shift
-tap F3
-wait 200
+tap S.Edit
+press Shift
+tap F1
+release Shift
+expect-param c1.source 0
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
 tap Down
 tap Down
 tap Down
@@ -71,46 +309,7 @@ pad 40 up
 pad 45 up
 budget
 
-# ---- gesture: record pad + encoder moves on cloud 1, then it plays alone
-tap F4
-tap Rec
-pad 14 down
-wait 300
-tap F1
-enc 6
-wait 200
-pad 14 up
-pad 19 down
-wait 400
-pad 19 up
-enc -6
-wait 200
-tap Rec
-wait 300
-peak-reset
-wait 1500
-expect-sound 200
-tap F4
-wait 300
-budget
-
-# ---- freeze: capture the radio moment, the bed sings on its own
-tap F5
-tap Fx1
-wait 400
-peak-reset
-wait 800
-expect-sound 200
-press Shift
-tap F4
-release Shift
-wait 100
-press Shift
-tap F1
-release Shift
-budget
-
-# ---- MIDI notes play the selected cloud
+# ---- MIDI notes play the selected channel
 peak-reset
 midi 0x90 60 110
 midi 0x90 67 100
@@ -118,69 +317,6 @@ wait 700
 midi 0x80 60 0
 midi 0x80 67 0
 expect-sound 300
-
-# ---- resample loop: record the mix, it becomes cloud 2's sample
-tap Fx2
-wait 500
-tap SAMPLERECORDER
-wait 1600
-tap SAMPLERECORDER
-wait 500
-tap Fx2
-press Shift
-pad 1 tap
-release Shift
-tap F3
-wait 300
-budget
-peak-reset
-pad 15 down 120
-pad 20 down 120
-wait 1000
-expect-sound 300
-pad 15 up
-pad 20 up
-
-# ---- mixer, scenes, timeline, files
-tap F6
-tap Right
-enc -5
-tap Down
-enc 3
-budget
-tap F7
-tap Insert
-tap Right
-tap Insert
-press Shift
-tap F4
-release Shift
-tap Down
-enc 4
-press Shift
-tap F6
-release Shift
-tap Play
-wait 1500
-tap Play
-press Shift
-tap F6
-release Shift
-budget
-tap F8
-press Shift
-tap F1
-release Shift
-wait 300
-press Shift
-tap F3
-release Shift
-wait 300
-press Shift
-tap F2
-release Shift
-wait 500
-budget
 
 # ---- settings rows of BULUT and the about page
 tap Config

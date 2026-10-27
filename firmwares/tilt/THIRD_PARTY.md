@@ -40,10 +40,16 @@ BREAK sample, and Plaits' sine table for the FM engine).
 | `tilt_audio.cpp` delay | Tempo delay with ping-pong cross-feedback and a tone filter | Common technique | - |
 | `tilt_engine.cpp`, `tilt_audio.cpp` | Fast log2 (exponent + quadratic) and fast exp2 (exponent + cubic) approximations | Folklore | - |
 | `tilt_io.cpp` | Standard MIDI File, format 0 | MIDI Manufacturers Association, SMF 1.0 | Public specification |
+| `tilt_json.*` | JSON (RFC 8259) reader / writer for the pattern files: a flat token array (type, start, end, child count) in a caller-provided buffer, in the manner of S. Zaitsev's jsmn (MIT); no jsmn code was copied, the tokenizer is new | RFC 8259; the jsmn token idea | Public specification / idea only |
+| `tilt_json.*` | The pattern JSON's model (steps, four 17 x 17 pages with edge properties, flippers, combos, tilt, ball, memory, mutation, meta, rules, melody, randomizer, lanes) | The TILT plug-in readme (the user's own design); the plug-in's `FORMAT.md` / `Json.h` could not be reached, so the field names are TILT-for-Tracker's | The user's own design |
 | `lab/dsp.h` (lab Shell) | PolyBLEP, TPT state-variable filter | Valimaki & Huovilainen (2007); V. Zavalishin (2012) | Published methods |
 
 ## Code of this tree (OpenTracker base and the lab Shell)
 
 `src/core/formats/wav.*` (WAV import with resampling, for the SAMPLE channels),
 `src/core/fastrun.h` (SRAM placement of the audio render), `src/lab/*` (the Shell:
-intro, settings, transport, MIDI, recorder, display canvas). Fonts are the FT81x ROM fonts.
+intro, settings, transport, MIDI, recorder, display canvas, and **LABKIT v2**: the
+parameter registry, modulation engine, navigation views, browser and keyboard, synced
+unchanged from `labkit/` with `labkit/tools/sync_labkit.sh`; also `sim/src/lab_main.cpp`,
+`tests/lab/lab_bench.cpp`, `tests/lab/labkit_test.cpp` and `WORKSTATION_GUIDE.md`).
+Fonts are the FT81x ROM fonts. No new third-party code was added for LABKIT or JSON.

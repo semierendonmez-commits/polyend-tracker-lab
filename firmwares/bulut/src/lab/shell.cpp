@@ -32,6 +32,10 @@ void Context::setPlaying(bool on) { shell->setPlaying(on); }
 void Context::toast(const char* msg) { shell->toast(msg); }
 void Context::requestRedraw() { shell->requestRedraw(); }
 void Context::stem(int index, const float* l, const float* r) { shell->stem(index, l, r); }
+kit::Registry& Context::params() { return shell->labkit().reg; }
+kit::Mod& Context::mod() { return shell->labkit().mod; }
+kit::Browser& Context::browser() { return *shell->labkit().browser; }
+kit::Keyboard& Context::keyboard() { return *shell->labkit().keyboard; }
 
 namespace {
 
@@ -133,10 +137,15 @@ bool Shell::init(const Hal& hal, uint8_t* mem, uint32_t memBytes, const char* fw
     ctx_.fs = hal_.fs;
     ctx_.radio = hal_.radio;
     ctx_.home = home_;
+    // LABKIT v2: the registry, mod engine, nav, browser and keyboard exist
+    // before the workstation, so init() can register into them.
+    kit_ = arena_.make<kit::Kit>();
+    if (!kit_ || !kit_->init(*this, ctx_, arena_, hal_.audio != nullptr)) return false;
     ws_ = createWorkstation(arena_);
     if (!ws_) return false;
     ctx_.theme = &ws_->theme();
     if (!ws_->init(ctx_)) return false;
+    kit_->afterWorkstationInit(ws_);
 
     applyInput();
     if (hal_.setBacklight) hal_.setBacklight(IDisplay::brightnessDuty(uint8_t(set_.brightness)));
@@ -173,6 +182,7 @@ void Shell::loop() {
         dirty_ = true;
     }
     if (ws_ && !introOn_) ws_->update(now);
+    if (kit_ && !introOn_) kit_->update(now);
     pumpRecorder();
 
     if (now - lastLedMs_ >= 33) {
@@ -194,6 +204,7 @@ void Shell::loop() {
 void Shell::powerOff() {
     if (recOn_) stopRecording();
     if (ws_) ws_->save();
+    if (kit_) kit_->powerOff();
     saveSettings();
 }
 
@@ -258,6 +269,15 @@ void Shell::dispatch(const Event& e) {
         if (e.type == Event::kPress || e.type == Event::kPadDown) introOn_ = false;
         return;
     }
+    if (e.type == Event::kPress && e.id == btn::Config && e.shift && !settingsOpen_ && kit_ && kit_->active &&
+        kit_->nav.keys().shiftConfigHelp && !kit_->fullScreen()) {
+        kit_->nav.toggleHelp();   // LABKIT: Shift + Config = HELP
+        return;
+    }
+    if (e.type == Event::kPress && e.id == btn::Config && kit_ && kit_->active && kit_->nav.overlay() == kit::Nav::kHelp) {
+        kit_->nav.close();
+        return;
+    }
     if (e.type == Event::kPress && e.id == btn::Config) {
         settingsOpen_ = !settingsOpen_;
         if (settingsOpen_) {
@@ -283,7 +303,29 @@ void Shell::dispatch(const Event& e) {
         toggleRecording();
         return;
     }
-    if (ws_) ws_->onEvent(e);
+    if (!ws_) return;
+    if (kit_) {
+        // A release (or hold) goes where its press went: notes and modifiers the
+        // workstation saw always end there, even when a LABKIT view opened since.
+        const bool isBtn = e.type == Event::kPress || e.type == Event::kRelease || e.type == Event::kHold;
+        const uint64_t bit = 1ull << (e.id & 63);
+        if ((e.type == Event::kRelease || e.type == Event::kHold) && (wsButtons_ & bit)) {
+            if (e.type == Event::kRelease) wsButtons_ &= ~bit;
+            ws_->onEvent(e);
+            return;
+        }
+        if (e.type == Event::kPadUp && (wsPads_ & bit)) {
+            wsPads_ &= ~bit;
+            ws_->onEvent(e);
+            return;
+        }
+        // Shift always reaches the workstation too (it tracks it itself).
+        const bool shiftKey = isBtn && e.id == btn::Shift;
+        if (!shiftKey && kit_->event(e)) return;
+        if (e.type == Event::kPress) wsButtons_ |= bit;
+        if (e.type == Event::kPadDown) wsPads_ |= bit;
+    }
+    ws_->onEvent(e);
 }
 
 // ---- transport -------------------------------------------------------------------
@@ -337,7 +379,9 @@ void Shell::fill(int16_t* out, uint32_t frames) {
     tr_.beatsPerSample = double(bpm) / 60.0 / double(kSampleRate);
 
     stemWritten_ = 0;
+    kitBlock(tr_);
     if (ws_) ws_->render(tr_, in, bufL_, bufR_);
+    if (kit_) kit_->mix(bufL_, bufR_);   // the browser's preview voice
 
     if (set_.monitor && in.frames)
         for (uint32_t i = 0; i < kBlock; ++i) {
@@ -392,6 +436,10 @@ void Shell::fill(int16_t* out, uint32_t frames) {
         const uint32_t us = hal_.clock->micros() - t0;
         cpuEst_ = (cpuEst_ * 15u + us * 1000u / 2902u) / 16u;   // 2902 us per block
     }
+}
+
+void Shell::kitBlock(const Transport& t) {
+    if (kit_ && kit_->active) kit_->audioBlock(t);
 }
 
 void Shell::stem(int index, const float* l, const float* r) {
@@ -552,7 +600,9 @@ void Shell::pumpMidi() {
             msg.d1 = midiData_[port][0];
             msg.d2 = midiNeed_[port] > 1 ? midiData_[port][1] : 0;
             if (set_.midiInCh != 0 && msg.channel() != set_.midiInCh - 1) continue;
-            if (ws_ && !introOn_) ws_->onMidi(msg);
+            if (!ws_ || introOn_) continue;
+            if (kit_ && kit_->midi(msg)) continue;   // LABKIT MIDI learn
+            ws_->onMidi(msg);
         }
     }
 }
@@ -565,7 +615,7 @@ void Shell::updateLeds() {
         // a calm scan on the pads while the settings are open
         const int c = int((millis() / 120) % kPadCols);
         for (int r = 0; r < kPadRows; ++r) pads_[padAt(c, r)] = scale(ws_->theme().accent, 0.4f);
-    } else {
+    } else if (!(kit_ && kit_->leds(pads_))) {
         ws_->leds(pads_);
     }
     for (int i = 0; i < kPads; ++i) hal_.leds->setPad(uint8_t(i), pads_[i].r, pads_[i].g, pads_[i].b);
@@ -582,10 +632,14 @@ void Shell::toast(const char* msg) {
 void Shell::drawToast(Canvas& g) {
     if (!toast_[0] || int32_t(toastUntil_ - millis()) <= 0) return;
     const Theme& t = ws_->theme();
+    int w = kit::textWidth(font::kBody, toast_) + 40;
+    if (w < 400) w = 400;
+    if (w > 780) w = 780;
+    const int x = 400 - w / 2;
     g.color(t.panel);
-    g.fillRound(200, 380, 400, 40, 8);
+    g.fillRound(x, 380, w, 40, 8);
     g.color(t.accent);
-    g.frame(200, 380, 400, 40);
+    g.frame(x, 380, w, 40);
     g.color(t.fg);
     g.text(400, 400, font::kBody, toast_, Canvas::kCenter);
 }
@@ -602,7 +656,20 @@ void Shell::drawFrame() {
     } else if (settingsOpen_) {
         drawSettings(g);
     } else {
-        ws_->draw(g);
+        if (!kit_ || !kit_->fullScreen()) {
+            const uint32_t keep = kit_ ? kit_->reserveWords() : 0;
+            if (keep) g.setLimit(Canvas::kBudgetWords - keep);
+            ws_->draw(g);
+            g.setLimit(Canvas::kBudgetWords);
+        }
+        if (kit_) {
+            // BULUT fix: a full-screen view (MAP of a big registry) fills the
+            // budget; keep room for the toast and the REC badge drawn after it.
+            const bool toast = toast_[0] && int32_t(toastUntil_ - millis()) > 0;
+            if (toast || recOn_) g.setLimit(Canvas::kBudgetWords - 64u);
+            kit_->draw(g);
+            g.setLimit(Canvas::kBudgetWords);
+        }
         if (recOn_) {   // REC badge on top of every page
             g.color(t.warn);
             g.fillRound(700, 36, 92, 22, 6);
@@ -846,3 +913,24 @@ void Shell::saveSettings() {
 }
 
 }  // namespace lab
+
+// LABKIT v2 implementation, in this translation unit on purpose: every build
+// that links shell.cpp (firmware, simulator, host tests, QEMU bench, PLATFORM
+// station apps) gets it without new entries in its makefiles.
+// The UI side is built for size (-Os, ~20 KB less flash); the few functions
+// that run in the audio interrupt are marked LABKIT_HOT and stay at -O2.
+#if defined(__GNUC__) && !defined(__clang__)
+#define LABKIT_HOT __attribute__((optimize("O2")))
+#pragma GCC push_options
+#pragma GCC optimize("Os")
+#else
+#define LABKIT_HOT
+#endif
+#include "lab/params_impl.h"
+#include "lab/mod_impl.h"
+#include "lab/nav_impl.h"
+#include "lab/browser_impl.h"
+#include "lab/keyboard_impl.h"
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC pop_options
+#endif

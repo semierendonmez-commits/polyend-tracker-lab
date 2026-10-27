@@ -18,7 +18,8 @@ constexpr int kSteps = 16, kStates = 17, kPages = 4, kCh = 8, kBalls = 4, kCombo
 constexpr int kComboLen = 4;
 constexpr int kTrigNone = 0, kTrigMute = 9;   // 1..8 = channel
 constexpr int kParamsPerEngine = 8;
-constexpr int kNameLen = 12, kPathLen = 48;
+constexpr int kNameLen = 12, kPathLen = 128;   // sample paths (v1 files: 48)
+constexpr int kPathLenV1 = 48;
 
 // ---- the steps ------------------------------------------------------------------
 // One Pinball step: the device's rows plus TILT's bumper / ramp / degree.
@@ -54,7 +55,7 @@ struct Flipper {
 enum ComboAction : uint8_t { kCaMultiball, kCaFill, kCaNote, kCaCc, kCaShake, kCaScene, kComboActions };
 struct Combo {
     uint8_t len = 0;                 // 0 (unused) or 2..4
-    uint8_t path[kComboLen] = {};    // steps 1..16
+    uint8_t path[kComboLen] = {};    // steps 1..16 (0 = the path ends here)
     uint8_t action = kCaMultiball;
     uint8_t a = 1, b = 100;          // action parameters (see comboParamText)
     uint8_t on = 1;
@@ -144,7 +145,7 @@ struct Fx {
 };
 
 constexpr uint32_t kPatternMagic = 0x504C5454u;   // "TTLP"
-constexpr uint16_t kPatternVersion = 1;
+constexpr uint16_t kPatternVersion = 2;   // 2: 128-character sample paths
 
 struct Pattern {
     uint32_t magic = kPatternMagic;
@@ -228,7 +229,7 @@ void paramText(const Pattern& p, int id, int index, char* buf, int cap);
 // ---- building patterns ---------------------------------------------------------------
 void defaultPattern(Pattern& p);
 void defaultKit(Pattern& p);
-constexpr int kFactoryCount = 14;
+constexpr int kFactoryCount = 15;   // the 10 ideas (flippers ... melody), then 5 more
 extern const char* const kFactoryNames[kFactoryCount];
 extern const char* const kFactoryIdeas[kFactoryCount];
 void factoryPattern(int i, Pattern& p);
@@ -268,6 +269,11 @@ void clearSteps(Pattern& p);
 // rest defaults; a newer file's extra bytes are ignored).
 void sanitize(Pattern& p);
 bool patternFromBytes(Pattern& p, const uint8_t* data, uint32_t len);
+// A kit: the 8 channels and the FX (version 2: 128-character sample paths; v1 converts).
+uint32_t kitToBytes(const Pattern& p, uint8_t* out, uint32_t cap);
+bool kitFromBytes(Pattern& p, const uint8_t* data, uint32_t len);
+// Combo path helpers: the length is the number of leading non-zero steps.
+void comboFixLen(Combo& c);
 uint32_t patternToBytes(const Pattern& p, uint8_t* out, uint32_t cap);
 
 }  // namespace tilt

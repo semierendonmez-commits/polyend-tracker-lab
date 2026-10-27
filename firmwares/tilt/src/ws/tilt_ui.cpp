@@ -1,4 +1,11 @@
 // TILT -- input: global keys, the perform pads, every page, the FILE overlay.
+//
+// Only keys of the original Tracker's key matrix are used (NAV.md): no Aux,
+// Help or encoder push. Insert stands in for the push ("confirm / apply"),
+// Song nudges the table. LABKIT owns I.Param (PARAM pads, Shift: MACRO),
+// Master (MAP, Shift: MOD) and Shift + Config (HELP).
+// Registered fields are edited through fieldSet() (the registry, routes and
+// MIDI learn stay in step); the matrix weights are written directly.
 #include <cstdio>
 #include <cstring>
 
@@ -33,30 +40,26 @@ int Tilt::paramListOf(int page, int* out, int cap) const {
 void Tilt::onEvent(const Event& e) {
     bool used = false;
     eventGlobal(e, used);
-    if (used) return;
-    if (file_) {
-        eventFile(e);
-        return;
+    if (!used) {
+        if (file_) {
+            eventFile(e);
+        } else if ((e.type == Event::kPadDown || e.type == Event::kPadUp) && (perform_ || page_ == kPgGraph)) {
+            eventPerform(e);
+        } else {
+            switch (page_) {
+                case kPgGraph: eventGraph(e); break;
+                case kPgMatrix: eventMatrix(e); break;
+                case kPgSteps: eventSteps(e); break;
+                case kPgTable:
+                case kPgEvolve: eventParams(e); break;
+                case kPgCombos: eventCombos(e); break;
+                case kPgChannels: eventChannels(e); break;
+                case kPgMix: eventMix(e); break;
+                default: break;
+            }
+        }
     }
-    if (help_ && (e.type == Event::kPress)) {
-        help_ = false;
-        return;
-    }
-    if ((e.type == Event::kPadDown || e.type == Event::kPadUp) && (perform_ || page_ == kPgGraph)) {
-        eventPerform(e);
-        return;
-    }
-    switch (page_) {
-        case kPgGraph: eventGraph(e); break;
-        case kPgMatrix: eventMatrix(e); break;
-        case kPgSteps: eventSteps(e); break;
-        case kPgTable:
-        case kPgEvolve: eventParams(e); break;
-        case kPgCombos: eventCombos(e); break;
-        case kPgChannels: eventChannels(e); break;
-        case kPgMix: eventMix(e); break;
-        default: break;
-    }
+    placeChannels();
 }
 
 void Tilt::eventGlobal(const Event& e, bool& used) {
@@ -78,27 +81,24 @@ void Tilt::eventGlobal(const Event& e, bool& used) {
         case btn::Performance: perform_ = true; return;
         case btn::File:
             file_ = !file_;
-            help_ = false;
             if (file_) scanSlots();
             return;
-        case btn::Help: help_ = !help_; return;
-        case btn::Master: page_ = kPgMix; file_ = help_ = false; return;
-        case btn::SampleLoader:
+        case btn::SampleLoader:   // the browser for the selected channel
             page_ = kPgChannels;
             chField_ = 14;
-            file_ = help_ = false;
-            scanWavs();
+            file_ = false;
+            openSampleBrowser(chSel_);
             return;
         case btn::Pattern: post(Cmd::kPage, (pat_->ev.page + 1) % kPages); return;
         case btn::Rec:
             if (eng_->replaying()) post(Cmd::kReplay, 0);
             else post(Cmd::kCapture, capBars_, 1);
             return;
-        case btn::Aux: post(Cmd::kNudge, e.shift ? 127 : 90); return;
-        case btn::Note: post(Cmd::kFlipper, 0, e.shift ? 127 : 100); return;
-        case btn::Instr: post(Cmd::kFlipper, 1, e.shift ? 127 : 100); return;
-        case btn::Fx1: post(Cmd::kFlipper, 2, e.shift ? 127 : 100); return;
-        case btn::Fx2: post(Cmd::kFlipper, 3, e.shift ? 127 : 100); return;
+        case btn::Song: post(Cmd::kNudge, (e.shift || shift_) ? 127 : 90); return;   // nudge the table
+        case btn::Note: post(Cmd::kFlipper, 0, (e.shift || shift_) ? 127 : 100); return;
+        case btn::Instr: post(Cmd::kFlipper, 1, (e.shift || shift_) ? 127 : 100); return;
+        case btn::Fx1: post(Cmd::kFlipper, 2, (e.shift || shift_) ? 127 : 100); return;
+        case btn::Fx2: post(Cmd::kFlipper, 3, (e.shift || shift_) ? 127 : 100); return;
         default: break;
     }
     if (e.id <= btn::F8 && !file_) {
@@ -106,8 +106,7 @@ void Tilt::eventGlobal(const Event& e, bool& used) {
             shiftAction(page_, e.id);
         } else {
             page_ = e.id;
-            help_ = false;
-            if (page_ == kPgChannels) scanWavs();
+            if (page_ == kPgMix) mixFx_ = false;
         }
         return;
     }
@@ -124,7 +123,7 @@ void Tilt::eventPerform(const Event& e) {
     } else if (r == 1) {
         post(Cmd::kPage, c - 8);
     } else if (r == 2 && c < 8) {
-        if (e.shift || shift_) pat_->ch[c].mute ^= 1;
+        if (e.shift || shift_) fieldSet(&pat_->ch[c].mute, pat_->ch[c].mute ? 0 : 1);
         else auditionCh(c, pat_->ch[c].note, v);
     } else if (r == 2) {
         post(Cmd::kCombo, c - 8);
@@ -195,7 +194,7 @@ void Tilt::shiftAction(int page, int key) {
                                 }
                             }
                     break;
-                case 3: pat_->steps[stStep_].lock ^= 1; break;
+                case 3: fieldSet(&pat_->steps[stStep_].lock, pat_->steps[stStep_].lock ? 0 : 1); break;
                 case 4:
                 case 5: {
                     Step tmp[kSteps];
@@ -214,6 +213,7 @@ void Tilt::shiftAction(int page, int key) {
                     break;
                 default: break;
             }
+            syncRegistry(true);
             break;
         case kPgTable:
             switch (key) {
@@ -228,6 +228,7 @@ void Tilt::shiftAction(int page, int key) {
                         pat_->flips[i].step = uint8_t(1 + 4 * i);
                         pat_->flips[i].note = uint8_t(36 + i);
                     }
+                    syncRegistry(true);
                     ctx_->toast("Table defaults");
                     break;
                 }
@@ -249,7 +250,7 @@ void Tilt::shiftAction(int page, int key) {
             break;
         case kPgCombos:
             if (key <= 3) post(Cmd::kCombo, key);
-            else if (key == 4) pat_->combos[cbSel_].len = 0;
+            else if (key == 4) fieldSet(&pat_->combos[cbSel_].path[0], 0);
             break;
         case kPgChannels: {
             static const uint8_t kTypes[6] = {kEnKick, kEnSnare, kEnHat, kEnAcid, kEnFm, kEnSample};
@@ -259,6 +260,8 @@ void Tilt::shiftAction(int page, int key) {
                 Channel& c = pat_->ch[chSel_];
                 engineDefaults(c, kTypes[key]);
                 if (kTypes[key] != kEnSample) c.sample[0] = 0;
+                refreshSlots(chSel_);
+                syncRegistry(true);
                 auditionCh(chSel_, c.note, 110);
             } else if (key == 6) {
                 clip = pat_->ch[chSel_];
@@ -267,12 +270,14 @@ void Tilt::shiftAction(int page, int key) {
             } else if (have) {
                 pat_->ch[chSel_] = clip;
                 sampleDirty_[chSel_] = true;
+                refreshSlots(chSel_);
+                syncRegistry(true);
             }
             break;
         }
         case kPgMix:
-            if (key == 0) pat_->ch[mixCh_].mute ^= 1;
-            else if (key == 1) pat_->ch[mixCh_].solo ^= 1;
+            if (key == 0) fieldSet(&pat_->ch[mixCh_].mute, pat_->ch[mixCh_].mute ? 0 : 1);
+            else if (key == 1) fieldSet(&pat_->ch[mixCh_].solo, pat_->ch[mixCh_].solo ? 0 : 1);
             else if (key == 6) mixFx_ = !mixFx_;
             else if (key == 7) post(Cmd::kPanic);
             break;
@@ -289,13 +294,13 @@ void Tilt::eventGraph(const Event& e) {
     }
     if (e.type != Event::kPress) return;
     switch (e.id) {
-        case btn::Left: pat_->table.rate = uint8_t(clampi(pat_->table.rate - 1, 0, kRateCount - 1)); break;
-        case btn::Right: pat_->table.rate = uint8_t(clampi(pat_->table.rate + 1, 0, kRateCount - 1)); break;
+        case btn::Left: kpSet(0, pat_->table.rate - 1); break;    // Rate is kParams[0]
+        case btn::Right: kpSet(0, pat_->table.rate + 1); break;
         case btn::Up: post(Cmd::kPage, (pat_->ev.page + kPages - 1) % kPages); break;
         case btn::Down: post(Cmd::kPage, (pat_->ev.page + 1) % kPages); break;
-        case btn::EncPush: post(Cmd::kLaunch); break;
+        case btn::Insert: post(Cmd::kLaunch); break;
         case btn::Delete: post(Cmd::kHalt); break;
-        case btn::Insert: post(Cmd::kBall); break;
+        case btn::Copy: post(Cmd::kBall); break;
         default: break;
     }
 }
@@ -358,8 +363,10 @@ void Tilt::eventMatrix(const Event& e) {
         case btn::Down: mxRow_ = (mxRow_ + 1) % kStates; break;
         case btn::Left: mxCol_ = (mxCol_ + kStates - 1) % kStates; break;
         case btn::Right: mxCol_ = (mxCol_ + 1) % kStates; break;
-        case btn::EncPush:
-            if (mxField_ == 4) {
+        case btn::Insert:   // the push of the original encoder: toggle / apply
+            if (sh) {
+                pat_->w[pg][mxRow_][mxCol_] = 50;
+            } else if (mxField_ == 4) {
                 applyShape(*pat_, pg, mxShape_, rng_);
                 ctx_->toast(kShapeNames[mxShape_]);
             } else if (mxField_ == 5) {
@@ -373,7 +380,6 @@ void Tilt::eventMatrix(const Event& e) {
             if (mxField_ == 0) pat_->w[pg][mxRow_][mxCol_] = 0;
             else pat_->e[pg][mxRow_][mxCol_] = Edge();
             break;
-        case btn::Insert: pat_->w[pg][mxRow_][mxCol_] = 50; break;
         default: break;
     }
 }
@@ -382,16 +388,16 @@ void Tilt::eventMatrix(const Event& e) {
 void Tilt::editStep(int s, int row, int d) {
     Step& st = pat_->steps[clampi(s, 0, kSteps - 1)];
     switch (row) {
-        case kRowTrig: st.trig = uint8_t(clampi(st.trig + d, 0, 9)); break;
-        case kRowTrigP: st.trigP = uint8_t(clampi(st.trigP + d * 5, 0, 100)); break;
-        case kRowDelay: st.delay = uint8_t(clampi(st.delay + d, 0, 23)); break;
-        case kRowDelayP: st.delayP = uint8_t(clampi(st.delayP + d * 5, 0, 100)); break;
-        case kRowVel: st.vel = uint8_t(clampi(st.vel + d * 4, 1, 127)); break;
-        case kRowLen: st.len = uint8_t(clampi(st.len + d, 1, 64)); break;
-        case kRowBumper: st.bumper = uint8_t(clampi(st.bumper + d, 0, 4)); break;
-        case kRowRamp: st.ramp = uint8_t(clampi(st.ramp + d, 0, 16)); break;
-        case kRowDegree: st.degree = int8_t(clampi(st.degree + d, -7, 21)); break;
-        case kRowLock: st.lock = d > 0 ? 1 : 0; break;
+        case kRowTrig: fieldSet(&st.trig, clampi(fieldGet(&st.trig) + d, 0, 9)); break;
+        case kRowTrigP: fieldSet(&st.trigP, clampi(fieldGet(&st.trigP) + d * 5, 0, 100)); break;
+        case kRowDelay: fieldSet(&st.delay, clampi(fieldGet(&st.delay) + d, 0, 23)); break;
+        case kRowDelayP: fieldSet(&st.delayP, clampi(fieldGet(&st.delayP) + d * 5, 0, 100)); break;
+        case kRowVel: fieldSet(&st.vel, clampi(fieldGet(&st.vel) + d * 4, 1, 127)); break;
+        case kRowLen: fieldSet(&st.len, clampi(fieldGet(&st.len) + d, 1, 64)); break;
+        case kRowBumper: fieldSet(&st.bumper, clampi(fieldGet(&st.bumper) + d, 0, 4)); break;
+        case kRowRamp: fieldSet(&st.ramp, clampi(fieldGet(&st.ramp) + d, 0, 16)); break;
+        case kRowDegree: fieldSet(&st.degree, clampi(fieldGet(&st.degree) + d, -7, 21)); break;
+        case kRowLock: fieldSet(&st.lock, d > 0 ? 1 : 0); break;
         default: break;
     }
 }
@@ -400,10 +406,10 @@ void Tilt::eventSteps(const Event& e) {
     const bool sh = e.shift || shift_;
     if (e.type == Event::kEncoder) {
         if (stRow_ == kStepRows) {   // the melody strip
-            static int ids[8];
+            int ids[8];
             const int n = paramsOfPage(kPpMelody, ids, 8);
             const int id = ids[clampi(melField_, 0, n - 1)];
-            paramSet(*pat_, id, paramGet(*pat_, id) + e.delta);
+            kpSet(id, paramGet(*pat_, id) + e.delta);
             return;
         }
         bool any = false;
@@ -426,10 +432,10 @@ void Tilt::eventSteps(const Event& e) {
             bool any = false;
             for (int s = 0; s < kSteps; ++s)
                 if (padDown_[(s / 8) * 12 + (s % 8)]) {
-                    pat_->steps[s].trig = uint8_t(trig);
+                    fieldSet(&pat_->steps[s].trig, trig);
                     any = true;
                 }
-            if (!any) pat_->steps[stStep_].trig = uint8_t(trig);
+            if (!any) fieldSet(&pat_->steps[stStep_].trig, trig);
             if (trig >= 1 && trig <= 8) auditionCh(trig - 1, pat_->ch[trig - 1].note, 100);
         } else if (r == 3 && c <= 9) {
             stRow_ = c;
@@ -453,10 +459,14 @@ void Tilt::eventSteps(const Event& e) {
             break;
         case btn::Up: stRow_ = clampi(stRow_ - 1, 0, kStepRows); break;
         case btn::Down: stRow_ = clampi(stRow_ + 1, 0, kStepRows); break;
-        case btn::EncPush:
-            if (stRow_ == kRowLock) pat_->steps[stStep_].lock ^= 1;
-            else if (stRow_ == kStepRows) pat_->mel.on ^= 1;
-            else {
+        case btn::Insert:   // the encoder push: toggle / audition
+            if (stRow_ == kRowLock) {
+                fieldSet(&pat_->steps[stStep_].lock, pat_->steps[stStep_].lock ? 0 : 1);
+            } else if (stRow_ == kStepRows) {
+                int ids[8];
+                paramsOfPage(kPpMelody, ids, 8);
+                kpSet(ids[0], pat_->mel.on ? 0 : 1);
+            } else {
                 const Step& st = pat_->steps[stStep_];
                 if (st.trig >= 1 && st.trig <= 8) auditionCh(st.trig - 1, pat_->ch[st.trig - 1].note, st.vel);
             }
@@ -465,27 +475,32 @@ void Tilt::eventSteps(const Event& e) {
             const Step d;
             Step& st = pat_->steps[stStep_];
             switch (stRow_) {
-                case kRowTrig: st.trig = 0; break;
-                case kRowTrigP: st.trigP = d.trigP; break;
-                case kRowDelay: st.delay = 0; break;
-                case kRowDelayP: st.delayP = d.delayP; break;
-                case kRowVel: st.vel = d.vel; break;
-                case kRowLen: st.len = d.len; break;
-                case kRowBumper: st.bumper = 0; break;
-                case kRowRamp: st.ramp = 0; break;
-                case kRowDegree: st.degree = 0; break;
-                case kRowLock: st.lock = 0; break;
+                case kRowTrig: fieldSet(&st.trig, 0); break;
+                case kRowTrigP: fieldSet(&st.trigP, d.trigP); break;
+                case kRowDelay: fieldSet(&st.delay, 0); break;
+                case kRowDelayP: fieldSet(&st.delayP, d.delayP); break;
+                case kRowVel: fieldSet(&st.vel, d.vel); break;
+                case kRowLen: fieldSet(&st.len, d.len); break;
+                case kRowBumper: fieldSet(&st.bumper, 0); break;
+                case kRowRamp: fieldSet(&st.ramp, 0); break;
+                case kRowDegree: fieldSet(&st.degree, 0); break;
+                case kRowLock: fieldSet(&st.lock, 0); break;
                 default: break;
             }
             break;
         }
         case btn::Copy:
-            clipStep_ = pat_->steps[stStep_];
-            haveClipStep_ = true;
-            ctx_->toast("Step copied");
-            break;
-        case btn::Insert:
-            if (haveClipStep_) pat_->steps[stStep_] = clipStep_;
+            if (sh) {
+                if (haveClipStep_) {
+                    pat_->steps[stStep_] = clipStep_;
+                    syncRegistry(true);
+                    ctx_->toast("Step pasted");
+                }
+            } else {
+                clipStep_ = pat_->steps[stStep_];
+                haveClipStep_ = true;
+                ctx_->toast("Step copied (Shift + Copy pastes)");
+            }
             break;
         default: break;
     }
@@ -505,11 +520,11 @@ void Tilt::eventParams(const Event& e) {
             const ParamDef& pd = kParams[ids[item]];
             const int span = pd.max - pd.min;
             const int step = sh && span > 20 ? 10 : 1;
-            paramSet(*pat_, ids[item], paramGet(*pat_, ids[item]) + d * step);
+            kpSet(ids[item], paramGet(*pat_, ids[item]) + d * step);
         } else if (item < n + kMetaCells) {
             const int k = item - n;
             uint8_t& m = pat_->ev.meta[k / 4][k % 4];
-            m = uint8_t(clampi(m + d * (sh ? 1 : 10), 0, 100));
+            fieldSet(&m, clampi(fieldGet(&m) + d * (sh ? 1 : 10), 0, 100));
         } else {
             const int row = item - n - kMetaCells;
             if (d > 0) pat_->rnd.rowLocks = uint16_t(pat_->rnd.rowLocks | (1u << row));
@@ -519,7 +534,7 @@ void Tilt::eventParams(const Event& e) {
     if (e.type == Event::kEncoder) {
         // hold a parameter pad + turn: edit that one
         for (int p = 0; p < 24; ++p)
-            if (padDown_[p] && p < count) {
+            if (padDown_[p] && p < count && !ev) {
                 editItem(p, e.delta);
                 return;
             }
@@ -547,7 +562,8 @@ void Tilt::eventParams(const Event& e) {
         }
         // EVOLVE: step locks, row locks, randomize actions
         if (r <= 1 && c < 8) {
-            pat_->steps[r * 8 + c].lock ^= 1;
+            Step& st = pat_->steps[r * 8 + c];
+            fieldSet(&st.lock, st.lock ? 0 : 1);
         } else if (r == 2 && c < kLockRows) {
             pat_->rnd.rowLocks = uint16_t(pat_->rnd.rowLocks ^ (1u << c));
         } else if (r == 3) {
@@ -567,13 +583,12 @@ void Tilt::eventParams(const Event& e) {
                 default: break;
             }
         } else if (r <= 1 && c >= 8) {
-            // meta grid cells (rows 0-1, cols 8-11: 8 cells; the other 8 via the cursor)
-            f = n + (r * 4 + (c - 8));
+            f = n + (r * 4 + (c - 8));   // meta cells (rows A-B; C-D with the cursor)
         }
         return;
     }
     if (e.type != Event::kPress) return;
-    // columns: TABLE by group; EVOLVE: [0..9] [10..12 + meta] [randomizer + locks]
+    // columns: TABLE by group; EVOLVE: [memory, mutation, rules] [meta + grid] [randomizer + locks]
     auto colOf = [&](int item) -> int {
         if (ev) {
             if (item < 6 || (item >= 9 && item < 13)) return 0;
@@ -607,13 +622,13 @@ void Tilt::eventParams(const Event& e) {
                 }
             break;
         }
-        case btn::EncPush:
-            if (f < n && kParams[ids[f]].fmt == kFmtOnOff) paramSet(*pat_, ids[f], !paramGet(*pat_, ids[f]));
+        case btn::Insert:   // toggle an on / off row or a lock
+            if (f < n && kParams[ids[f]].fmt == kFmtOnOff) kpSet(ids[f], !paramGet(*pat_, ids[f]));
             else if (f >= n + kMetaCells) pat_->rnd.rowLocks = uint16_t(pat_->rnd.rowLocks ^ (1u << (f - n - kMetaCells)));
             break;
         case btn::Delete:
-            if (f < n) paramSet(*pat_, ids[f], kParams[ids[f]].def);
-            else if (f < n + kMetaCells) pat_->ev.meta[(f - n) / 4][(f - n) % 4] = 0;
+            if (f < n) kpSet(ids[f], kParams[ids[f]].def);
+            else if (f < n + kMetaCells) fieldSet(&pat_->ev.meta[(f - n) / 4][(f - n) % 4], 0);
             break;
         default: break;
     }
@@ -623,30 +638,22 @@ void Tilt::eventParams(const Event& e) {
 void Tilt::editCombo(int d) {
     Combo& c = pat_->combos[cbSel_];
     switch (cbField_) {
-        case 0: c.on = d > 0 ? 1 : 0; break;
+        case 0: fieldSet(&c.on, d > 0 ? 1 : 0); break;
         case 1:
         case 2:
         case 3:
         case 4: {
             const int k = cbField_ - 1;
             if (k >= c.len) {   // grow the path
-                if (k == c.len && d > 0 && c.len < kComboLen) {
-                    c.path[k] = 1;
-                    c.len = uint8_t(k + 1);
-                }
+                if (k == c.len && d > 0) fieldSet(&c.path[k], 1);
             } else {
-                int v = c.path[k] + d;
-                if (v < 1) {   // below 1: the path ends here
-                    c.len = uint8_t(k);
-                } else {
-                    c.path[k] = uint8_t(clampi(v, 1, 16));
-                }
+                fieldSet(&c.path[k], clampi(c.path[k] + d, 0, 16));   // below 1: the path ends here
             }
             break;
         }
-        case 5: c.action = uint8_t((c.action + (d > 0 ? 1 : kComboActions - 1)) % kComboActions); break;
-        case 6: c.a = uint8_t(clampi(c.a + d, 0, 127)); break;
-        case 7: c.b = uint8_t(clampi(c.b + d, 0, 127)); break;
+        case 5: fieldSet(&c.action, (c.action + (d > 0 ? 1 : kComboActions - 1)) % kComboActions); break;
+        case 6: fieldSet(&c.a, clampi(c.a + d, 0, 127)); break;
+        case 7: fieldSet(&c.b, clampi(c.b + d, 0, 127)); break;
         default: break;
     }
 }
@@ -661,21 +668,20 @@ void Tilt::eventCombos(const Event& e) {
         Combo& cb = pat_->combos[cbSel_];
         if (r <= 1 && c < 8) {
             const int s = r * 8 + c + 1;
-            if (cb.len >= kComboLen) cb.len = 0;
-            cb.path[cb.len] = uint8_t(s);
-            cb.len = uint8_t(cb.len + 1);
+            if (cb.len >= kComboLen) fieldSet(&cb.path[0], 0);
+            fieldSet(&cb.path[cb.len], s);
             cbField_ = cb.len;
         } else if (r == 2 && c < 4) {
             cbSel_ = c;
         } else if (r == 2 && c >= 4 && c < 4 + kComboActions) {
-            cb.action = uint8_t(c - 4);
+            fieldSet(&cb.action, c - 4);
             cbField_ = 5;
         } else if (r == 3 && c < 4) {
             post(Cmd::kCombo, c);
         } else if (r == 3 && c == 11) {
-            cb.len = 0;
+            fieldSet(&cb.path[0], 0);
         } else if (r == 3 && c == 10) {
-            cb.on ^= 1;
+            fieldSet(&cb.on, cb.on ? 0 : 1);
         }
         return;
     }
@@ -685,8 +691,8 @@ void Tilt::eventCombos(const Event& e) {
         case btn::Down: cbSel_ = (cbSel_ + 1) % kCombos; break;
         case btn::Left: cbField_ = clampi(cbField_ - 1, 0, 7); break;
         case btn::Right: cbField_ = clampi(cbField_ + 1, 0, 7); break;
-        case btn::EncPush: post(Cmd::kCombo, cbSel_); break;
-        case btn::Delete: pat_->combos[cbSel_].len = 0; break;
+        case btn::Insert: post(Cmd::kCombo, cbSel_); break;
+        case btn::Delete: fieldSet(&pat_->combos[cbSel_].path[0], 0); break;
         default: break;
     }
 }
@@ -698,6 +704,8 @@ void Tilt::editChannel(int field, int d) {
         const int t = (c.type + (d > 0 ? 1 : kEngines - 1)) % kEngines;
         engineDefaults(c, t);
         if (t != kEnSample) c.sample[0] = 0;
+        refreshSlots(chSel_);
+        syncRegistry(true);
         return;
     }
     if (field >= 1 && field <= 8) {
@@ -705,16 +713,12 @@ void Tilt::editChannel(int field, int d) {
         if (!ep.name) return;
         const int span = ep.max - ep.min;
         const int step = (shift_ && span > 20) ? 8 : 1;
-        c.p[field - 1] = uint8_t(clampi(c.p[field - 1] + d * step, ep.min, ep.max));
+        fieldSet(&c.p[field - 1], clampi(fieldGet(&c.p[field - 1]) + d * step, ep.min, ep.max));
         return;
     }
-    static int ids[8];
+    int ids[8];
     const int n = paramsOfPage(kPpChannel, ids, 8);
-    if (field >= 9 && field < 9 + n) {
-        paramSet(*pat_, ids[field - 9], paramGet(*pat_, ids[field - 9], chSel_) + d * (shift_ ? 12 : 1), chSel_);
-        return;
-    }
-    if (field == 14 && wavCount_ > 0) wavSel_ = clampi(wavSel_ + d, 0, wavCount_ - 1);
+    if (field >= 9 && field < 9 + n) kpSet(ids[field - 9], paramGet(*pat_, ids[field - 9], chSel_) + d * (shift_ ? 12 : 1), chSel_);
 }
 
 void Tilt::eventChannels(const Event& e) {
@@ -730,6 +734,8 @@ void Tilt::eventChannels(const Event& e) {
             static const uint8_t kTypes[4] = {kEnKick, kEnSnare, kEnHat, kEnAcid};
             engineDefaults(pat_->ch[chSel_], kTypes[c - 8]);
             pat_->ch[chSel_].sample[0] = 0;
+            refreshSlots(chSel_);
+            syncRegistry(true);
         } else {
             const Channel& ch = pat_->ch[chSel_];
             const int idx = (2 - r) * 12 + c;
@@ -752,15 +758,9 @@ void Tilt::eventChannels(const Event& e) {
             break;
         case btn::Left: chSel_ = (chSel_ + kCh - 1) % kCh; break;
         case btn::Right: chSel_ = (chSel_ + 1) % kCh; break;
-        case btn::EncPush:
-            if (chField_ == 14 && wavCount_ > 0) {
-                Channel& c = pat_->ch[chSel_];
-                lab::copyStr(c.sample, kPathLen, wavs_[clampi(wavSel_, 0, wavCount_ - 1)]);
-                sampleDirty_[chSel_] = true;
-                ctx_->toast("Sample loaded");
-            } else {
-                auditionCh(chSel_, pat_->ch[chSel_].note, 110);
-            }
+        case btn::Insert:   // on SAMPLE: the browser; elsewhere: audition
+            if (chField_ == 14) openSampleBrowser(chSel_);
+            else auditionCh(chSel_, pat_->ch[chSel_].note, 110);
             break;
         case btn::Delete:
             if (chField_ == 14) {
@@ -768,7 +768,7 @@ void Tilt::eventChannels(const Event& e) {
                 ctx_->toast("Built-in sample");
             } else if (chField_ >= 1 && chField_ <= 8) {
                 Channel& c = pat_->ch[chSel_];
-                c.p[chField_ - 1] = kEngineParams[c.type][chField_ - 1].def;
+                fieldSet(&c.p[chField_ - 1], kEngineParams[c.type][chField_ - 1].def);
             }
             break;
         default: break;
@@ -783,7 +783,7 @@ void Tilt::editMix(int d) {
         const int n = paramsOfPage(kPpFx, ids, 16);
         const int f = clampi(parFocus_[2], 0, n - 1);
         const ParamDef& pd = kParams[ids[f]];
-        paramSet(*pat_, ids[f], paramGet(*pat_, ids[f]) + d * ((shift_ && pd.max - pd.min > 20) ? 10 : 1));
+        kpSet(ids[f], paramGet(*pat_, ids[f]) + d * ((shift_ && pd.max - pd.min > 20) ? 10 : 1));
         return;
     }
     int ids[16];
@@ -791,7 +791,7 @@ void Tilt::editMix(int d) {
     const int id = ids[clampi(mixRow_, 0, n - 1)];
     const ParamDef& pd = kParams[id];
     const int step = (pd.max - pd.min > 20) ? (shift_ ? 1 : 4) : 1;
-    paramSet(*pat_, id, paramGet(*pat_, id, mixCh_) + d * step, mixCh_);
+    kpSet(id, paramGet(*pat_, id, mixCh_) + d * step, mixCh_);
 }
 
 void Tilt::eventMix(const Event& e) {
@@ -802,14 +802,15 @@ void Tilt::eventMix(const Event& e) {
     if (e.type == Event::kPadDown) {
         const int r = padR(e.id), c = padC(e.id);
         if (c < 8) {
-            if (r == 0) pat_->ch[c].mute ^= 1;
-            else if (r == 1) pat_->ch[c].solo ^= 1;
+            Channel& ch = pat_->ch[c];
+            if (r == 0) fieldSet(&ch.mute, ch.mute ? 0 : 1);
+            else if (r == 1) fieldSet(&ch.solo, ch.solo ? 0 : 1);
             else if (r == 2) {
                 mixCh_ = c;
                 mixFx_ = false;
-            } else auditionCh(c, pat_->ch[c].note, e.velocity);
+            } else auditionCh(c, ch.note, e.velocity);
         } else {
-            // cols 8-11: FX parameters 0..8 (rows 0-2), tap = focus
+            // cols 9-12: the FX parameters 1-9 (rows 1-3), tap = focus
             const int f = r * 4 + (c - 8);
             if (f < 9) {
                 mixFx_ = true;
@@ -836,14 +837,17 @@ void Tilt::eventMix(const Event& e) {
             if (mixFx_) parFocus_[2] = clampi(parFocus_[2] + 1, 0, 8);
             else mixRow_ = clampi(mixRow_ + 1, 0, 7);
             break;
-        case btn::EncPush:
-            if (!mixFx_) pat_->ch[mixCh_].mute ^= 1;
+        case btn::Insert:
+            if (!mixFx_) fieldSet(&pat_->ch[mixCh_].mute, pat_->ch[mixCh_].mute ? 0 : 1);
             break;
         default: break;
     }
 }
 
 // ---- FILE overlay -----------------------------------------------------------------------------------------
+// Pads: rows 1-2 cols 1-8 = factory 1-16, rows 1-2 cols 9-12 = kits 1-8,
+// rows 3-4 cols 1-8 = user slots 1-16 (Shift + pad saves), row 3 cols 9-12 =
+// JSON load, JSON save, MIDI file, replay; row 4 cols 9-12 = capture 1/2/4/8.
 void Tilt::eventFile(const Event& e) {
     static const int kCounts[4] = {kFactoryCount, kUserSlots, kKitSlots, 4};
     const bool sh = e.shift || shift_;
@@ -862,21 +866,32 @@ void Tilt::eventFile(const Event& e) {
     }
     if (e.type == Event::kPadDown) {
         const int r = padR(e.id), c = padC(e.id);
-        if ((r == 0) || (r == 1 && c < 2)) {
-            const int i = r * 12 + c;
+        if (r <= 1 && c < 8) {
+            const int i = r * 8 + c;
             if (i < kFactoryCount) {
                 loadFactory(i);
+                fileSel_[0] = i;
                 ctx_->toast(kFactoryNames[i]);
             }
-        } else if (r == 1 && c >= 4) {
-            const int k = c - 4;
+        } else if (r <= 1) {
+            const int k = r * 4 + (c - 8);
             if (sh) ctx_->toast(saveKit(k) ? "Kit saved" : "No card");
             else ctx_->toast(loadKit(k) ? "Kit loaded" : "Empty kit slot");
-        } else if (r == 2 || (r == 3 && c < 4)) {
-            const int slot = r == 2 ? c : 12 + c;
+        } else if (c < 8) {
+            const int slot = (r - 2) * 8 + c;
             if (sh) ctx_->toast(savePattern(slot) ? "Pattern saved" : "No card");
             else ctx_->toast(loadPattern(slot) ? "Pattern loaded" : "Empty slot");
-        } else if (r == 3 && c >= 8) {
+        } else if (r == 2) {
+            switch (c) {
+                case 8: openJsonBrowser(); break;
+                case 9: openJsonSave(); break;
+                case 10:
+                    if (exportMidi(lastMidi_, sizeof lastMidi_)) ctx_->toast("MIDI file saved");
+                    else ctx_->toast(ctx_->fs ? "Capture first" : "No card");
+                    break;
+                default: post(Cmd::kReplay, eng_->replaying() ? 0 : 1); break;
+            }
+        } else {
             static const int kBars[4] = {1, 2, 4, 8};
             capBars_ = kBars[c - 8];
             post(Cmd::kCapture, capBars_, 1);
@@ -890,7 +905,7 @@ void Tilt::eventFile(const Event& e) {
         case btn::Left: fileCol_ = clampi(fileCol_ - 1, 0, 3); break;
         case btn::Right: fileCol_ = clampi(fileCol_ + 1, 0, 3); break;
         case btn::F1:
-        case btn::EncPush:
+        case btn::Insert:
             if (fileCol_ == 0) {
                 loadFactory(fileSel_[0]);
                 ctx_->toast(kFactoryNames[fileSel_[0]]);
@@ -907,8 +922,14 @@ void Tilt::eventFile(const Event& e) {
             ctx_->toast(savePattern(slot) ? "Pattern saved" : "No card");
             break;
         }
-        case btn::F3: ctx_->toast(loadKit(fileSel_[2]) ? "Kit loaded" : "Empty kit slot"); break;
-        case btn::F4: ctx_->toast(saveKit(fileSel_[2]) ? "Kit saved" : "No card"); break;
+        case btn::F3:
+            if (sh) ctx_->toast(loadKit(fileSel_[2]) ? "Kit loaded" : "Empty kit slot");
+            else openJsonBrowser();
+            break;
+        case btn::F4:
+            if (sh) ctx_->toast(saveKit(fileSel_[2]) ? "Kit saved" : "No card");
+            else openJsonSave();
+            break;
         case btn::F5: post(Cmd::kCapture, capBars_, 0); ctx_->toast("Captured"); break;
         case btn::F6: post(Cmd::kReplay, eng_->replaying() ? 0 : 1); break;
         case btn::F7:

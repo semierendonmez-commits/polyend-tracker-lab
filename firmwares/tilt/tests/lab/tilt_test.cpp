@@ -54,6 +54,12 @@ struct Rig {
     }
 };
 
+int fac(const char* name) {
+    for (int i = 0; i < kFactoryCount; ++i)
+        if (!std::strcmp(kFactoryNames[i], name)) return i;
+    return 0;
+}
+
 void clearAll(Pattern& p) {
     std::memset(p.w, 0, sizeof p.w);
     std::memset(p.e, 0, sizeof p.e);
@@ -793,7 +799,7 @@ LAB_TEST(tilt_workstation_plays_sounds_and_midi) {
     Station st;
     CHECK(st.ws != nullptr);
     if (!st.ws) return;
-    st.ws->loadFactory(0);
+    st.ws->loadFactory(fac("CHAIN"));
     st.run(1600);   // ~4.6 s
     CHECK(st.finite);
     CHECK(st.peak > 0.05f && st.peak < 4.0f);
@@ -834,7 +840,7 @@ LAB_TEST(tilt_every_factory_pattern_plays) {
 LAB_TEST(tilt_midi_in_flips_and_flippers) {
     Station st;
     if (!st.ws) return;
-    st.ws->loadFactory(0);
+    st.ws->loadFactory(fac("CHAIN"));
     st.run(200);
     // step note: base + 6 = step 7
     st.ws->onMidi(lab::MidiMsg{0x90, uint8_t(st.ws->pattern().table.stepNoteBase + 6), 100});
@@ -853,14 +859,14 @@ LAB_TEST(tilt_files_patterns_kits_midi) {
     Station st;
     if (!st.ws) return;
     Tilt& ws = *st.ws;
-    ws.loadFactory(10);
+    ws.loadFactory(fac("META"));
     st.run(4);
     ws.pattern().steps[5].ramp = 12;
     ws.pattern().ch[2].p[1] = 99;
     CHECK(ws.savePattern(3));
     CHECK(st.fs.exists("Lab/TILT/Patterns/PAT04.TLT"));
     CHECK(ws.saveKit(1));
-    ws.loadFactory(0);
+    ws.loadFactory(fac("CHAIN"));
     st.run(4);
     CHECK(ws.pattern().steps[5].ramp == 0);
     CHECK(ws.loadPattern(3));
@@ -913,7 +919,7 @@ LAB_TEST(tilt_runs_without_a_card) {
 LAB_TEST(tilt_modulation_sources_and_pages_table) {
     Station st;
     if (!st.ws) return;
-    st.ws->loadFactory(6);
+    st.ws->loadFactory(fac("COMBOS"));
     st.run(1500);
     for (int i = 0; i < Tilt::kModSources; ++i) {
         const float* v = st.ws->modSourceValue(i);
@@ -927,4 +933,233 @@ LAB_TEST(tilt_modulation_sources_and_pages_table) {
         CHECK(kPages_[p].name && kPages_[p].name[0]);
         CHECK(kPages_[p].help && kPages_[p].help[0]);
     }
+}
+
+// ---- round 2: JSON, the readme's rules, LABKIT ------------------------------------------------
+LAB_TEST(tilt_json_roundtrip_every_factory_pattern) {
+    std::unique_ptr<Pattern> a(new Pattern()), b(new Pattern());
+    std::vector<char> text(kJsonMaxBytes);
+    std::vector<JsonTok> toks(kJsonTokens);
+    for (int i = 0; i < kFactoryCount; ++i) {
+        factoryPattern(i, *a);
+        a->e[1][4][7].tr = -5;
+        a->e[1][4][7].dly = 7;
+        a->e[3][0][2].vel = 33;
+        a->steps[3].trig = kTrigMute;
+        std::strcpy(a->ch[2].sample, "Samples/a \"quoted\" name.wav");
+        const uint32_t n = patternToJson(*a, text.data(), uint32_t(text.size()));
+        CHECK(n > 1000);
+        char err[48];
+        CHECK(patternFromJson(*b, text.data(), n, toks.data(), kJsonTokens, err, sizeof err));
+        CHECK(std::memcmp(a.get(), b.get(), sizeof(Pattern)) == 0);
+        if (std::memcmp(a.get(), b.get(), sizeof(Pattern)) != 0) {
+            const uint8_t* x = reinterpret_cast<const uint8_t*>(a.get());
+            const uint8_t* y = reinterpret_cast<const uint8_t*>(b.get());
+            for (uint32_t k = 0; k < sizeof(Pattern); ++k)
+                if (x[k] != y[k]) {
+                    std::fprintf(stderr, "  %s: first difference at byte %u\n", kFactoryNames[i], unsigned(k));
+                    break;
+                }
+        }
+    }
+}
+
+LAB_TEST(tilt_json_is_lenient) {
+    std::vector<JsonTok> toks(kJsonTokens);
+    std::unique_ptr<Pattern> p(new Pattern());
+    char err[48];
+    // a minimal file: one matrix (every page plays it), two steps, unknown keys
+    const char* j = "{\"format\":\"tilt-pattern\",\"name\":\"MINI\",\"unknown\":{\"a\":[1,2,{\"b\":3}]},"
+                    "\"matrix\":[[0,0,100],[0,0,100],[0,100]],\"steps\":[{\"trig\":2,\"velocity\":77},"
+                    "{\"trig\":-1}],\"melody\":{\"on\":true,\"scale\":\"Hijaz\",\"root\":\"D\"}}";
+    CHECK(patternFromJson(*p, j, uint32_t(std::strlen(j)), toks.data(), kJsonTokens, err, sizeof err));
+    CHECK(std::strcmp(p->name, "MINI") == 0);
+    CHECK(p->w[0][0][2] == 100 && p->w[3][2][1] == 100 && p->w[0][0][1] == 0);
+    CHECK(p->steps[0].trig == 2 && p->steps[0].vel == 77 && p->steps[1].trig == kTrigMute);
+    CHECK(p->mel.on == 1 && p->mel.scale == 8 && p->mel.root == 2);
+    // not a pattern
+    const char* bad = "{\"format\":\"something-else\",\"steps\":[]}";
+    CHECK(!patternFromJson(*p, bad, uint32_t(std::strlen(bad)), toks.data(), kJsonTokens, err, sizeof err));
+    CHECK(!patternFromJson(*p, "[1,2", 4, toks.data(), kJsonTokens, err, sizeof err));
+    CHECK(!patternFromJson(*p, "{}", 2, toks.data(), kJsonTokens, err, sizeof err));
+}
+
+LAB_TEST(tilt_mutation_follows_the_readme) {
+    Rig r;
+    r.p->ev.mutate = 100;
+    r.p->ev.mutHome = 0;
+    r.p->ev.mutSpread = 0;
+    r.launch();
+    for (int i = 0; i < 17; ++i) r.move();   // one bar line passed (beat 4)
+    int changed = 0;
+    float worst = 0.0f;
+    for (int a = 0; a < kStates; ++a)
+        for (int b = 0; b < kStates; ++b) {
+            const float m = std::fabs(r.e->mut[0][a][b]);
+            if (m > 0.0f) ++changed;
+            if (m > worst) worst = m;
+        }
+    CHECK(changed >= 1 && changed <= 24);
+    CHECK(worst <= 30.0f + 1e-3f);
+    // half the amount: at most 12 weights, by at most 15
+    Rig q;
+    q.p->ev.mutate = 50;
+    q.p->ev.mutHome = 0;
+    q.launch();
+    for (int i = 0; i < 17; ++i) q.move();
+    changed = 0;
+    worst = 0.0f;
+    for (int a = 0; a < kStates; ++a)
+        for (int b = 0; b < kStates; ++b) {
+            const float m = std::fabs(q.e->mut[0][a][b]);
+            if (m > 0.0f) ++changed;
+            if (m > worst) worst = m;
+        }
+    CHECK(changed <= 12 && worst <= 15.0f + 1e-3f);
+}
+
+LAB_TEST(tilt_memory_recovers_per_bar) {
+    Rig r;
+    r.p->ev.fatigue = 100;
+    r.p->ev.recover = 0;
+    r.launch();
+    for (int i = 0; i < 16; ++i) r.move();   // one bar: every chain edge used once
+    const float tired = r.e->mem[3][4];
+    CHECK(tired < 0.5f);
+    r.p->ev.fatigue = 0;
+    r.p->ev.recover = 50;
+    r.move();   // the next bar line: half way back
+    CHECK_NEAR(r.e->mem[3][4], tired + (1.0f - tired) * 0.5f, 1e-4);
+    for (int i = 0; i < 15; ++i) r.move();   // inside the bar: unchanged
+    CHECK_NEAR(r.e->mem[3][4], tired + (1.0f - tired) * 0.5f, 1e-4);
+}
+
+LAB_TEST(tilt_labkit_registry_pages_and_routes) {
+    Station st;
+    if (!st.ws) return;
+    Tilt& ws = *st.ws;
+    lab::kit::Registry& R = st.shell.context().params();
+    CHECK(ws.paramCount() > 400);
+    Pattern& p = ws.pattern();
+    // the matrix weights are not targets; the steps, table, channels are
+    CHECK(ws.paramOf(&p.w[0][1][2]) == lab::kit::kNoParam);
+    CHECK(ws.paramOf(&p.steps[3].vel) != lab::kit::kNoParam);
+    CHECK(ws.paramOf(&p.table.gravity) != lab::kit::kNoParam);
+    CHECK(ws.paramOf(&p.ch[5].level) != lab::kit::kNoParam);
+    CHECK(ws.paramOf(&p.ch[5].p[1]) != lab::kit::kNoParam);
+    CHECK(ws.paramOf(&p.combos[2].action) != lab::kit::kNoParam);
+    // pages
+    lab::kit::PageInfo pages[16];
+    CHECK(ws.navPages(pages, 16) == kNavPages);
+    lab::kit::ParamId ids[40];
+    CHECK(R.onPage(kPgTable, ids, 40) == 23);
+    CHECK(R.onPage(kPgSteps, ids, 40) == 32);
+    CHECK(R.onPage(kPgEvolve, ids, 40) == 36);
+    CHECK(R.onPage(kPgCombos, ids, 40) == 32);
+    CHECK(R.onPage(kPgMix, ids, 40) == 32);
+    CHECK(R.onPage(kPgChannels, ids, 40) >= 9);   // the selected channel only
+    // a registry edit lands in the pattern (setter), a pattern edit in the registry (sync)
+    const lab::kit::ParamId g = ws.paramOf(&p.table.gravity);
+    R.set(g, 40.0f);
+    R.applyNow();
+    CHECK(p.table.gravity == 40);
+    p.table.gravity = 12;
+    ws.syncRegistry();
+    CHECK_NEAR(R.get(g), 12.0, 0.01);
+    // an engine knob: the slot maps 0..1 onto the engine's range (ACID cutoff 0..127)
+    const lab::kit::ParamId cut = ws.paramOf(&p.ch[5].p[1]);
+    R.set(cut, 1.0f);
+    R.applyNow();
+    CHECK(p.ch[5].p[1] == 127);
+    // a route: LFO 1 on the ACID cutoff moves the field every block; the base stays
+    lab::kit::Mod& M = st.shell.context().mod();
+    R.set(cut, 0.5f);
+    CHECK(M.route(lab::kit::kSrcLfo, cut, 0.5f) >= 0);
+    M.update(false);
+    int lo = 127, hi = 0;
+    for (int b = 0; b < 2000; ++b) {
+        st.shell.kitBlock(st.tr);
+        st.tr.beat += st.tr.beatsPerSample * lab::kBlock;
+        lo = std::min(lo, int(p.ch[5].p[1]));
+        hi = std::max(hi, int(p.ch[5].p[1]));
+    }
+    CHECK(hi - lo > 40);
+    CHECK_NEAR(R.get(cut), 0.5, 0.01);
+    // the TILT sources exist
+    CHECK(M.findSource("BALL") >= 0 && M.findSource("BALL X") >= 0 && M.findSource("BALL Y") >= 0);
+    CHECK(M.findSource("HEAT") >= 0 && M.findSource("ENTROPY") >= 0 && M.findSource("BALLS") >= 0);
+    CHECK(M.findSource("TILT") >= 0);
+    M.clearRoutes();
+}
+
+LAB_TEST(tilt_keys_of_the_real_tracker_only) {
+    Station st;
+    if (!st.ws) return;
+    Tilt& ws = *st.ws;
+    auto press = [&](uint8_t id, bool shift = false) {
+        lab::Event e;
+        e.type = lab::Event::kPress;
+        e.id = id;
+        e.shift = shift;
+        ws.onEvent(e);
+        e.type = lab::Event::kRelease;
+        ws.onEvent(e);
+    };
+    st.run(400);
+    // Aux, Help and the encoder push do nothing (they are not on the hardware)
+    const int page = ws.page();
+    press(lab::btn::Aux);
+    press(lab::btn::Help);
+    press(lab::btn::EncPush);
+    CHECK(ws.page() == page);
+    st.run(4);
+    CHECK(ws.engine().shakeLeft == 0 && !ws.engine().tilted());
+    // Song nudges (Shift + Song: hard, tilts at Hard vel 124)
+    ws.pattern().table.tiltVel = 124;
+    press(lab::btn::Song);
+    st.run(1);
+    CHECK(ws.engine().shakeLeft >= 0);
+    press(lab::btn::Song, true);
+    st.run(1);
+    CHECK(ws.engine().tilted());
+    // Insert relaunches on GRAPH
+    st.run(3000);
+    press(lab::btn::F1);
+    press(lab::btn::Insert);
+    st.run(2);
+    CHECK(ws.engine().balls[0].active);
+    // Master and I.Param belong to LABKIT: they never change TILT's page
+    press(lab::btn::F3);
+    CHECK(ws.page() == kPgSteps);
+    press(lab::btn::Master);
+    press(lab::btn::InstrParams);
+    CHECK(ws.page() == kPgSteps);
+}
+
+LAB_TEST(tilt_json_files_and_factory_on_the_card) {
+    Station st;
+    if (!st.ws) return;
+    Tilt& ws = *st.ws;
+    int found = 0;
+    for (int i = 0; i < kFactoryCount; ++i) {
+        char p[96];
+        std::snprintf(p, sizeof p, "Lab/TILT/Patterns/Factory/%02d-%s.json", i + 1, kFactoryNames[i]);
+        found += st.fs.exists(p) ? 1 : 0;
+    }
+    CHECK(found == kFactoryCount);
+    CHECK(ws.writeFactoryJson() == 0);   // already there
+    // load one, change it, save it as JSON, load it back
+    char err[48];
+    CHECK(ws.loadJson("Lab/TILT/Patterns/Factory/05-MULTIBALL.json", err, sizeof err));
+    st.run(4);
+    CHECK(std::strcmp(ws.pattern().name, "MULTIBALL") == 0);
+    ws.pattern().steps[9].bumper = 3;
+    ws.pattern().e[0][2][3].tr = 7;
+    CHECK(ws.saveJson("Lab/TILT/Patterns/mine.json"));
+    ws.loadFactory(fac("CHAIN"));
+    st.run(4);
+    CHECK(ws.loadJson("Lab/TILT/Patterns/mine.json", err, sizeof err));
+    st.run(4);
+    CHECK(ws.pattern().steps[9].bumper == 3 && ws.pattern().e[0][2][3].tr == 7);
+    CHECK(!ws.loadJson("Lab/TILT/Patterns/missing.json", err, sizeof err));
 }

@@ -1,7 +1,10 @@
 // BULUT spectral freeze: analyse a moment (4096-point FFT magnitudes,
 // averaged over overlapping frames) and resynthesise it as a seamless
 // 65,536-sample loop (one inverse FFT with random phases: the loop is exactly
-// periodic, so it never clicks, and its spectrum never moves). Main loop only.
+// periodic, so it never clicks, and its spectrum never moves). The spectral
+// tools reshape the magnitudes before the resynthesis: blur, shift, tilt,
+// sparse (keep the peaks) and a morph towards a second library slot.
+// Main loop only (the 64k-point inverse FFT takes ~0.1-0.3 s on the device).
 #pragma once
 
 #include <cstdint>
@@ -30,8 +33,11 @@ public:
         analyseSpan(out);
         return true;
     }
-    // Resynthesise a slot into `loop` (kFrzLen int16). `seed` picks the phases.
-    void synth(const FreezeSlot& in, int16_t* loop, uint32_t seed);
+    // The magnitudes after the tools (kSpecBins, 0..1), for drawing and synth.
+    void shape(const FreezeSlot& in, const FreezeSlot* morph, const SpecTools& t, float* out) const;
+    // Resynthesise into `loop` (kFrzLen int16). `seed` picks the phases.
+    void synth(const FreezeSlot& in, int16_t* loop, uint32_t seed, const FreezeSlot* morph = nullptr,
+               const SpecTools* tools = nullptr);
     // In-place radix-2 complex FFT, n a power of two, inverse when `inv`.
     static void fft(float* re, float* im, int n, bool inv);
 
@@ -40,6 +46,7 @@ private:
     float* span_ = nullptr;
     float* re_ = nullptr;      // kFrzLen
     float* im_ = nullptr;      // kFrzLen
+    float* mag_ = nullptr;     // kSpecBins
 };
 
 }  // namespace bulut

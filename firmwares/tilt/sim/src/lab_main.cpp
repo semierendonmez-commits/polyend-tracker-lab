@@ -13,6 +13,14 @@
 //   midi B1 B2 [B3]                      inject a MIDI message on the DIN input
 //   expect-midi-notes N                  at least N note-ons sent on DIN so far
 //   expect-fps N
+// LABKIT v2 (labkit/NAV.md):
+//   expect-overlay NAME                  none|param|map|macro|mod|help|browser|keyboard
+//   expect-param KEY VALUE [EPS]         a registered param's base value (units)
+//   expect-effective KEY VALUE [EPS]     ... after modulation
+//   expect-routes N                      mod routes in use
+//   expect-learn N                       MIDI learn entries
+//   cc CH CC VALUE                       a MIDI CC on the DIN input (CH 1..16)
+//   mkdir PATH | mkwav PATH SECONDS [HZ] [CHANNELS]   make test files on the card
 #include <SDL.h>
 
 #include <cmath>
@@ -26,6 +34,7 @@
 #include <vector>
 
 #include "canvas.h"
+#include "formats/wav.h"
 #include "host_hal.h"
 #include "host_midi.h"
 #include "host_storage.h"
@@ -257,6 +266,30 @@ void saveShot(Machine& m, const std::string& path, bool panel) {
     std::fprintf(stderr, "%s %s\n", ok ? "saved" : "FAILED to save", path.c_str());
 }
 
+// A test WAV on the card: a decaying saw + sine (16-bit, 44.1 kHz).
+bool makeWav(Machine& m, const std::string& path, double seconds, double hz, std::istringstream& rest) {
+    int ch = 1;
+    rest >> ch;
+    ch = ch == 2 ? 2 : 1;
+    const uint32_t frames = uint32_t(seconds * 44100.0);
+    std::vector<int16_t> pcm(size_t(frames) * size_t(ch));
+    for (uint32_t i = 0; i < frames; ++i) {
+        const double t = double(i) / 44100.0;
+        const double env = std::exp(-t * 3.0);
+        const double saw = 2.0 * std::fmod(t * hz, 1.0) - 1.0;
+        const double v = env * (0.5 * saw + 0.4 * std::sin(2.0 * M_PI * hz * 0.5 * t));
+        for (int c = 0; c < ch; ++c) pcm[size_t(i) * size_t(ch) + size_t(c)] = int16_t(v * (c ? 20000.0 : 26000.0));
+    }
+    uint8_t hdr[ot::wav::kHeaderSize];
+    ot::wavMakeHeader(hdr, uint16_t(ch), frames * 2u * uint32_t(ch));
+    const ot::IStorage::Handle h = m.storage.open(path.c_str(), ot::IStorage::kWrite);
+    if (h < 0) return false;
+    m.storage.write(h, hdr, sizeof hdr);
+    m.storage.write(h, pcm.data(), uint32_t(pcm.size() * 2));
+    m.storage.close(h);
+    return true;
+}
+
 struct Headless {
     Machine& m;
     bool panel;
@@ -365,6 +398,45 @@ struct Headless {
                     return false;
                 }
                 std::fprintf(stderr, "midi ok: %u notes sent\n", unsigned(m.midi.sentNotes));
+            } else if (cmd == "expect-overlay") {
+                const char* ov = m.shell->labkit().nav.overlayName();
+                if (a1 != ov) {
+                    std::fprintf(stderr, "script:%d: overlay '%s', expected '%s'\n", line, ov, a1.c_str());
+                    return false;
+                }
+            } else if (cmd == "expect-param" || cmd == "expect-effective") {
+                lab::kit::Registry& reg = m.shell->labkit().reg;
+                const lab::kit::ParamId id = reg.find(a1.c_str());
+                const double want = std::atof(a2.c_str()), eps = a3.empty() ? 1e-3 : std::atof(a3.c_str());
+                const double got = cmd == "expect-param" ? reg.get(id) : reg.effective(id);
+                if (!reg.valid(id) || std::fabs(got - want) > eps) {
+                    std::fprintf(stderr, "script:%d: %s %s = %g, expected %g\n", line, cmd.c_str() + 7, a1.c_str(), got, want);
+                    return false;
+                }
+            } else if (cmd == "expect-routes") {
+                const int n = m.shell->labkit().mod.routeCount();
+                if (n != int(n1)) {
+                    std::fprintf(stderr, "script:%d: %d routes, expected %ld\n", line, n, n1);
+                    return false;
+                }
+            } else if (cmd == "expect-learn") {
+                const int n = m.shell->labkit().nav.learnCount();
+                if (n != int(n1)) {
+                    std::fprintf(stderr, "script:%d: %d MIDI learn entries, expected %ld\n", line, n, n1);
+                    return false;
+                }
+            } else if (cmd == "cc") {
+                const uint8_t bytes[3] = {uint8_t(0xB0 | ((n1 - 1) & 15)), uint8_t(std::atoi(a2.c_str()) & 127),
+                                          uint8_t(std::atoi(a3.c_str()) & 127)};
+                m.midi.injected.insert(m.midi.injected.end(), bytes, bytes + 3);
+                advance(2);
+            } else if (cmd == "mkdir") {
+                m.storage.mkdir(a1.c_str());
+            } else if (cmd == "mkwav") {
+                if (!makeWav(m, a1, std::atof(a2.c_str()), a3.empty() ? 110.0 : std::atof(a3.c_str()), ss)) {
+                    std::fprintf(stderr, "script:%d: cannot write %s\n", line, a1.c_str());
+                    return false;
+                }
             } else if (cmd == "fps-reset") {
                 frames0 = m.shell->frames();
                 ms0 = m.clock.millis();

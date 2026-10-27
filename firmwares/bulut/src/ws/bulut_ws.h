@@ -1,4 +1,4 @@
-// BULUT workstation: pages, controls, LEDs, files (main loop side).
+// BULUT workstation: pages, controls, LEDs, files, LABKIT registration (main loop side).
 #pragma once
 
 #include <cstdint>
@@ -12,7 +12,21 @@
 
 namespace bulut {
 
-enum Page : uint8_t { kPgCloud = 0, kPgGrain, kPgSource, kPgGesture, kPgFreeze, kPgMix, kPgScene, kPgFile, kPages };
+// The pages on the F-keys (F8 = the page's action).
+enum Page : uint8_t { kPgClouds = 0, kPgSound, kPgSource, kPgFx, kPgMotion, kPgFreeze, kPgFile, kPages };
+// LABKIT pages (the registry's pages; PARAM pads / MAP / HELP): CLOUDS, one
+// page per channel (its 36 params), MOTION, FREEZE, FILE.
+enum NavPage : uint8_t { kNavClouds = 0, kNavCh1 = 1, kNavMotion = 5, kNavFreeze = 6, kNavFile = 7, kNavPages = 8 };
+
+// Channel param indices (pad order on the channel's PARAM-pads page).
+namespace CP {
+enum : uint8_t {
+    K0 = 0,   // 0..11 engine knobs
+    Gain = 12, Start, End, GenA, GenB, Bed, LfoRate, LfoShape, Level, Pan, Dly, Rev,
+    Drive = 24, Flt, Cutoff, Reso, FxMode, FxTime, FxAmt, FxFb, GestSpeed, Engine, Source, GenType,
+};
+}
+enum MasterIdx : uint8_t { kMDlyDiv = 0, kMDlyFb, kMDlyTone, kMDlyRet, kMRevSize, kMRevDamp, kMRevRet, kMMorph };
 
 // One drawn particle (main loop): born from an audio Spark.
 struct Particle {
@@ -22,12 +36,6 @@ struct Particle {
     uint8_t cloud, size, kind, live;
 };
 constexpr int kParticles = 640;
-
-struct BrowseEntry {
-    char name[40];
-    uint8_t dir;
-};
-constexpr int kBrowseMax = 64;
 
 class Bulut final : public lab::Workstation {
 public:
@@ -46,17 +54,28 @@ public:
     void onTransport(bool playing) override;
     int settings(lab::SettingRow* rows, int cap) override;
     void save() override;
-    int benchScenarios() const override { return 6; }
+    int benchScenarios() const override { return 11; }
     const char* benchName(int i) const override;
     void benchSetup(int i) override;
+    // LABKIT
+    int navPages(lab::kit::PageInfo* out, int cap) override;
+    int navPage() const override;
+    void navGoto(int page) override;
+    void navFocus(lab::kit::ParamId id) override;
+    void navParamChanged(lab::kit::ParamId id) override;
 
     // ---- used by the host tests --------------------------------------------
     Engine& engine() { return *eng_; }
-    CloudState& cloud(int i) { return clouds_[i]; }
-    CloudSource& source(int i) { return sources_[i]; }
+    ChParams& params(int c) { return par_[c]; }
+    ChState& state(int c) { return st_[c]; }
+    ChSource& source(int c) { return src_[c]; }
+    lab::kit::ParamId pid(int c, int idx) const { return pid_[c][idx]; }
     int selected() const { return sel_; }
     int page() const { return page_; }
-    bool loadSample(int cloud, const char* path);
+    void setPage(int p);
+    void selectChannel(int c);
+    bool loadSample(int c, const char* path);
+    bool swapSample(int c, int dir);        // next / previous WAV in the sample's folder
     bool saveProjectTo(const char* path);
     bool loadProjectFrom(const char* path);
     bool captureFreeze(int slot, int from);
@@ -70,120 +89,155 @@ public:
     bool resampleBusy() const { return rsState_ != 0; }
     const char* lastResample() const { return rsPath_; }
     GestureRecorder& recorder() { return *rec_; }
-    void setParam(int cloud, int slot, float v, bool record);
+    void setParam(int c, int idx, float value, bool record);   // in units
+    void setNorm(int c, int idx, float norm, bool record);
+    float norm(int c, int idx) const;
+    void setEngine(int c, int engine);
+    void setSource(int c, int src);
+    void regionPad(int pad);
+    bool regionMode() const { return regionMode_; }
     void tick(uint32_t ms) { update(ms); }
 
 private:
-    // pages
-    void setPage(int p);
-    void action(int k);          // Shift + F1..F8 on the current page
+    // registration (params.cpp)
+    void registerParams();
+    void renameKnobs(int c);
+    void syncEngines();                 // engine params changed (any path): swap the knob sets
+    int chOf(lab::kit::ParamId id, int* idx) const;
+    // pages and keys
+    void action(int k, bool shift);     // F8 / Shift + F1..F8
     void encoder(int delta, bool fine);
     void arrows(int id);
-    void push();
-    void selectCloud(int c);
-    void gestureRecButton();
-    void finishGesture();
-    void toggleFreeze();
-    void waitGesture(int c);
+    void insertKey();
+    void deleteKey(bool shift);
     void shiftPad(int pad);
-    // params
-    struct ParamRef { int slot; };
-    int pageParam(int idx) const;            // Grain page: grid index -> slot
-    int stripParam(int idx) const;           // Cloud page strip
-    void nudgeParam(int c, int slot, int delta, bool fine);
+    void gestureRecButton(int c);
+    void finishGesture();
+    void waitGesture(int c);
+    void toggleFreeze(int c);
+    void openBrowser(int c);
+    int cursorParam() const;            // the channel param the page cursor is on (-1 = none)
     // files
-    void scanBrowse();
-    void browseEnter();
     void reloadSources();
     void pumpResample();
-    void pumpMorph(uint32_t ms);
+    void pumpMorph(float dt);
     void pumpTimeline();
     void pumpParticles(float dt);
+    void pumpParamEvents();
     void updatePeaks();
     void loadAutosave();
     void projectPath(int slot, char* out, uint32_t cap) const;
     void scanProjects();
     void newProject();
-    // draw
-    void drawField(lab::Canvas& g, int x, int y, int w, int h, int cloud, bool big);
-    void drawParticles(lab::Canvas& g, int x, int y, int w, int h, int cloud, bool big, int maxWords);
-    void drawCloudCards(lab::Canvas& g, int x, int y, int w, int h);
-    void drawParamCell(lab::Canvas& g, int x, int y, int w, int slot, bool selected);
-    void drawPageCloud(lab::Canvas& g);
-    void drawPageGrain(lab::Canvas& g);
+    void firstBoot();
+    void addRoute(int c);
+    // draw (draw.cpp)
+    void drawLane(lab::Canvas& g, int c, int x, int y, int w, int h, bool big);
+    void drawField(lab::Canvas& g, int c, int x, int y, int w, int h, bool big);
+    void drawParticles(lab::Canvas& g, int c, int x, int y, int w, int h, bool big, uint32_t limit);
+    void drawKnob(lab::Canvas& g, int c, int idx, int x, int y, int w, bool focused);
+    void drawBadges(lab::Canvas& g, int c, int x, int y);
+    void drawPageClouds(lab::Canvas& g);
+    void drawPageSound(lab::Canvas& g);
     void drawPageSource(lab::Canvas& g);
-    void drawPageGesture(lab::Canvas& g);
+    void drawPageFx(lab::Canvas& g);
+    void drawPageMotion(lab::Canvas& g);
     void drawPageFreeze(lab::Canvas& g);
-    void drawPageMix(lab::Canvas& g);
-    void drawPageScene(lab::Canvas& g);
     void drawPageFile(lab::Canvas& g);
     void drawFooter(lab::Canvas& g);
-    lab::Rgb cloudColor(int c) const;
+    void paramText(int c, int idx, char* out, int cap) const;
+    const char* paramName(int c, int idx) const;
+    lab::Rgb chColor(int c) const;
 
     lab::Context* ctx_ = nullptr;
     lab::Theme theme_;
     Engine* eng_ = nullptr;
     Spectral spec_;
     GestureRecorder* rec_ = nullptr;
-    CloudState clouds_[kClouds];
-    CloudSource sources_[kClouds];
-    Gesture* gest_ = nullptr;          // kGestBufs * kClouds (engine.h)
+    ChParams par_[kCh];
+    ChState st_[kCh];
+    ChSource src_[kCh];
+    Gesture* gest_ = nullptr;          // kGestBufs * kCh (engine.h)
     FxState fx_;
+    SpecTools tools_;
     Scene* scenes_ = nullptr;          // kScenes
     TimeEntry timeline_[kTimeline];
     int tlLen_ = 0;
     FreezeSlot* frz_ = nullptr;        // kFreezeSlots
     float bpmSave_ = 120.0f;
     int songMode_ = 0;
+    uint8_t* chunkBuf_ = nullptr;      // registry chunk scratch
+    static constexpr uint32_t kChunkCap = 24576;
+
+    // registry ids
+    lab::kit::ParamId pid_[kCh][kChParams];
+    lab::kit::ParamId mid_[kMasterParams];
+    lab::kit::ParamId tid_[6];          // spectral tools
+    int engNow_[kCh] = {-1, -1, -1, -1};   // the engine whose knobs the registry holds
+    int srcNow_[kCh] = {-1, -1, -1, -1};
+    char knobNames_[kCh][kKnobs][12];
 
     // ui
-    int page_ = kPgCloud, sel_ = 0;
+    int page_ = kPgClouds, sel_ = 0;
     bool shift_ = false;
     uint64_t held_ = 0;
-    int stripCur_ = 0;                 // Cloud page strip
-    int grainCur_ = 0;                 // Grain page 0..15
-    int srcCur_ = 0;                   // Source page row
-    int gestCur_ = 0;                  // Gesture page row
+    int cur_[kPages] = {};             // per page cursor
+    int frzCur_ = 0, frzFrom_ = kFromSource;
+    int frzFocus_ = 0, frzTool_ = 0;   // FREEZE: 0 library, 1 tools row (0 = bed, 1..6 tools)
+    int cloudsRow_ = 0;                // CLOUDS: 0..3 channel rows, 4 = send FX row
+    int scnCur_ = 0, tlCur_ = 0, motionFocus_ = 0;   // 0 gestures, 1 scenes, 2 timeline
     int gestMode_ = 0;                 // 0 new, 1 overdub
-    int frzCur_ = 0;                   // Freeze page: selected slot
-    int frzFrom_ = kFromSource;
-    int mixCol_ = 0, mixRow_ = 0;
-    int scnCur_ = 0, tlCur_ = 0, scnFocus_ = 0;   // focus 0 scenes, 1 timeline
     int fileCur_ = 0, fileFocus_ = 0;  // 0 projects, 1 resample row
     int rsSrc_ = -1, rsDst_ = 1;
     int curScene_ = -1, tlPlaying_ = -1;
+    bool regionMode_ = false;
+    int regionFirst_ = -1;
+    int routeSel_ = 0;
     // settings
-    int setGrains_ = kDefaultGrains, setCloudGrains_ = kDefaultCloudGrains, setVelocity_ = 1, setMidiCloud_ = 0, setMorph_ = 2, setLeds_ = 2,
-        setAutosave_ = 1;
+    int setGrains_ = kDefaultGrains, setCloudGrains_ = kDefaultCloudGrains, setVelocity_ = 1, setMidiCh_ = 0,
+        setLeds_ = 2, setAutosave_ = 1;
     float radioMHz_ = 100.0f, shellRadio_ = 0.0f;
-
-    // browser
-    BrowseEntry browse_[kBrowseMax];
-    int browseN_ = 0, browseCur_ = 0, browseTop_ = 0;
-    char browseDir_[96] = "Samples";
     // projects
     uint8_t projUsed_[kProjects] = {};
+    // browser hand-off
+    char pendingPath_[160] = {};
+    int pendingCh_ = -1;
 
     // particles + display caches
     Particle part_[kParticles];
     int partHead_ = 0;
-    float colGlow_[kClouds][12] = {};
-    uint8_t wave_[kClouds][64] = {};   // buffer overview
-    uint8_t colPeak_[kClouds][12] = {};
-    uint32_t lastMs_ = 0, lastPeakMs_ = 0, lastBlinkMs_ = 0;
-    float gestFlash_[kClouds] = {};
+    float colGlow_[kCh][12] = {};
+    uint8_t wave_[kCh][96] = {};       // source overview
+    uint8_t colPeak_[kCh][12] = {};
+    uint8_t regWave_[kCh][64] = {};    // the grain region (lanes, SOUND field)
+    uint32_t lastMs_ = 0, lastPeakMs_ = 0;
+    float gestFlash_[kCh] = {};
+    // particles are drawn after everything else on the page (draw.cpp)
+    struct PartReq {
+        int16_t c, x, y, w, h;
+        bool big;
+        uint32_t limit;
+    };
+    PartReq deferReq_[4] = {};
+    int nDefer_ = 0;
+    bool deferDone_ = true;
+    int knobH_ = 62;                   // drawKnob cell height
+    float specView_[kSpecBins];        // the selected slot after the tools (drawn)
+    int specViewSlot_ = -1;
+    float specViewKey_ = -1.0f;
 
     // morph
     bool morphOn_ = false;
     float morphT_ = 0.0f, morphDur_ = 1.0f;
-    CloudState* morphFrom_ = nullptr;  // kClouds
-    CloudState* morphTo_ = nullptr;    // kClouds
+    float* morphFrom_ = nullptr;       // kCh * kChParams + kMasterParams
+    float* morphTo_ = nullptr;
 
     // resample
     int rsState_ = 0;                  // 0 idle, 1 capturing, 2 writing
     ot::WavWriter rsWriter_;
-    uint32_t rsWritten_ = 0, rsLen_ = 0;
+    uint32_t rsWritten_ = 0;
     char rsPath_[64] = {};
+    char rsLabel_[40] = {};
     int rsTarget_ = 1;
 };
 

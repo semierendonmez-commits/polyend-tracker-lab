@@ -9,7 +9,7 @@ finished WAV (sound sources, sequencing, arrangement, mixing, stems).
 |---|---|---|---|
 | [GRAF](#graf) | Modular synth: pin matrix + patch graph, 37 modules | [`PolyendTrackerGRAFMD.ptf`](firmwares/graf/release/PolyendTrackerGRAFMD.ptf) | [MANUAL](firmwares/graf/MANUAL.md) |
 | [FLIPPER](#flipper) | The song is a pinball machine: physics + Markov | [`PolyendTrackerFLIPPR.ptf`](firmwares/flipper/release/PolyendTrackerFLIPPR.ptf) | [MANUAL](firmwares/flipper/MANUAL.md) |
-| [BULUT](#bulut) | Granular clouds: live buffers, gestures, freeze | [`PolyendTrackerBULUTG.ptf`](firmwares/bulut/release/PolyendTrackerBULUTG.ptf) | [MANUAL](firmwares/bulut/MANUAL.md) |
+| [BULUT](#bulut) | Granular: 4 deep channels (Granular, Quanta, Beads, Tape), quick sample browser | [`PolyendTrackerBULUTG.ptf`](firmwares/bulut/release/PolyendTrackerBULUTG.ptf) | [MANUAL](firmwares/bulut/MANUAL.md) |
 | [KONSOL](#konsol) | Clip/scene workstation: 8 tracks, 16 engines (Plaits, TB303...), kits, time-stretch | [`PolyendTrackerKONSOL.ptf`](firmwares/konsol/release/PolyendTrackerKONSOL.ptf) | [MANUAL](firmwares/konsol/MANUAL.md) |
 | [DATAMATICS](#datamatics) | Ryoji-Ikeda-style data music from any file on the card | [`PolyendTrackerDATAMT.ptf`](firmwares/datamatics/release/PolyendTrackerDATAMT.ptf) | [MANUAL](firmwares/datamatics/MANUAL.md) |
 | [MAKAM](#makam) | Turkish makam meets jungle: usul-cut breaks, microtonal bass and lead | [`PolyendTrackerMAKAMJ.ptf`](firmwares/makam/release/PolyendTrackerMAKAMJ.ptf) | [MANUAL](firmwares/makam/MANUAL.md) |
@@ -37,6 +37,23 @@ settings (tempo, MIDI clock in/out, input line/radio/mic, master, recorder),
 **Shift + Rec** records the master (plus up to 4 stems) to
 `/Lab/<NAME>/Rec/` on the card. Each has its own boot animation (Settings >
 Boot intro turns it off).
+
+### Common navigation (LABKIT)
+
+The round-2 firmwares (KONSOL, BULUT, DATAMATICS and TILT so far) share one
+navigation layer, [LABKIT](labkit/NAV.md):
+
+| Key | Action |
+|---|---|
+| **I.Param** | PARAM pads: the page's parameters on the pads. Hold a pad and turn the encoder to edit. |
+| **Shift + I.Param** | MACRO: 8 open macros, each with up to 8 targets. Hold a macro pad and tap parameter pads to assign. |
+| **Master** | MAP: every page and parameter on one screen. Tap to latch it; a pad jumps there. |
+| **Shift + Master** | MOD: 4 LFOs, 2 random sources and the firmware's own sources. Hold an LFO pad and tap a parameter pad for a route; the encoder sets the depth. |
+| **Shift + Config** | HELP for the current page. |
+| **Shift + hold a param pad + move a CC** | MIDI learn |
+
+The simulator panel also draws **Aux**, **Help** and **Push** keys. The real
+Tracker has none of them, so no firmware uses them.
 
 ---
 
@@ -101,24 +118,42 @@ instruments, ramps fire effects, holes and targets are events.
 
 ## BULUT
 
-![BULUT cloud page](firmwares/bulut/docs/screenshots/cloud.png)
+![BULUT clouds page](firmwares/bulut/docs/screenshots/clouds.png)
 
-*Bulut* is Turkish for cloud. Tracks are **six clouds**, each fed by line in,
-FM radio, BULUT's own output (resampling feedback) or a WAV from the card.
+*Bulut* is Turkish for cloud. **Four deep channels**, each a full granular voice
+with its own source, engine, effects and modulation.
 
-- **Two engines per cloud:**
-  - **GRANULAR:** position, size, density, pitch, spread, 16 window shapes, feedback.
-  - **QUANTA:** microsound particles (glisson, gabor, pulsar, trainlet) with
-    Poisson, Gauss, Cauchy and chaotic onset laws.
-- **Pads:** a position × density map of the last 8 seconds of the buffer.
-- **Gestures** instead of notes: pad and encoder movements are recorded and loop.
-- **Spectral freeze**, with a library of 16 frozen moments.
-- The **resample loop** renders a cloud to WAV and feeds it to the next cloud.
-- **Arrangement:** 8 morphing scenes and a 32-step timeline.
+- **Sources:**
+  - line in or FM radio;
+  - BULUT's own output (resampling feedback);
+  - a WAV from the card;
+  - a generator: RETE noise net, tone or noise.
+- **Four engines:**
+  - **GRANULAR** in the style of Clouds.
+  - **QUANTA**: microsound particles.
+  - **BEADS**: after Mutable Instruments Beads, with its four recording media.
+  - **TAPE**: a moving playhead with separate speed and pitch.
 
-| Freeze library | Gestures |
+  Each engine keeps its own knobs.
+- **Per-channel chain:** drive, filter and one of 7 FX modes (Texture and Shifter
+  from Clouds; Flanger, Panner, Crusher, Slicer and Freezer from artifex), an
+  LFO, and delay and reverb sends.
+- **Sample loading is quick now:**
+  - the shared browser with auto-preview, waveform, favourites and letter jumps
+    on the pads;
+  - Copy / Shift+Copy steps to the next or previous WAV in the folder while
+    playing;
+  - pick a region by tapping a start pad and an end pad;
+  - resampled takes load straight into a channel.
+- **Gestures** (recorded pad and encoder moves that loop), **spectral freeze**
+  with a library of frozen moments, 8 morphing scenes and a timeline.
+- **LABKIT:** 158 parameters on 8 pages, PARAM pads, MAP, macros, two-pad
+  modulation and MIDI learn, plus 17 BULUT modulation sources.
+- A CPU guard with a per-channel badge keeps all four channels playable.
+
+| Sample browser | BEADS engine |
 |---|---|
-| ![Freeze](firmwares/bulut/docs/screenshots/freeze.png) | ![Gestures](firmwares/bulut/docs/screenshots/gesture.png) |
+| ![Browser](firmwares/bulut/docs/screenshots/browser.png) | ![Beads](firmwares/bulut/docs/screenshots/sound-beads.png) |
 
 [Manual](firmwares/bulut/MANUAL.md) · [Image](firmwares/bulut/release/PolyendTrackerBULUTG.ptf)
 
@@ -227,25 +262,42 @@ cycle) is a clock dial, the **makam** a ring of perdes at their comma positions.
 
 ![TILT graph](firmwares/tilt/docs/screenshots/graph.png)
 
-The renewed **Pinball 2** Markov sequencer as a whole instrument. Sixteen steps and a **17×17
-probability matrix**: the ball lands on a step, fires one of **8 channels** (each a sample or a
-synth), then bounces to the next step drawn from that step's row.
+The renewed **Pinball 2** Markov sequencer as a whole instrument. It has 16 steps
+and a **17×17 probability matrix**: the ball lands on a step and fires one of
+**8 channels** (each a sample or a synth), then bounces to the next step drawn
+from that step's row.
 
-- Around the walk, a table: flippers (pads / MIDI notes), bumpers (ratchets), ramps (fixed
-  licks inside the random walk), 4 combos (multiball, fill, note, CC, shake, scene), multiball,
-  tilt (freeze / shake), ball save, gravity, per-move edge properties (transpose, delay,
-  velocity).
-- Evolution: memory (fatigue / reinforcement), mutation, a 4×4 meta matrix over pages A–D,
-  melody mode (scale degrees, legato, octave-up), rules, matrix shapes and a randomizer with
-  locks.
-- Channels: samples from the card or built-in, Plaits analog/synthetic kick, snare and 808 hat,
-  a 303-style acid voice and a 2-op FM voice; mixer, choke groups, delay/reverb sends, stems.
-- Graph view with heat, trail, next-move odds and entropy; capture the last 1–8 bars and save
-  them as a MIDI file.
+- **The table around the walk:**
+  - flippers (pads or MIDI notes);
+  - bumpers (ratchets);
+  - ramps (fixed licks inside the random walk);
+  - 4 combos (multiball, fill, note, CC, shake, scene);
+  - multiball (red main ball, blue extra balls);
+  - tilt (freeze or shake), ball save and gravity;
+  - edge properties per move (transpose, delay, velocity).
+- **Evolution:**
+  - memory (fatigue or reinforcement, recovering each bar);
+  - mutation (up to 24 weights by ±30 per bar);
+  - a 4×4 meta matrix over pages A–D;
+  - melody mode (scale degrees, legato, octave-up);
+  - rules;
+  - matrix shapes, and a randomizer with locks.
+- **Channels:**
+  - samples from the card (through the browser) or built-in;
+  - Plaits analog/synthetic kick, snare and 808 hat;
+  - a 303-style acid voice and a 2-op FM voice;
+  - mixer, choke groups, delay/reverb sends and stems.
+- **Pattern JSON** after the TILT plug-in's model, saved to and loaded from
+  `/Lab/TILT/Patterns`, plus **15 factory patterns** (one per idea). Not yet
+  checked against the plug-in's `FORMAT.md`.
+- **Views:** a graph view with heat, trail, next-move odds and entropy.
+- **Capture:** the last 1–8 bars, saved as a MIDI file.
+- **LABKIT:** 13 pages of parameters, and 9 modulation sources (ball, ball X/Y,
+  heat, entropy, balls, tilt, page, velocity) for LFOs and macros.
 
-| 17×17 matrix | Channels |
+| 17×17 matrix | MAP |
 |---|---|
-| ![Matrix](firmwares/tilt/docs/screenshots/matrix.png) | ![Channels](firmwares/tilt/docs/screenshots/channels.png) |
+| ![Matrix](firmwares/tilt/docs/screenshots/matrix.png) | ![MAP](firmwares/tilt/docs/screenshots/map.png) |
 
 [Manual](firmwares/tilt/MANUAL.md) · [Image](firmwares/tilt/release/PolyendTrackerTILTPB.ptf)
 

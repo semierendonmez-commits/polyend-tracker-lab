@@ -31,6 +31,10 @@ bool Canvas::spend(uint32_t w) {
         ++dropped_;
         return false;
     }
+    if (words_ + w > limit_) {   // words kept for a Shell overlay (setLimit)
+        ++clipped_;
+        return false;
+    }
     words_ += w;
     return true;
 }
@@ -38,6 +42,8 @@ bool Canvas::spend(uint32_t w) {
 void Canvas::begin(Rgb c) {
     words_ = 0;
     dropped_ = 0;
+    clipped_ = 0;
+    limit_ = kBudgetWords;
     inBatch_ = false;
     if (!d_) return;
     d_->dlStart();
@@ -171,6 +177,10 @@ void Canvas::vtx(float x, float y) {
     // Keep one word for END: an unfinished batch still closes cleanly.
     if (words_ + 1 > kBudgetWords - 1) {
         ++dropped_;
+        return;
+    }
+    if (words_ + 1 > limit_ - 1) {
+        ++clipped_;
         return;
     }
     ++words_;
