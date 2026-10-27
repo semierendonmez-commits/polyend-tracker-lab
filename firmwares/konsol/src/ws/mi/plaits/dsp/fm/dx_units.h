@@ -76,7 +76,7 @@ inline float Pow2Fast(float x) {
   } else if (order == 3) {
     r.f = 1.0f + x * (0.6958f + x * (0.2251f + x * 0.0791f));
   }
-  r.w += x_integral << 23;
+  r.w += static_cast<int32_t>(static_cast<uint32_t>(x_integral) << 23);   // KONSOL: no UB on negatives
   return r.f;
 }
 

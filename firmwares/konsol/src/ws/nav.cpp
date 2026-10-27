@@ -7,12 +7,11 @@
 // a setter) that follow the track's current engine in the Sound page's order;
 // the selected track's slots are on the SOUND page (PARAM pads, MAP), the
 // others on hidden pages, so routes and macros keep working on every track.
+// Main loop only (no audio-interrupt code here): built for size.
+#pragma GCC optimize("Os")
 #include <cstdio>
 #include <cstring>
 
-#include "lab/mod.h"
-#include "lab/nav.h"
-#include "lab/params.h"
 #include "ws/konsol.h"
 
 namespace lab {
@@ -37,6 +36,8 @@ const char* const kRevNamesT[kTracks] = {"1 Reverb", "2 Reverb", "3 Reverb", "4 
 const char* const kSrcNames[kTracks] = {"T1 ENV", "T2 ENV", "T3 ENV", "T4 ENV", "T5 ENV", "T6 ENV", "T7 ENV", "T8 ENV"};
 }  // namespace
 
+extern const char* const kPageName[kPgCount];
+extern const char* const kPageKey[kPgCount];
 const char* const kPageName[kPgCount] = {"SESSION", "STEPS", "ROLL", "PLAYER", "SOUND",
                                          "SAMPLE",  "KIT",   "MIXER", "SONG",   "PROJECT"};
 const char* const kPageKey[kPgCount] = {"Pattern", "Note", "FX1", "FX2", "Instr", "S.Load", "S.Play", "S.Rec", "Song", "File"};
@@ -56,7 +57,7 @@ void Konsol::registerParams() {
         R.setPage(kHiddenPage + t);
         R.setGroup(kTrackGroups[t], trackColor(t));
         for (int s = 0; s < kSlotsPerTrack; ++s) {
-            char key[12];
+            char key[20];
             std::snprintf(key, sizeof key, "t%d.s%02d", t + 1, s);
             std::snprintf(slotName_[t][s], sizeof slotName_[t][s], "-");
             slotRef_[t][s] = SlotRef{this, uint8_t(t), uint8_t(s)};
@@ -73,7 +74,7 @@ void Konsol::registerParams() {
     for (int t = 0; t < kTracks; ++t) {
         Mix& m = P_->track[t].mix;
         R.setGroup(kTrackGroups[t], trackColor(t));
-        char key[12];
+        char key[20];
         std::snprintf(key, sizeof key, "t%d.lvl", t + 1);
         mixId_[t][0] = R.add(key, kLvlNames[t], &m.level).range(0.0f, 1.25f).def(0.8f).pad(t);
         mixId_[t][1] = kit::kNoParam;   // pan: on the mixer page only
@@ -120,6 +121,7 @@ void Konsol::registerParams() {
         if (kFx[i].names) p.names(kFx[i].names, kFx[i].nNames).noMod();
         else if (kFx[i].hi <= 1.0f) p.percent();
         p.pad(kFx[i].pad);
+        fxId_[i] = p.id();
     }
     R.setPage(0);
     // modulation sources: a decaying envelope per track's notes, bar and beat ramps
@@ -129,6 +131,40 @@ void Konsol::registerParams() {
     kitReady_ = true;
     for (int t = 0; t < kTracks; ++t) refreshSlots(t);
     placeSlots();
+}
+
+// The FX / master page edits FxCfg directly: keep the registry (MAP, PARAM pads, saves) in step.
+void Konsol::refreshFx() {
+    if (!kitReady_) return;
+    kit::Registry& R = ctx_->params();
+    const FxCfg& f = P_->fx;
+    const float v[kFxN] = {f.master,  f.retA,         f.retB,    f.compRatio,       f.delayFb,      f.delayTone,
+                           float(f.delaySync), float(f.dlyType), f.revSize, f.revDamp, float(f.revType), f.revPre};
+    for (int i = 0; i < kFxN; ++i) {
+        const kit::ParamId id = fxId_[i];
+        const float n = R.toNorm(id, v[i]);
+        R.baseArray()[id] = n;
+        if (!R.meta(id).mods) R.effArray()[id] = n;
+    }
+}
+
+void Konsol::refreshRegistry() {
+    if (!kitReady_) return;
+    kit::Registry& R = ctx_->params();
+    const FxCfg& f = P_->fx;
+    const float v[kFxN] = {f.master,  f.retA,         f.retB,    f.compRatio,       f.delayFb,      f.delayTone,
+                           float(f.delaySync), float(f.dlyType), f.revSize, f.revDamp, float(f.revType), f.revPre};
+    // set() (not the arrays): a chunk just loaded may have marked these; the project's values win
+    for (int i = 0; i < kFxN; ++i) R.set(fxId_[i], v[i], false);
+    for (int t = 0; t < kTracks; ++t) {
+        const Mix& m = P_->track[t].mix;
+        R.set(mixId_[t][0], m.level, false);
+        R.set(mixId_[t][2], m.sendA, false);
+        R.set(mixId_[t][3], m.sendB, false);
+        refreshSlots(t);
+        for (int s = 0; s < kSlotsPerTrack; ++s)
+            if (slotIdx_[t][s] >= 0) R.set(slotParam_[t][s], engine(t)->frac(slotIdx_[t][s]), false);
+    }
 }
 
 void Konsol::slotSet(void* ctx, float v) {

@@ -10,7 +10,7 @@ finished WAV (sound sources, sequencing, arrangement, mixing, stems).
 | [GRAF](#graf) | Modular synth: pin matrix + patch graph, 37 modules | [`PolyendTrackerGRAFMD.ptf`](firmwares/graf/release/PolyendTrackerGRAFMD.ptf) | [MANUAL](firmwares/graf/MANUAL.md) |
 | [FLIPPER](#flipper) | The song is a pinball machine: physics + Markov | [`PolyendTrackerFLIPPR.ptf`](firmwares/flipper/release/PolyendTrackerFLIPPR.ptf) | [MANUAL](firmwares/flipper/MANUAL.md) |
 | [BULUT](#bulut) | Granular clouds: live buffers, gestures, freeze | [`PolyendTrackerBULUTG.ptf`](firmwares/bulut/release/PolyendTrackerBULUTG.ptf) | [MANUAL](firmwares/bulut/MANUAL.md) |
-| [KONSOL](#konsol) | Clip/scene workstation: 8 tracks, 10 engines, generators | [`PolyendTrackerKONSOL.ptf`](firmwares/konsol/release/PolyendTrackerKONSOL.ptf) | [MANUAL](firmwares/konsol/MANUAL.md) |
+| [KONSOL](#konsol) | Clip/scene workstation: 8 tracks, 16 engines (Plaits, TB303...), kits, time-stretch | [`PolyendTrackerKONSOL.ptf`](firmwares/konsol/release/PolyendTrackerKONSOL.ptf) | [MANUAL](firmwares/konsol/MANUAL.md) |
 | [DATAMATICS](#datamatics) | Ryoji-Ikeda-style data music from any file on the card | [`PolyendTrackerDATAMT.ptf`](firmwares/datamatics/release/PolyendTrackerDATAMT.ptf) | [MANUAL](firmwares/datamatics/MANUAL.md) |
 | [MAKAM](#makam) | Turkish makam meets jungle: usul-cut breaks, microtonal bass and lead | [`PolyendTrackerMAKAMJ.ptf`](firmwares/makam/release/PolyendTrackerMAKAMJ.ptf) | [MANUAL](firmwares/makam/MANUAL.md) |
 | [TILT](#tilt) | Pinball 2 Markov sequencer: 17x17 matrix, 8 sample/synth channels | [`PolyendTrackerTILTPB.ptf`](firmwares/tilt/release/PolyendTrackerTILTPB.ptf) | [MANUAL](firmwares/tilt/MANUAL.md) |
@@ -128,23 +128,39 @@ FM radio, BULUT's own output (resampling feedback) or a WAV from the card.
 
 ![KONSOL session](firmwares/konsol/docs/screenshots/session.png)
 
-A clip/scene production workstation: **8 tracks × 16 scenes**. Engines (what
-sounds) and players (what plays) are chosen separately per track.
+A clip/scene production workstation, Ableton-style: **8 tracks × 16 scenes**.
+Engines (what sounds) and players (what plays) are chosen separately per track.
 
-- **10 engines:** sampler, grain, analog-style drums, Ikeda (sine/click/noise),
-  makam synth (24-tone / 53-TET), and OpenTracker's ACD, VAP, FAT, WTFM and PERC.
-- **10 players:** notes, Euclid, Usul (aksak cycles), Pinball, Markov, and the
-  generators Acid, Call+Response, BBCut, Turnaround, Genotype and Station.
-  - **Write** puts a generator's output into the clip once.
-  - **Live** makes a new variation every N loops.
-  - **To roll** freezes the current take into the piano roll.
-- **Step pads** with per-step locks, a **piano roll**, quantised live recording.
-- Song arrangement, a mixer with delay/reverb sends and a master compressor.
-- Every track goes to one of 4 stem groups.
+- **16 engines:**
+  - **Synths:** Mutable Instruments **Plaits** (all 24 models), **TB303**
+    (Open303, as in Schwung Acid), **NEURO** (NEUROSTACK's 12 bass models),
+    **QUANTA** microsound particles, makam synth (24-tone / 53-TET), Ikeda,
+    and OpenTracker's ACD, VAP, FAT and WTFM.
+  - **Drums:** **FLOATER** kick / snare / perc voices, analog-style DRUMS,
+    PERC, and **KIT** (16 pads).
+  - **Samples:** stereo SAMPLER (one-shot, loop, slices) and GRAIN.
+- **Samples:** a shared stereo sample pool with the LABKIT browser and
+  preview.
+  - **Warp** follows the tempo live (Beats / Texture).
+  - **Offline time-stretch:** WSOLA, phase vocoder or repitch.
+  - **Slice editor:** onset detection with a zoom view.
+- **Kit builder:** turn a break's slices into a 16-pad kit. Slices are
+  sorted kick / snare / hat by onset classification. Each pad has tune,
+  decay, filter, choke and reverse.
+- **10 players:** notes, Euclid, Usul, Pinball, Markov, and the generators
+  Acid, Call+Response, BBCut, Turnaround, Genotype and Station (Write or Live).
+  - Trig conditions, per-clip quantise, 16-level undo.
+- **Mixer:** Hall / Shimmer / Gated reverbs, Tape / Lo-fi delays, master
+  compressor, and 4 stem groups.
+- **LABKIT:** PARAM pads, MAP, macros and two-pad modulation.
 
-| Piano roll | Mixer |
+| Kit builder | Slice editor |
 |---|---|
-| ![Piano roll](firmwares/konsol/docs/screenshots/piano_roll.png) | ![Mixer](firmwares/konsol/docs/screenshots/mixer.png) |
+| ![Kit](firmwares/konsol/docs/screenshots/kit.png) | ![Slices](firmwares/konsol/docs/screenshots/slices.png) |
+
+| Plaits | Piano roll |
+|---|---|
+| ![Plaits](firmwares/konsol/docs/screenshots/sound_plaits.png) | ![Piano roll](firmwares/konsol/docs/screenshots/piano_roll.png) |
 
 [Manual](firmwares/konsol/MANUAL.md) · [Image](firmwares/konsol/release/PolyendTrackerKONSOL.ptf)
 

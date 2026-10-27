@@ -12,7 +12,8 @@ bool Spectral::init(lab::Arena& a) {
     span_ = static_cast<float*>(a.alloc(kAnaSpan * sizeof(float)));
     re_ = static_cast<float*>(a.alloc(kFrzLen * sizeof(float)));
     im_ = static_cast<float*>(a.alloc(kFrzLen * sizeof(float)));
-    return span_ && re_ && im_;
+    mag_ = static_cast<float*>(a.alloc(kSpecBins * sizeof(float)));
+    return span_ && re_ && im_ && mag_;
 }
 
 void Spectral::fft(float* re, float* im, int n, bool inv) {
@@ -74,10 +75,82 @@ void Spectral::analyseSpan(FreezeSlot& out) {
     }
 }
 
-void Spectral::synth(const FreezeSlot& in, int16_t* loop, uint32_t seed) {
+// The spectral tools, in order: morph towards a second slot, shift (bins scaled
+// by 2^(st/12), a pitch shift of the spectrum), blur (a moving average over a
+// width that grows with BLUR), tilt (+-12 dB across the range), sparse (only
+// local peaks above a moving threshold survive).
+void Spectral::shape(const FreezeSlot& in, const FreezeSlot* morph, const SpecTools& t, float* out) const {
+    const float k = 1.0f / 65535.0f;
+    const float mo = (morph && morph->used) ? t.morph : 0.0f;
+    const float ratio = expf(t.shift * (0.69314718f / 12.0f));
+    for (int b = 0; b < kSpecBins; ++b) {
+        const float src = float(b) / ratio;
+        const int j = int(src);
+        float v = 0.0f;
+        if (j < kSpecBins - 1 && j >= 0) {
+            const float f = src - float(j);
+            const float a = float(in.mag[j]) * (1.0f - f) + float(in.mag[j + 1]) * f;
+            float m = a;
+            if (mo > 0.0f) m = a + (float(morph->mag[j]) * (1.0f - f) + float(morph->mag[j + 1]) * f - a) * mo;
+            v = m * k;
+        }
+        out[b] = v;
+    }
+    if (t.blur > 0.01f) {
+        // a running mean of width 1 .. 64 bins, twice (a triangle)
+        const int w = 1 + int(t.blur * t.blur * 63.0f);
+        static float tmp[kSpecBins];
+        for (int pass = 0; pass < 2; ++pass) {
+            float acc = 0.0f;
+            for (int b = 0; b < kSpecBins; ++b) {
+                acc += out[b];
+                if (b >= w) acc -= out[b - w];
+                tmp[b] = acc / float(b + 1 < w ? b + 1 : w);
+            }
+            for (int b = 0; b < kSpecBins; ++b) out[b] = tmp[b + w / 2 < kSpecBins ? b + w / 2 : kSpecBins - 1];
+        }
+    }
+    if (t.tilt < -0.01f || t.tilt > 0.01f) {
+        // +-12 dB from 40 Hz to 16 kHz, log frequency
+        for (int b = 1; b < kSpecBins; ++b) {
+            const float oct = log2f(float(b) * (44100.0f / float(kAna)) / 640.0f);   // 0 at ~640 Hz
+            out[b] *= powf(10.0f, t.tilt * oct * 0.25f);
+        }
+    }
+    if (t.sparse > 0.01f) {
+        // keep peaks: a bin survives if it is the largest of its neighbourhood
+        // and above SPARSE x the local mean
+        const int r = 2 + int(t.sparse * 10.0f);
+        static float tmp[kSpecBins];
+        for (int b = 0; b < kSpecBins; ++b) {
+            float mx = 0.0f, mean = 0.0f;
+            int n = 0;
+            for (int d = -r; d <= r; ++d) {
+                const int j = b + d;
+                if (j < 0 || j >= kSpecBins) continue;
+                mx = out[j] > mx ? out[j] : mx;
+                mean += out[j];
+                ++n;
+            }
+            mean /= float(n);
+            const bool peak = out[b] >= mx && out[b] > mean * (1.0f + 3.0f * t.sparse);
+            tmp[b] = peak ? out[b] : out[b] * (1.0f - t.sparse);
+        }
+        std::memcpy(out, tmp, sizeof tmp);
+    }
+    float mx = 1e-9f;
+    for (int b = 0; b < kSpecBins; ++b) mx = out[b] > mx ? out[b] : mx;
+    for (int b = 0; b < kSpecBins; ++b) out[b] /= mx;
+    out[0] = 0.0f;
+}
+
+void Spectral::synth(const FreezeSlot& in, int16_t* loop, uint32_t seed, const FreezeSlot* morph,
+                     const SpecTools* tools) {
     // kFrzLen-point spectrum: bin k of the loop = frequency k * sr / kFrzLen;
     // analysis bin j = j * sr / kAna -> loop bin j * (kFrzLen / kAna).
     constexpr int kUp = int(kFrzLen) / Spectral::kAna;   // 16
+    SpecTools none;
+    shape(in, morph, tools ? *tools : none, mag_);
     lab::dsp::Rng rng(seed ? seed : 1u);
     std::memset(re_, 0, kFrzLen * sizeof(float));
     std::memset(im_, 0, kFrzLen * sizeof(float));
@@ -86,7 +159,7 @@ void Spectral::synth(const FreezeSlot& in, int16_t* loop, uint32_t seed) {
         const int j = int(pos);
         if (j >= kSpecBins - 1) break;
         const float f = pos - float(j);
-        const float m = (float(in.mag[j]) * (1.0f - f) + float(in.mag[j + 1]) * f) * (1.0f / 65535.0f);
+        const float m = mag_[j] * (1.0f - f) + mag_[j + 1] * f;
         if (m <= 0.0f) continue;
         const float ph = rng.uni() * lab::dsp::kTwoPi;
         re_[k] = m * cosf(ph);

@@ -1,8 +1,41 @@
 # Third-party material in KONSOL
 
-KONSOL's workstation (`src/ws/`) contains **no copied third-party source code**:
-every file in it was written for KONSOL. It reuses code of this tree and follows
-published algorithms and ideas:
+KONSOL's workstation (`src/ws/`) contains one copied third-party library,
+**Mutable Instruments Plaits + stmlib** (`src/ws/mi/`, MIT, see below); every
+other file in `src/ws/` was written for KONSOL. It reuses code of this tree,
+ports the user's own plug-in DSP (approved as GPL-3 material) and follows
+published algorithms and ideas.
+
+## Copied code
+
+| Where | What | Source | Licence |
+| --- | --- | --- | --- |
+| `src/ws/mi/plaits/`, `src/ws/mi/stmlib/` | Plaits macro-oscillator (24 models: VA-VCF, phase distortion, 3 x six-op FM, wave terrain, string machine, chiptune, VA, waveshaper, FM, formant, additive, wavetable, chords, speech, swarm, noise, particle, string, modal, bass drum, snare, hi-hat) and the stmlib helpers it uses | Emilie Gillet, Mutable Instruments (via /home/claude/floatdat/ThirdParty, the Move Anything port by charlesvestal) | MIT; `src/ws/mi/plaits/LICENSE` |
+
+KONSOL changes to that copy (each marked `KONSOL` in the source): `.cc`
+renamed `.cpp`, includes prefixed `ws/mi/`, `stmlib/fft` removed,
+`kSampleRate` / `kCorrectedSampleRate` 44100, `kMaxBlockSize` and `kBlockSize`
+64 (two renders per 128-frame block), `kTriggerDelay` 1 (no trigger delay),
+no note smoothing on the first block of a pitch, `IN_RAM` empty, the
+`stmlib/dsp/dsp.h` ARM path only on ARM, `user_data.h` a stub (no user
+wavetables), and `dx_units.h` `Pow2Fast` shifts an unsigned value (UBSan:
+left shift of a negative value).
+
+## Ported (rewritten in KONSOL's own code)
+
+| Where | What | Source | Licence / status |
+| --- | --- | --- | --- |
+| `src/ws/engines_semi.cpp` TB303 | Open303 signal chain: blend oscillator, TeeBee 303 ladder (TB_303 mode coefficients by mystran and kunn), feedback high-pass, accent RC, amp / main envelopes, slide; the parameter mappings of schwung-303 | Robin Schmidt's Open303 (`/home/claude/acid/third_party/schwung-303/dsp/open303`); mappings from the user's schwung-303 / Schwung Acid plug-in | Open303: MIT. schwung-303 mappings: the user's code (GPL-3 approved) |
+| `src/ws/engines_semi.cpp` FLOATER | Kick (2x oversampled sine / triangle with pitch env, FM transient, click, overdrive or wavefolder), snare (3 modal sines + white / pink noise through a 12 / 24 dB high-pass, snap), perc (impulse into two high-Q band-passes, scale quantiser, bit / rate crush) | The user's FLOATER plug-in (`/home/claude/floater/Source/engine/Voices.cpp`) | The user's code (GPL-3 approved) |
+| `src/ws/engines_semi.cpp` NEURO | 12 neuro-bass models (Reese, Wobble, Growl, FM Stab, Hoover, Talk, Screech, Snarl, 808 Drop, Solid FM, Hollow, Semi Sines) with Tone / Motion / Grit, LFO, sub | The user's NEUROSTACK plug-in (`/home/claude/neurostack/Source/engine/Neuro.cpp`) | The user's code (GPL-3 approved) |
+| `src/ws/engines_semi.cpp` QUANTA | Microsound particles: grain, glisson, grainlet, trainlet, pulsar; Gauss / Hann / expodec / rexpodec / trapezoid / rect windows | The user's QUANTA plug-in (`/home/claude/quanta/Source/engine/Particles.cpp`), after C. Roads, *Microsound* (2001) | The user's code (GPL-3 approved) |
+| `src/ws/samples.cpp` onsets | Spectral-flux onset detector (N 256, hop 128, compressed magnitudes, high-bin weighting, +-2-frame peak picking, 46 ms spacing, energy refinement) | The user's OpenTracker semi fork, `auto_slice.cpp` ("Breaks") | The user's code (GPL-3 approved) |
+| `src/ws/stretch.cpp` | WSOLA (W. Verhelst, M. Roelands 1993), phase vocoder with identity phase locking (J. Laroche, M. Dolson 1999), transient handling by onset segmentation / phase reset | Published methods | No code copied |
+| `src/ws/fx.cpp` | FDN reverb (J.-M. Jot / Stautner-Puckette: 8 lines, Walsh-Hadamard feedback), octave-up delay-line pitch shifter (shimmer), tape / lo-fi delay | Published methods | No code copied |
+| `src/ws/dspx.cpp` | Radix-2 FFT, polyBLEP (V. Valimaki et al.), TPT SVF (V. Zavalishin) | Published methods | No code copied |
+
+## Reused from this tree and ideas
+
 
 | Where | What | Source | Licence / status |
 | --- | --- | --- | --- |

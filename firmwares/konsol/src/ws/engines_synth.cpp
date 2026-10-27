@@ -125,6 +125,7 @@ public:
         if (i == nParams_) return float(poly_) / float(maxPoly());
         return synthui::valueFrac(id_, i, synthParamGet(patch_, i));
     }
+    bool bipolar(int i) const override { return i < nParams_ && synthui::valueBipolar(id_, i); }
     void setFrac(int i, float f) override {
         f = f < 0.0f ? 0.0f : (f > 1.0f ? 1.0f : f);
         if (i == nParams_) {
@@ -142,7 +143,16 @@ public:
             v = r->min + f * (r->max - r->min);
         }
         if (u && (u->fmt == synthui::kFmtEnum || u->fmt == synthui::kFmtOnOff)) v = floorf(v + 0.5f);
-        set(i, v);
+        // audio context (LABKIT routes, 32 writes a block at load): no full re-stage, the
+        // value goes straight into the live parameter array (KONSOL patches have no macros)
+        synthParamSet(patch_, i, v);
+        if (i < p_.count) {
+            p_.end[i] = synthParamGet(patch_, i);
+            if (i == cutoffIndex()) {
+                baseCut_ = p_.end[i];
+                applyTone();
+            }
+        }
     }
     void reset() override {
         patchInit(id_, &patch_);

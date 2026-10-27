@@ -104,7 +104,9 @@ struct TrackSample {
 
 // Tempo of a loop from its length: the bar count in 1..16 whose tempo is the
 // most likely (70..180 BPM, nearest to `hint`). bars = 0 picks; returns BPM.
-float loopBpm(uint32_t frames, int& bars, float hint);
+// With the slot's onsets, a tempo that would need 32nd notes for most hits
+// (the half-time reading of a break) loses against the double one.
+float loopBpm(uint32_t frames, int& bars, float hint, const SampleSlot* onsets = nullptr);
 
 }  // namespace konsol
 }  // namespace lab

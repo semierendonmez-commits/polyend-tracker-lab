@@ -1,4 +1,4 @@
-// BULUT parameter names, steps and value text (UI, gestures, morph).
+// BULUT names and value text: engines, knobs, enums (UI, registry names, HUD).
 #pragma once
 
 #include <cstdio>
@@ -7,8 +7,24 @@
 
 namespace bulut {
 
+inline const char* engineName(int e) {
+    static const char* const k[kEngines] = {"GRANULAR", "QUANTA", "BEADS", "TAPE"};
+    return k[e < 0 ? 0 : (e >= kEngines ? kEngines - 1 : e)];
+}
+inline const char* engineShort(int e) {
+    static const char* const k[kEngines] = {"GRAN", "QNTA", "BEAD", "TAPE"};
+    return k[e < 0 ? 0 : (e >= kEngines ? kEngines - 1 : e)];
+}
+inline const char* srcName(int s) {
+    static const char* const k[kSrcCount] = {"INPUT", "OUTPUT", "SAMPLE", "GENERATOR"};
+    return k[s < 0 ? 0 : (s >= kSrcCount ? kSrcCount - 1 : s)];
+}
+inline const char* genName(int g) {
+    static const char* const k[kGenCount] = {"RETE", "TONE", "NOISE"};
+    return k[g < 0 ? 0 : (g >= kGenCount ? kGenCount - 1 : g)];
+}
 inline const char* qTypeName(int i) {
-    static const char* const k[kQTypes] = {"SAMPLE", "GLISSON", "GABOR", "PULSAR", "TRAINLET"};
+    static const char* const k[kQTypes] = {"SAMPLE", "GLISSON", "GABOR", "GRAINLET", "PULSAR", "TRAINLET"};
     return k[i < 0 ? 0 : (i >= kQTypes ? kQTypes - 1 : i)];
 }
 inline const char* lawName(int i) {
@@ -19,76 +35,109 @@ inline const char* scaleName(int i) {
     static const char* const k[kScales] = {"FREE", "OCTAVE", "FIFTH", "MAJOR", "MINOR", "PENTA"};
     return k[i < 0 ? 0 : (i >= kScales ? kScales - 1 : i)];
 }
-
-// Names of the 16 slots for each engine.
-inline const char* paramName(int eng, int slot) {
-    static const char* const g[kParams] = {"POSITION", "SIZE",  "DENSITY", "PITCH",  "SPREAD", "TEXTURE",
-                                           "FEEDBACK", "REVERB", "ENGINE", "JITTER", "P.RAND", "REVERSE",
-                                           "LEVEL",    "DELAY", "SCALE",   "TONE"};
-    static const char* const q[kParams] = {"TYPE",  "RATE",   "DURATION", "FREQ",  "BAND",  "LAW",
-                                           "CHAR",  "REVERB", "ENGINE",   "POSITION", "DRIFT", "SPREAD",
-                                           "LEVEL", "DELAY",  "SCALE",    "TONE"};
-    return (eng ? q : g)[slot & 15];
+inline const char* mediaName(int i) {
+    static const char* const k[kMedias] = {"HI-FI", "CLEAN TAPE", "LO-FI", "DIRTY TAPE"};
+    return k[i < 0 ? 0 : (i >= kMedias ? kMedias - 1 : i)];
+}
+inline const char* fltName(int i) {
+    static const char* const k[kFltModes] = {"OFF", "LOW-PASS", "BAND-PASS", "HIGH-PASS"};
+    return k[i < 0 ? 0 : (i >= kFltModes ? kFltModes - 1 : i)];
+}
+inline const char* fxName(int i) {
+    static const char* const k[kFxModes] = {"OFF", "TEXTURE", "SHIFTER", "FLANGER", "PANNER", "CRUSHER", "SLICER", "FREEZER"};
+    return k[i < 0 ? 0 : (i >= kFxModes ? kFxModes - 1 : i)];
+}
+inline const char* lfoShapeName(int i) {
+    static const char* const k[kLfoShapes] = {"SINE", "TRI", "SAW", "SQUARE", "S&H", "DRIFT"};
+    return k[i < 0 ? 0 : (i >= kLfoShapes ? kLfoShapes - 1 : i)];
 }
 
-// Number of discrete steps (0 = continuous).
-inline int paramSteps(int eng, int slot) {
-    if (slot == P::Engine) return 2;
-    if (slot == P::Scale) return kScales;
-    if (eng == kQuanta) {
-        if (slot == P::QType) return kQTypes;
-        if (slot == P::QLaw) return kLaws;
-    }
+// Engine knob names (12 per engine, slot order of K::).
+inline const char* knobName(int engine, int k) {
+    static const char* const n[kEngines][kKnobs] = {
+        {"POSITION", "SIZE", "DENSITY", "PITCH", "SPREAD", "TEXTURE", "JITTER", "FEEDBACK", "REVERSE", "P.RAND",
+         "SCALE", "AMP RND"},
+        {"POSITION", "DURATION", "RATE", "FREQ", "SPREAD", "CHAR", "BAND", "DRIFT", "TYPE", "LAW", "SCALE", "MASK"},
+        {"TIME", "SIZE", "DENSITY", "PITCH", "SPREAD", "SHAPE", "TIME RND", "FEEDBACK", "MEDIA", "PITCH RND",
+         "SIZE RND", "SHAPE RND"},
+        {"POSITION", "GRAIN", "SPEED", "PITCH", "SPREAD", "SMOOTH", "JITTER", "FEEDBACK", "LOOP", "LENGTH", "SCALE",
+         "WOW"},
+    };
+    return n[engine < 0 ? 0 : (engine >= kEngines ? kEngines - 1 : engine)][(k >= 0 && k < kKnobs) ? k : 0];
+}
+
+// Discrete knobs (0 = continuous).
+inline int knobSteps(int engine, int k) {
+    if (k == K::Scale && engine != kBeads) return kScales;
+    if (engine == kQuanta && k == K::Mode) return kQTypes;
+    if (engine == kQuanta && k == K::Rand) return kLaws;
+    if (engine == kBeads && k == K::Mode) return kMedias;
+    if (engine == kTape && k == K::Mode) return 2;   // LOOP: one-shot / loop
+    if (engine == kGranular && k == K::Shape) return 16;
     return 0;
 }
 
-inline void paramText(int eng, int slot, float v, char* out, int cap) {
-    if (slot == P::Engine) { std::snprintf(out, size_t(cap), "%s", v > 0.5f ? "QUANTA" : "GRANULAR"); return; }
-    if (slot == P::Scale) { std::snprintf(out, size_t(cap), "%s", scaleName(enumIndex(v, kScales))); return; }
-    if (slot == P::Level || slot == P::Delay || slot == P::Reverb) {
-        std::snprintf(out, size_t(cap), "%d%%", int(v * 100.0f + 0.5f));
-        return;
-    }
-    if (slot == P::Tone) {
-        const int t = int((v - 0.5f) * 200.0f);
-        if (t < -4) std::snprintf(out, size_t(cap), "DARK %d", -t);
-        else if (t > 4) std::snprintf(out, size_t(cap), "BRIGHT %d", t);
-        else std::snprintf(out, size_t(cap), "FLAT");
-        return;
-    }
-    if (eng == kGranular) {
-        switch (slot) {
-            case P::Size: {
-                const float s = sizeSec(v);
-                if (s < 0.1f) std::snprintf(out, size_t(cap), "%d ms", int(s * 1000.0f + 0.5f));
-                else std::snprintf(out, size_t(cap), "%.2f s", double(s));
-                return;
+inline void knobText(int engine, int k, float v, char* out, int cap) {
+    const size_t c = size_t(cap);
+    const int steps = knobSteps(engine, k);
+    if (k == K::Scale && steps) { std::snprintf(out, c, "%s", scaleName(enumIndex(v, kScales))); return; }
+    switch (engine) {
+        case kGranular:
+            switch (k) {
+                case K::Size: {
+                    const float s = sizeSec(v);
+                    if (s < 0.1f) std::snprintf(out, c, "%d ms", int(s * 1000.0f + 0.5f));
+                    else std::snprintf(out, c, "%.2f s", double(s));
+                    return;
+                }
+                case K::Dens: std::snprintf(out, c, "%.1f /s", double(densHz(v))); return;
+                case K::Pitch: std::snprintf(out, c, "%+.1f st", double(pitchSemi(v))); return;
+                case K::Shape: {
+                    const int t = enumIndex(v, 16);
+                    std::snprintf(out, c, "%s %d", t < 5 ? "HARD" : (t == 5 ? "HANN" : "SOFT"), t);
+                    return;
+                }
+                default: break;
             }
-            case P::Dens: std::snprintf(out, size_t(cap), "%.1f /s", double(densHz(v))); return;
-            case P::Pitch: {
-                const float p = pitchSemi(v);
-                std::snprintf(out, size_t(cap), "%+.1f st", double(p));
-                return;
+            break;
+        case kQuanta:
+            switch (k) {
+                case K::Mode: std::snprintf(out, c, "%s", qTypeName(enumIndex(v, kQTypes))); return;
+                case K::Rand: std::snprintf(out, c, "%s", lawName(enumIndex(v, kLaws))); return;
+                case K::Dens: std::snprintf(out, c, "%d /s", int(rateHz(v) + 0.5f)); return;
+                case K::Size: std::snprintf(out, c, "%.1f ms", double(durSec(v) * 1000.0f)); return;
+                case K::Pitch: std::snprintf(out, c, "%d Hz", int(freqHz(v) + 0.5f)); return;
+                case K::Scatter: std::snprintf(out, c, "%.2f oct", double(bandOct(v))); return;
+                default: break;
             }
-            case P::Texture: {
-                const int t = enumIndex(v, 16);
-                std::snprintf(out, size_t(cap), "%s %d", t < 5 ? "FLAT" : (t == 5 ? "HANN" : "SOFT"), t);
-                return;
+            break;
+        case kBeads:
+            switch (k) {
+                case K::Mode: std::snprintf(out, c, "%s", mediaName(enumIndex(v, kMedias))); return;
+                case K::Pitch: std::snprintf(out, c, "%+.1f st", double(pitchSemi(v))); return;
+                case K::Dens:
+                    if (v < 0.48f) std::snprintf(out, c, "REG %d", int((0.48f - v) * 208.0f));
+                    else if (v > 0.52f) std::snprintf(out, c, "RND %d", int((v - 0.52f) * 208.0f));
+                    else std::snprintf(out, c, "SEEDS");
+                    return;
+                case K::Size:
+                    if (v < 0.3333f) std::snprintf(out, c, "REV %d", int((0.3333f - v) * 300.0f));
+                    else std::snprintf(out, c, "%d", int((v - 0.3333f) * 150.0f));
+                    return;
+                default: break;
             }
-            default: break;
-        }
-    } else {
-        switch (slot) {
-            case P::QType: std::snprintf(out, size_t(cap), "%s", qTypeName(enumIndex(v, kQTypes))); return;
-            case P::QLaw: std::snprintf(out, size_t(cap), "%s", lawName(enumIndex(v, kLaws))); return;
-            case P::QRate: std::snprintf(out, size_t(cap), "%d /s", int(rateHz(v) + 0.5f)); return;
-            case P::QDur: std::snprintf(out, size_t(cap), "%.1f ms", double(durSec(v) * 1000.0f)); return;
-            case P::QFreq: std::snprintf(out, size_t(cap), "%d Hz", int(freqHz(v) + 0.5f)); return;
-            case P::QBand: std::snprintf(out, size_t(cap), "%.2f oct", double(bandOct(v))); return;
-            default: break;
-        }
+            break;
+        default:   // TAPE
+            switch (k) {
+                case K::Size: std::snprintf(out, c, "%d ms", int(tapeGrainSec(v) * 1000.0f + 0.5f)); return;
+                case K::Dens: std::snprintf(out, c, "%+.2f x", double(tapeSpeed(v))); return;
+                case K::Pitch: std::snprintf(out, c, "%+.1f st", double(pitchSemi(v))); return;
+                case K::Mode: std::snprintf(out, c, "%s", v > 0.5f ? "LOOP" : "ONCE"); return;
+                default: break;
+            }
+            break;
     }
-    std::snprintf(out, size_t(cap), "%d", int(v * 100.0f + 0.5f));
+    std::snprintf(out, c, "%d", int(v * 100.0f + 0.5f));
 }
 
 }  // namespace bulut

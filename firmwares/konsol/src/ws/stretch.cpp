@@ -1,4 +1,6 @@
 // KONSOL offline time-stretch / pitch-shift (stretch.h).
+// Main loop only (no audio-interrupt code here): built for size.
+#pragma GCC optimize("Os")
 #include "ws/stretch.h"
 
 #include <cmath>

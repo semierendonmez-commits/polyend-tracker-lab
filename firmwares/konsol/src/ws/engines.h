@@ -66,6 +66,7 @@ public:
     // The inverse of frac() (LABKIT: params are registered normalized). May
     // run in the audio interrupt (modulation): no allocation, no I/O.
     virtual void setFrac(int i, float f) { (void)i; (void)f; }
+    virtual bool bipolar(int i) const { (void)i; return false; }   // drawn from the centre
     virtual void reset() = 0;              // every parameter to its default
     // Musical default for a fresh project (may differ from reset()).
     virtual void preset(int variant) { (void)variant; reset(); }

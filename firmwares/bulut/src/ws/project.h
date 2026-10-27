@@ -9,18 +9,21 @@
 #include <cstdint>
 
 #include "hal_api.h"
+#include "lab/lab.h"
 #include "ws/bulut.h"
 
 namespace bulut {
 
-constexpr uint16_t kProjectVersion = 1;
+constexpr uint16_t kProjectVersion = 2;   // 2: four channels + the LABKIT registry chunk
 
 // Everything a project holds (pointers into the workstation's memory).
 struct ProjectRefs {
-    CloudState* clouds = nullptr;       // kClouds
-    CloudSource* sources = nullptr;     // kClouds
-    Gesture* gestures[kClouds] = {};    // the playing gesture of each cloud
-    FxState* fx = nullptr;
+    ChState* states = nullptr;          // kCh (switches, every engine's knobs)
+    ChSource* sources = nullptr;        // kCh (sample paths, labels)
+    Gesture* gestures[kCh] = {};        // the playing gesture of each channel
+    lab::kit::Registry* reg = nullptr;  // every parameter, routes, macros, MIDI learn
+    uint8_t* scratch = nullptr;         // for the registry chunk
+    uint32_t scratchCap = 0;
     Scene* scenes = nullptr;            // kScenes
     TimeEntry* timeline = nullptr;      // kTimeline
     int* timelineLen = nullptr;
@@ -29,13 +32,13 @@ struct ProjectRefs {
     int* songMode = nullptr;
 };
 
-enum class ProjResult : uint8_t { kOk, kNoCard, kIoError, kBadFile, kTooNew, kPartial };
+enum class ProjResult : uint8_t { kOk, kNoCard, kIoError, kBadFile, kTooNew, kPartial, kTooOld };
 ProjResult saveProject(ot::IStorage* fs, const char* path, const ProjectRefs& p);
 ProjResult loadProject(ot::IStorage* fs, const char* path, const ProjectRefs& p);
 const char* projResultText(ProjResult r);
 
 // ---- gesture recorder -------------------------------------------------------
-// A gesture records one cloud's pad presses and parameter moves with sample
+// A gesture records one channel's pad presses and parameter moves with sample
 // timestamps. New: the loop length is the time from the first movement to
 // Stop (rounded to beats or bars when quantised). Overdub: new movements are
 // merged into the playing loop at the loop position they happened.
@@ -44,9 +47,9 @@ public:
     enum State : uint8_t { kIdle = 0, kArmed, kRecording };
     void arm(int cloud, bool overdub);
     // Overdub needs the playing loop and its position (samples).
-    void start(uint32_t nowSamples, const Gesture* live, uint32_t livePhase);
+    void start(uint32_t nowSamples, const Gesture* live, uint32_t livePhase, float liveSpeed = 1.0f);
     void pad(bool down, int pad, int vel, uint32_t nowSamples);
-    void param(int engine, int slot, float value, uint32_t nowSamples);
+    void param(int index, float norm, uint32_t nowSamples);   // channel param index 0..35
     // Finish into `out` (the idle buffer). quantSamples 0 = free length.
     // Returns false when nothing was recorded (out untouched).
     bool finish(uint32_t nowSamples, uint32_t quantSamples, Gesture& out, const Gesture* live);

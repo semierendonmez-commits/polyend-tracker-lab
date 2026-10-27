@@ -95,6 +95,7 @@ const char* projResultText(ProjResult r) {
         case ProjResult::kIoError: return "card error";
         case ProjResult::kBadFile: return "not a BULUT project";
         case ProjResult::kPartial: return "file cut short, partly loaded";
+        case ProjResult::kTooOld: return "a BULUT 1 project (6 clouds)";
         default: return "made by a newer BULUT";
     }
 }
@@ -120,28 +121,36 @@ ProjResult saveProject(ot::IStorage* fs, const char* path, const ProjectRefs& p)
         w.u32(tag(t));
         w.u32(len);
     };
-    chunk("CLDS", sizeof(CloudState) * kClouds);
-    w.put(p.clouds, sizeof(CloudState) * kClouds);
-    chunk("SRCS", sizeof(CloudSource) * kClouds);
-    w.put(p.sources, sizeof(CloudSource) * kClouds);
+    chunk("CHST", sizeof(ChState) * kCh);
+    w.put(p.states, sizeof(ChState) * kCh);
+    chunk("SRCS", sizeof(ChSource) * kCh);
+    w.put(p.sources, sizeof(ChSource) * kCh);
     uint32_t gl = 0;
-    for (int c = 0; c < kClouds; ++c) gl += gestBytes(*p.gestures[c]);
+    for (int c = 0; c < kCh; ++c) gl += gestBytes(*p.gestures[c]);
     chunk("GEST", gl);
-    for (int c = 0; c < kClouds; ++c) putGest(w, *p.gestures[c]);
-    chunk("FXST", sizeof(FxState));
-    w.put(p.fx, sizeof(FxState));
+    for (int c = 0; c < kCh; ++c) putGest(w, *p.gestures[c]);
+    if (p.reg && p.scratch) {
+        const uint32_t n = p.reg->saveChunk(p.scratch, p.scratchCap);
+        if (n) {
+            chunk("REGC", n);
+            w.put(p.scratch, n);
+        }
+    }
     chunk("TEMP", 8);
     w.put(p.bpm, 4);
     w.u32(uint32_t(*p.songMode));
     for (int s = 0; s < kScenes; ++s) {
         const Scene& sc = p.scenes[s];
         if (!sc.used) continue;
-        uint32_t len = 4 + sizeof(CloudState) * kClouds;
-        for (int c = 0; c < kClouds; ++c) len += gestBytes(sc.gest[c]);
-        chunk("SCNE", len);
+        const uint32_t fixed = sizeof sc.norm + sizeof sc.master + sizeof sc.st;
+        uint32_t len = 4 + fixed;
+        for (int c = 0; c < kCh; ++c) len += gestBytes(sc.gest[c]);
+        chunk("SCN2", len);
         w.u32(uint32_t(s));
-        w.put(sc.cloud, sizeof(CloudState) * kClouds);
-        for (int c = 0; c < kClouds; ++c) putGest(w, sc.gest[c]);
+        w.put(sc.norm, sizeof sc.norm);
+        w.put(sc.master, sizeof sc.master);
+        w.put(sc.st, sizeof sc.st);
+        for (int c = 0; c < kCh; ++c) putGest(w, sc.gest[c]);
     }
     chunk("TIME", 4 + sizeof(TimeEntry) * kTimeline);
     w.u32(uint32_t(*p.timelineLen));
@@ -181,6 +190,10 @@ ProjResult loadProject(ot::IStorage* fs, const char* path, const ProjectRefs& p)
         fs->close(h);
         return ProjResult::kTooNew;
     }
+    if (ver < 2) {
+        fs->close(h);
+        return ProjResult::kTooOld;
+    }
     // A project replaces everything: clear what the file may not hold.
     for (int s = 0; s < kScenes; ++s) p.scenes[s].used = 0;
     for (int f = 0; f < kFreezeSlots; ++f) p.freezes[f].used = 0;
@@ -192,29 +205,30 @@ ProjResult loadProject(ot::IStorage* fs, const char* path, const ProjectRefs& p)
         if (t == tag("END ")) break;
         const uint32_t end = r.pos + len;
         if (end > r.size) { ok = false; break; }
-        if (t == tag("CLDS") && len == sizeof(CloudState) * kClouds) {
-            ok = r.get(p.clouds, len);
-        } else if (t == tag("SRCS") && len == sizeof(CloudSource) * kClouds) {
+        if (t == tag("CHST") && len == sizeof(ChState) * kCh) {
+            ok = r.get(p.states, len);
+        } else if (t == tag("SRCS") && len == sizeof(ChSource) * kCh) {
             ok = r.get(p.sources, len);
-            for (int c = 0; c < kClouds && ok; ++c) {
+            for (int c = 0; c < kCh && ok; ++c) {
                 p.sources[c].path[sizeof p.sources[c].path - 1] = 0;
-                if (p.sources[c].type >= kSrcCount) p.sources[c].type = kSrcLiveIn;
+                p.sources[c].label[sizeof p.sources[c].label - 1] = 0;
             }
         } else if (t == tag("GEST")) {
-            for (int c = 0; c < kClouds && ok; ++c) ok = getGest(r, *p.gestures[c]);
-        } else if (t == tag("FXST") && len == sizeof(FxState)) {
-            ok = r.get(p.fx, len);
+            for (int c = 0; c < kCh && ok; ++c) ok = getGest(r, *p.gestures[c]);
+        } else if (t == tag("REGC") && p.reg && p.scratch && len <= p.scratchCap) {
+            ok = r.get(p.scratch, len);
+            if (ok) p.reg->loadChunk(p.scratch, len);
         } else if (t == tag("TEMP") && len == 8) {
             uint32_t sm = 0;
             ok = r.get(p.bpm, 4) && r.get(&sm, 4);
             *p.songMode = sm ? 1 : 0;
-        } else if (t == tag("SCNE") && len >= 4 + sizeof(CloudState) * kClouds) {
-            uint32_t s = 0;
-            ok = r.get(&s, 4);
-            if (ok && s < uint32_t(kScenes)) {
-                Scene& sc = p.scenes[s];
-                ok = r.get(sc.cloud, sizeof(CloudState) * kClouds);
-                for (int c = 0; c < kClouds && ok; ++c) ok = getGest(r, sc.gest[c]);
+        } else if (t == tag("SCN2") && len >= 4 + sizeof(Scene::norm) + sizeof(Scene::master) + sizeof(Scene::st)) {
+            uint32_t sidx = 0;
+            ok = r.get(&sidx, 4);
+            if (ok && sidx < uint32_t(kScenes)) {
+                Scene& sc = p.scenes[sidx];
+                ok = r.get(sc.norm, sizeof sc.norm) && r.get(sc.master, sizeof sc.master) && r.get(sc.st, sizeof sc.st);
+                for (int c = 0; c < kCh && ok; ++c) ok = getGest(r, sc.gest[c]);
                 sc.used = ok ? 1 : 0;
             }
         } else if (t == tag("TIME") && len == 4 + sizeof(TimeEntry) * kTimeline) {
@@ -230,17 +244,24 @@ ProjResult loadProject(ot::IStorage* fs, const char* path, const ProjectRefs& p)
     }
     fs->close(h);
     // keep everything in range whatever the file held
-    for (int c = 0; c < kClouds; ++c) {
-        CloudState& s = p.clouds[c];
-        for (int e = 0; e < 2; ++e)
-            for (int i = 0; i < kParams; ++i) {
-                float& v = s.p[e][i];
+    for (int c = 0; c < kCh; ++c) {
+        ChState& st = p.states[c];
+        for (int e = 0; e < kEngines; ++e)
+            for (int i = 0; i < kKnobs; ++i) {
+                float& v = st.engMem[e][i];
                 if (!(v >= 0.0f && v <= 1.0f)) v = 0.5f;
             }
-        if (!(s.pan >= 0.0f && s.pan <= 1.0f)) s.pan = 0.5f;
-        if (!(s.bed >= 0.0f && s.bed <= 1.0f)) s.bed = 0.5f;
-        s.stem &= 3;
-        if (s.freezeSlot != 0xFF && s.freezeSlot >= kFreezeSlots) s.freezeSlot = 0xFF;
+        st.stem &= 3;
+        if (st.freezeSlot != 0xFF && st.freezeSlot >= kFreezeSlots) st.freezeSlot = 0xFF;
+    }
+    for (int s2 = 0; s2 < kScenes; ++s2) {
+        Scene& sc = p.scenes[s2];
+        if (!sc.used) continue;
+        for (int c = 0; c < kCh; ++c)
+            for (int i = 0; i < kChParams; ++i)
+                if (!(sc.norm[c][i] >= 0.0f && sc.norm[c][i] <= 1.0f)) sc.norm[c][i] = 0.5f;
+        for (int i = 0; i < kMasterParams; ++i)
+            if (!(sc.master[i] >= 0.0f && sc.master[i] <= 1.0f)) sc.master[i] = 0.5f;
     }
     for (int i = 0; i < *p.timelineLen; ++i) {
         if (p.timeline[i].scene >= kScenes) p.timeline[i].scene = 0;
@@ -272,14 +293,14 @@ void GestureRecorder::arm(int cloud, bool overdub) {
     held_ = 0;
 }
 
-void GestureRecorder::start(uint32_t now, const Gesture* live, uint32_t livePhase) {
+void GestureRecorder::start(uint32_t now, const Gesture* live, uint32_t livePhase, float liveSpeed) {
     t0_ = now;
     n_ = 0;
     held_ = 0;
     if (overdub_ && live && live->len) {
         loopLen_ = live->len;
         base_ = livePhase % live->len;
-        speed_ = speedMul(live->speed);
+        speed_ = liveSpeed;
     } else {
         overdub_ = false;
         loopLen_ = 0;
@@ -314,10 +335,10 @@ void GestureRecorder::pad(bool down, int pad, int vel, uint32_t now) {
     add(down ? kGPadDown : kGPadUp, uint8_t(pad), uint16_t(down ? vel : 0), now);
 }
 
-void GestureRecorder::param(int engine, int slot, float value, uint32_t now) {
-    if (state_ != kRecording) return;
-    const uint8_t a = uint8_t((slot & 15) | ((engine & 1) << 4));
-    const uint16_t v = uint16_t(clamp01(value) * 65535.0f + 0.5f);
+void GestureRecorder::param(int index, float norm, uint32_t now) {
+    if (state_ != kRecording || index < 0 || index >= kChParams) return;
+    const uint8_t a = uint8_t(index);
+    const uint16_t v = uint16_t(clamp01(norm) * 65535.0f + 0.5f);
     const uint32_t t = stamp(now);
     // thin: a move of the same parameter within 10 ms replaces the last one
     if (n_ > 0) {

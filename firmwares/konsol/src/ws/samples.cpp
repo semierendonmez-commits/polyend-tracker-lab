@@ -1,4 +1,6 @@
 // KONSOL sample pool, WAV loading, onsets and hit classes (samples.h).
+// Main loop only (no audio-interrupt code here): built for size.
+#pragma GCC optimize("Os")
 #include "ws/samples.h"
 
 #include <cmath>
@@ -317,49 +319,52 @@ void SamplePool::detectOnsets(int s, float sens) {
     classify(s);
 }
 
-// Hit classes from the first 60 ms of each segment: low-band energy share
-// (one-pole below ~150 Hz), high-band share (above ~5 kHz), zero-crossing
-// rate and decay. Kick: mostly low, few crossings. Hat: mostly high, short.
-// Snare: broadband noise with a body. Everything else: PERC.
+// Hit classes from what each onset *adds*: band energies in the 23 ms after
+// the onset minus the 23 ms before it (a hat right after a kick is judged on
+// its own hiss, not the kick's tail). Low band (one-pole < 150 Hz), high band
+// (> 5 kHz). Kick: mostly low. Hat: mostly high, little low. Snare: broadband
+// with some high. Everything else: PERC.
 void SamplePool::classify(int s) {
     if (!valid(s)) return;
     SampleSlot& sl = slot_[s];
     const float aLow = 1.0f - expf(-dx::kTwoPi * 150.0f * dx::kInvSr);
     const float aHigh = expf(-dx::kTwoPi * 5000.0f * dx::kInvSr);
+    const uint32_t win = 1024;
     for (int k = 0; k < sl.nOn; ++k) {
         const uint32_t a = sl.onset[k];
-        uint32_t e = k + 1 < sl.nOn ? sl.onset[k + 1] : sl.frames;
-        const uint32_t win = 2646;   // 60 ms
-        if (e > a + win) e = a + win;
+        const uint32_t from = a > win ? a - win : 0;
+        uint32_t e = a + win;
+        if (e > sl.frames) e = sl.frames;
         if (e <= a + 64) {
             sl.cls[k] = kClsOther;
             continue;
         }
-        float lp = 0, hpY = 0, hpX = 0, eAll = 1e-9f, eLow = 0, eHigh = 0, eHead = 0, eTail = 0;
-        int zc = 0;
-        float prev = 0;
-        const uint32_t mid = a + (e - a) / 2;
-        for (uint32_t i = a; i < e; ++i) {
+        float lp = 0, hpY = 0, hpX = 0;
+        float pre[3] = {}, post[3] = {};   // all, low, high
+        for (uint32_t i = from; i < e; ++i) {
             const float x = mono(s, i);
             lp += aLow * (x - lp);
             hpY = aHigh * (hpY + x - hpX);
             hpX = x;
-            eAll += x * x;
-            eLow += lp * lp;
-            eHigh += hpY * hpY;
-            if ((x >= 0) != (prev >= 0)) ++zc;
-            prev = x;
-            if (i < mid) eHead += x * x;
-            else eTail += x * x;
+            float* acc = i < a ? pre : post;
+            acc[0] += x * x;
+            acc[1] += lp * lp;
+            acc[2] += hpY * hpY;
         }
-        const float low = eLow / eAll, high = eHigh / eAll;
-        const float zcr = float(zc) / float(e - a);
-        const float decay = eTail / (eHead + 1e-9f);
+        const float scalePre = float(e - a) / float(a > from ? a - from : 1);
+        float d[3];
+        for (int j = 0; j < 3; ++j) {
+            d[j] = post[j] - 0.8f * pre[j] * scalePre;
+            if (d[j] < 0) d[j] = 0;
+        }
+        const float all = d[0] + 1e-9f;
+        const float low = d[1] / all, high = d[2] / all;
         uint8_t c = kClsOther;
-        if (low > 0.45f && zcr < 0.06f) c = kClsKick;
-        else if (high > 0.35f && zcr > 0.18f && decay < 0.6f) c = kClsHat;
-        else if (zcr > 0.08f && low < 0.45f && high > 0.08f) c = kClsSnare;
-        else if (low > 0.3f) c = kClsKick;
+        if (d[0] < 1e-6f) c = kClsOther;
+        else if (low > 0.45f) c = kClsKick;
+        else if (high > 0.3f && low < 0.12f) c = kClsHat;
+        else if (high > 0.05f) c = kClsSnare;
+        else if (low > 0.25f) c = kClsKick;
         sl.cls[k] = c;
     }
 }
@@ -435,7 +440,7 @@ bool SamplePool::sliceRange(int s, int k, uint32_t& a, uint32_t& e) const {
     return e > a + 2;
 }
 
-float loopBpm(uint32_t frames, int& bars, float hint) {
+float loopBpm(uint32_t frames, int& bars, float hint, const SampleSlot* on) {
     const float sec = float(frames) * dx::kInvSr;
     if (sec < 0.05f) {
         if (bars <= 0) bars = 1;
@@ -454,6 +459,16 @@ float loopBpm(uint32_t frames, int& bars, float hint) {
         if (d2 < d) d = d2 * 1.5f;
         if (d3 < d) d = d3 * 1.5f;
         if (bpm < 85.0f || bpm > 180.0f) d += 30.0f;
+        if (on && on->nOn >= 6) {   // hits between the 16ths of this tempo: it is too slow
+            const float step = 60.0f / bpm / 4.0f * 44100.0f;
+            int off = 0;
+            for (int k = 1; k < on->nOn; ++k) {
+                const float ph = float(on->onset[k]) / step;
+                const float fr = ph - floorf(ph);
+                if (fr > 0.3f && fr < 0.7f) ++off;
+            }
+            d += 120.0f * float(off) / float(on->nOn - 1);
+        }
         if (d < bestScore) {
             bestScore = d;
             best = bpm;

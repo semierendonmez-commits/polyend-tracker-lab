@@ -60,13 +60,15 @@ bool Konsol::init(Context& c) {
     P_ = a.make<Project>();
     scratch_ = static_cast<ot::Pattern*>(a.alloc(sizeof(ot::Pattern)));
     src_ = a.make<NoteBuf>(kTracks);
-    undo_ = a.make<NoteBuf>();
+    undo_ = static_cast<UndoRec*>(a.alloc(sizeof(UndoRec) * kUndo));
+    redo_ = static_cast<UndoRec*>(a.alloc(sizeof(UndoRec) * kUndo));
+    lkitBuf_ = static_cast<uint8_t*>(a.alloc(kLkitCap));
     acidPh_ = a.alloc(sizeof(ot::gen::MonoStep) * kMaxSteps * kTracks);
     list_ = static_cast<char(*)[40]>(a.alloc(kListMax * 40));
     stutter_ = static_cast<int16_t*>(a.alloc(kStutterMax * 2 * sizeof(int16_t)));
     int16_t* rmem = static_cast<int16_t*>(a.alloc(ot::audio::Reverb::kMemorySamples * sizeof(int16_t)));
     reverb_ = a.make<ot::audio::Reverb>();
-    if (!P_ || !scratch_ || !src_ || !undo_ || !acidPh_ || !list_ || !stutter_ || !rmem || !reverb_)
+    if (!P_ || !scratch_ || !src_ || !undo_ || !redo_ || !lkitBuf_ || !acidPh_ || !list_ || !stutter_ || !rmem || !reverb_)
         return false;
     if (!dly_.init(a) || !verb_.init(a)) return false;
     reverb_->init(rmem);
@@ -74,6 +76,8 @@ bool Konsol::init(Context& c) {
     if (!str_ || !str_->init(a)) return false;
     for (int t = 0; t < kTracks; ++t)
         if (!eng_[t].init(a, &pool_, &ts_[t], t)) return false;
+    // LABKIT: the browser (listing + a 4 s preview) and the registry before the pool takes the rest
+    c.browser().reserve(256, 4.0f);
     // the pool takes what is left, minus a reserve for the Shell (LABKIT) and later needs
     {
         const uint32_t freeB = a.free();
@@ -83,7 +87,9 @@ bool Konsol::init(Context& c) {
     }
     ensureBreak();
     for (auto& p : padPitch_) p = -1;
+    for (auto& p : padTrack_) p = -1;
     newProject(true);
+    registerParams();
     // last project on the card
     if (c.fs) {
         char path[96];
@@ -116,6 +122,7 @@ void Konsol::setEngine(int t, int kind) {
     if (old) old->allOff(true);
     P_->track[t].engine = uint8_t(kind);
     makamSetKey(eng_[t].e[kEngMakam], P_->key);
+    refreshSlots(t);   // LABKIT: the track's slots follow the new engine
     dirty_ = true;
 }
 
@@ -378,7 +385,12 @@ void Konsol::midiFromAudio(int t, bool on, int pitch, int vel) {
 int32_t Konsol::engineBudget(int extraTrack) const {
     int act = 0;
     for (int k = 0; k < kTracks; ++k) act += (engine(k)->active() || k == extraTrack) ? 1 : 0;
-    const int32_t b = kEngineBudget - kTrackOverhead * (act > 1 ? act - 1 : 0);
+    // the send effects beyond the OpenTracker plate + delay the budget was calibrated with
+    // (QEMU: plate 19k, OT delay 10k; hall 27k, shimmer 36.5k, gated 29k; delay 11.6k / tape 16.9k / lo-fi 13.7k)
+    static const int32_t kRevExtra[kRevTypes] = {0, 8000, 17500, 10000};
+    static const int32_t kDlyExtra[kDlyTypes] = {1500, 6700, 3500};
+    const int32_t fx = kRevExtra[P_->fx.revType % kRevTypes] + kDlyExtra[P_->fx.dlyType % kDlyTypes];
+    const int32_t b = kEngineBudget - kTrackOverhead * (act > 1 ? act - 1 : 0) - fx;
     return int32_t(float(b) * budgetScale_);
 }
 
@@ -1022,11 +1034,13 @@ void Konsol::onTransport(bool playing) {
 }
 
 // ============================================================================
-// bench scenarios (make lab-gate)
+// bench scenarios (make lab-gate): the QEMU bench and the host tests only --
+// the device image leaves them out (flash).
 // ============================================================================
+#if defined(OT_BENCH_M4) || !defined(__arm__)
 const char* Konsol::benchName(int i) const {
     static const char* const kN[] = {"idle",     "demo_scene4", "synth8_busy", "samples8", "gen_live", "worst_fx",
-                                     "plaits8",  "semi8",       "kit_warp",
+                                     "plaits8",  "semi8",       "kit_warp", "fx_shimmer_tape", "mod_slots8",
                                      // solo engines (calibration of the governor's cost estimates)
                                      "s_sampler", "s_grain", "s_drums", "s_ikeda", "s_makam", "s_acd", "s_vap", "s_fat",
                                      "s_wtfm", "s_perc", "s_plaits", "s_floater", "s_tb303", "s_neuro", "s_quanta", "s_kit"};
@@ -1035,6 +1049,9 @@ const char* Konsol::benchName(int i) const {
 }
 
 void Konsol::benchSetup(int i) {
+    ctx_->mod().clearRoutes();
+    P_->fx.revType = 0;
+    P_->fx.dlyType = 0;
     // reset playback
     for (int t = 0; t < kTracks; ++t) {
         for (int e = 0; e < kEngCount; ++e) eng_[t].e[e]->allOff(true);
@@ -1120,7 +1137,26 @@ void Konsol::benchSetup(int i) {
 }
 
 void Konsol::benchSetupNew(int i) {
-    // i = 6 plaits8, 7 semi8, 8 kit_warp, 9.. one engine alone on track 1 (all voices busy)
+    // i = 6 plaits8, 7 semi8, 8 kit_warp, 9 fx_shimmer_tape, 10 mod_slots8,
+    // 11.. one engine alone on track 1 (all voices busy)
+    if (i == 9 || i == 10) {   // the busy synth scenario + the costliest send FX / 8 LFO routes on engine slots
+        benchSetup(2);
+        if (i == 9) {
+            P_->fx.revType = 2;   // shimmer
+            P_->fx.dlyType = 1;   // tape
+            P_->fx.revSize = 1.0f;
+            P_->fx.delayFb = 0.9f;
+        } else {
+            ctx_->mod().clearRoutes();
+            for (int t = 0; t < kTracks; ++t) {
+                refreshSlots(t);
+                ctx_->mod().route(kit::kSrcLfo + (t & 3), slotParam_[t][t % 4], 0.4f);
+            }
+        }
+        fxDirty_ = true;
+        return;
+    }
+    if (i >= 11) i -= 2;
     static const uint8_t kPl[kTracks] = {kEngPlaits, kEngPlaits, kEngPlaits, kEngPlaits,
                                          kEngPlaits, kEngPlaits, kEngPlaits, kEngPlaits};
     static const uint8_t kSemi[kTracks] = {kEngFloater, kEngTb303, kEngNeuro, kEngQuanta,
@@ -1195,6 +1231,12 @@ void Konsol::benchSetupNew(int i) {
     hpHeld_ = dlyThrow_ = revThrow_ = false;
     fxDirty_ = true;
 }
+
+#else
+const char* Konsol::benchName(int) const { return "idle"; }
+void Konsol::benchSetup(int) {}
+void Konsol::benchSetupNew(int) {}
+#endif
 
 }  // namespace konsol
 

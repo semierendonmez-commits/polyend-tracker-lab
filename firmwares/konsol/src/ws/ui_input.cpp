@@ -3,11 +3,11 @@
 // encoder push (LABKIT NAV.md). Insert = the page's "do it" (launch, toggle,
 // add); Delete = remove; Copy = duplicate; Shift + Copy = undo, Shift +
 // Delete = redo. I.Param / Master / Shift + Config belong to LABKIT.
+// Main loop only (no audio-interrupt code here): built for size.
+#pragma GCC optimize("Os")
 #include <cstdio>
 #include <cstring>
 
-#include "lab/browser.h"
-#include "lab/keyboard.h"
 #include "ws/gen_glue.h"
 #include "ws/kit.h"
 #include "ws/konsol.h"
@@ -186,27 +186,27 @@ void Konsol::openBrowser(int what) {
     switch (what) {
         case kPickKitFolder:
             q.title = "Kit from a folder: pick any WAV in it";
-            std::snprintf(folder, sizeof folder, "%s/Samples", ctx_->home + 1);
+            std::snprintf(folder, sizeof folder, "%s/Samples", ctx_->home);
             break;
         case kPickPadSample:
             q.title = "Sample for the selected pad";
-            std::snprintf(folder, sizeof folder, "%s/Samples", ctx_->home + 1);
+            std::snprintf(folder, sizeof folder, "%s/Samples", ctx_->home);
             break;
         case kPickKit:
             q.title = "Load a kit";
             q.exts = ".kit";
             q.preview = false;
-            std::snprintf(folder, sizeof folder, "%s/Kits", ctx_->home + 1);
+            std::snprintf(folder, sizeof folder, "%s/Kits", ctx_->home);
             break;
         case kPickProject:
             q.title = "Open a project";
             q.exts = ".kon";
             q.preview = false;
-            std::snprintf(folder, sizeof folder, "%s/Projects", ctx_->home + 1);
+            std::snprintf(folder, sizeof folder, "%s/Projects", ctx_->home);
             break;
         default:
             q.title = "Load a sample into the track";
-            std::snprintf(folder, sizeof folder, "%s/Samples", ctx_->home + 1);
+            std::snprintf(folder, sizeof folder, "%s/Samples", ctx_->home);
             break;
     }
     q.folder = folder;
@@ -1007,7 +1007,7 @@ void Konsol::encoder(int d, bool shift) {
                 case 0: {   // bars (0 = detect)
                     ts.bars = uint8_t(clampi(ts.bars + d, 0, 32));
                     int bars = ts.bars;
-                    if (pool_.valid(ts.src)) ts.srcBpm = loopBpm(pool_.slot(ts.src).frames, bars, ctx_->bpm());
+                    if (pool_.valid(ts.src)) ts.srcBpm = loopBpm(pool_.slot(ts.src).frames, bars, ctx_->bpm(), &pool_.slot(ts.src));
                     if (!ts.stretched) ts.outBpm = ts.srcBpm;
                     break;
                 }
@@ -1050,6 +1050,7 @@ void Konsol::encoder(int d, bool shift) {
                 }
                 fxDirty_ = true;
                 dirty_ = true;
+                refreshFx();
                 break;
             }
             Mix& m = P_->track[mixCol_].mix;
@@ -1351,6 +1352,7 @@ void Konsol::fkey(int k, bool shift) {
                 }
                 fxDirty_ = true;
                 dirty_ = true;
+                refreshFx();
                 break;
             }
             Mix& m = P_->track[mixCol_].mix;
@@ -1462,7 +1464,8 @@ void Konsol::fkey(int k, bool shift) {
                             for (int s = 0; s < kScenes; ++s) P_->clip[t][s].lenSteps = 0;
                         P_->songLen = 0;
                     }
-                    for (int t = 0; t < kTracks; ++t) refreshSlots(t);
+                    refreshRegistry();
+                    undoN_ = redoN_ = 0;
                     ctx_->toast(k == 4 ? "New project" : "Demo loaded");
                     break;
                 case 6: openKeyboard(kNameRename); break;

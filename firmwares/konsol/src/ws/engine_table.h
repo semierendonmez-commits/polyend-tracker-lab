@@ -52,6 +52,11 @@ public:
         if (d.fmt == kFHz) return logf(p_[i] / d.min) / logf(d.max / d.min);
         return (p_[i] - d.min) / (d.max - d.min);
     }
+    bool bipolar(int i) const override {
+        if (i < 0 || i >= np_) return false;
+        const PDesc& d = desc_[i];
+        return d.fmt == kFBi || (d.fmt != kFList && d.min < 0.0f && d.max > 0.0f && fabsf(d.min + d.max) < 1e-3f);
+    }
     void setFrac(int i, float f) override {
         if (i < 0 || i >= np_) return;
         const PDesc& d = desc_[i];

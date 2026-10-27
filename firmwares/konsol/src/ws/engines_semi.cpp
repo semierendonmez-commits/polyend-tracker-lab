@@ -741,7 +741,8 @@ private:
             default: break;
         }
     }
-    float modelSample(int m, float dphi, float tone, float motion, float grit, float lfoUni, float lfoSin) {
+    __attribute__((noinline)) float modelSample(int m, float dphi, float tone, float motion, float grit, float lfoUni,
+                                                float lfoSin) {
         const float phi = phi_;
         float y = 0;
         switch (m) {

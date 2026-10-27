@@ -15,6 +15,8 @@
 // writes the next variation into the clip's back buffer, and the audio swaps
 // it in exactly at the loop point (Acid mutates its phrase, BBCut cuts anew,
 // Genotype walks its learnt chain, the others re-roll their seed).
+// Main loop only (no audio-interrupt code here): built for size.
+#pragma GCC optimize("Os")
 #include <cstdio>
 #include <cstring>
 
@@ -52,7 +54,9 @@ const ParamDesc kNone = {nullptr, 0, 0, 0, nullptr};
 
 constexpr int kRates[8] = {1, 2, 3, 4, 6, 8, 12, 16};
 
-bool drumLike(int engine) { return engine == kEngDrums || engine == kEngPerc; }
+bool drumEngine(int engine) {
+    return engine == kEngDrums || engine == kEngPerc || engine == kEngKit || engine == kEngFloater;
+}
 
 }  // namespace
 
@@ -297,9 +301,9 @@ bool Konsol::runGenerator(int t, int s, uint32_t seed, char* msg, int cap) {
     }
     if (!c.exists()) c.lenSteps = 16;
     const int engine = P_->track[t].engine;
-    const bool drum = drumLike(engine);
+    const bool drum = drumEngine(engine);
     int root = rootNote(t);
-    if (engine == kEngDrums) root = 36;
+    if (engine == kEngDrums || engine == kEngKit || engine == kEngFloater) root = 36;
     if (engine == kEngPerc) root = 60;
     const uint16_t mask = scaleMask(t);
     if (c.gen == kGenUsul) c.lenSteps = uint8_t(usulSteps(c.gp[0], c.gp[1]));

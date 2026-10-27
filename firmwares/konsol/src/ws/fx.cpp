@@ -148,7 +148,8 @@ void FdnVerb::clear() {
 void FdnVerb::configure() {
     static const uint32_t kLen[kLines] = {1557, 1617, 1491, 1422, 1277, 1356, 1188, 1116};
     static const uint32_t kAp[4] = {142, 107, 379, 277};
-    const float sc = type_ == 3 ? 0.35f + 0.4f * size_ : 0.45f + 1.0f * size_;
+    // lengths in half-rate samples (the network runs at 22.05 kHz)
+    const float sc = 0.5f * (type_ == 3 ? 0.35f + 0.4f * size_ : 0.45f + 1.0f * size_);
     for (int i = 0; i < kLines; ++i) {
         uint32_t n = uint32_t(float(kLen[i]) * sc);
         if (n >= kLineMax) n = kLineMax - 1;
@@ -157,7 +158,7 @@ void FdnVerb::configure() {
         if (idx_[i] >= n) idx_[i] = 0;
     }
     for (int i = 0; i < 4; ++i) {
-        uint32_t n = uint32_t(float(kAp[i]) * (0.6f + 0.6f * size_));
+        uint32_t n = uint32_t(float(kAp[i]) * 0.5f * (0.6f + 0.6f * size_));
         apLen_[i] = n < kApMax ? n : kApMax - 1;
         if (apPos_[i] >= apLen_[i]) apPos_[i] = 0;
     }
@@ -167,11 +168,11 @@ void FdnVerb::configure() {
         case 3: rt = 1.2f + 1.5f * size_; break;         // gated: dense, the gate cuts it
         default: rt = 0.7f + 7.5f * size_ * size_; break;   // hall
     }
-    for (int i = 0; i < kLines; ++i) g_[i] = dx::exp2fast(-9.966f * float(len_[i]) / (rt * kSr));
+    for (int i = 0; i < kLines; ++i) g_[i] = dx::exp2fast(-9.966f * float(len_[i]) / (rt * kSr * 0.5f));
     dampK_ = 0.08f + 0.85f * (1.0f - damp_) * (1.0f - damp_);
-    preLen_ = uint32_t(pre_ * 0.12f * kSr);
+    preLen_ = uint32_t(pre_ * 0.12f * kSr * 0.5f);
     if (preLen_ >= kPreMax) preLen_ = kPreMax - 1;
-    gateHoldLen_ = uint32_t((0.09f + 0.4f * size_) * kSr);
+    gateHoldLen_ = uint32_t((0.09f + 0.4f * size_) * kSr * 0.5f);
     dirty_ = false;
 }
 
@@ -186,97 +187,132 @@ bool FdnVerb::process(const float* in, float* ol, float* orr) {
     else quiet_ += kBlock;
     const float tail = type_ == 2 ? 12.0f : (type_ == 3 ? 1.5f : 8.5f);
     if (float(quiet_) > tail * kSr) return false;
-    uint32_t* idx = idx_;
+    // locals: the stores into the delay lines cannot alias them, so they stay in registers
+    float* ln[kLines];
+    uint32_t idx[kLines], len[kLines];
+    float lp[kLines], g[kLines];
+    for (int k = 0; k < kLines; ++k) {
+        ln[k] = line_[k];
+        idx[k] = idx_[k];
+        len[k] = len_[k];
+        lp[k] = lp_[k];
+        g[k] = g_[k];
+    }
+    float* ap[4];
+    uint32_t apPos[4], apLen[4];
+    for (int k = 0; k < 4; ++k) {
+        ap[k] = ap_[k];
+        apPos[k] = apPos_[k];
+        apLen[k] = apLen_[k];
+    }
+    float* pre = pre_buf_;
+    uint32_t preW = preW_;
+    const uint32_t preLen = preLen_;
+    float* sh = sh_;
+    uint32_t shW = shW_;
+    float shR = shR_, shOut = shOut_;
+    float gateEnv = gateEnv_, gate = gate_;
+    uint32_t gateHold = gateHold_;
+    const uint32_t gateHoldLen = gateHoldLen_;
     const float c = dampK_;
     const bool shimmer = type_ == 2, gated = type_ == 3;
-    for (uint32_t i = 0; i < kBlock; ++i) {
-        float x = in[i];
-        // pre-delay
-        if (preLen_) {
-            pre_buf_[preW_] = x;
-            uint32_t r = preW_ + kPreMax - preLen_;
+    // the network runs at half the rate (22.05 kHz): the input is the pair's mean, the
+    // output is interpolated between this pair's result and the last one
+    float pl = lastL_, pr = lastR_;
+    for (uint32_t i = 0; i < kBlock; i += 2) {
+        float x = 0.5f * (in[i] + in[i + 1]);
+        if (preLen) {
+            pre[preW] = x;
+            uint32_t r = preW + kPreMax - preLen;
             if (r >= kPreMax) r -= kPreMax;
-            x = pre_buf_[r];
-            if (++preW_ >= kPreMax) preW_ = 0;
+            x = pre[r];
+            if (++preW >= kPreMax) preW = 0;
         }
-        if (shimmer) x += shOut_ * 0.42f;
-        // input diffusion: 4 series all-passes (g = 0.7)
-        for (int k = 0; k < 4; ++k) {
-            float* b = ap_[k];
-            const uint32_t p = apPos_[k];
-            const float d = b[p];
+        if (shimmer) x += shOut * 0.42f;
+        for (int k = 0; k < 4; ++k) {   // input diffusion: 4 series all-passes (g = 0.7)
+            float* bp = ap[k];
+            const uint32_t p = apPos[k];
+            const float d = bp[p];
             const float v = x + 0.7f * d;
-            b[p] = v;
+            bp[p] = v;
             x = d - 0.7f * v;
-            apPos_[k] = p + 1 < apLen_[k] ? p + 1 : 0;
+            apPos[k] = p + 1 < apLen[k] ? p + 1 : 0;
         }
-        // the network: read, damp, decay
         float o[kLines];
         for (int k = 0; k < kLines; ++k) {
-            const float y = line_[k][idx[k]];
-            lp_[k] += c * (y - lp_[k]);
-            o[k] = lp_[k] * g_[k];
+            const float y = ln[k][idx[k]];
+            lp[k] += c * (y - lp[k]);
+            o[k] = lp[k] * g[k];
         }
         // 8-point Walsh-Hadamard (orthogonal with the 1/sqrt(8))
-        float h[kLines];
-        {
-            const float a0 = o[0] + o[1], a1 = o[0] - o[1], a2 = o[2] + o[3], a3 = o[2] - o[3];
-            const float a4 = o[4] + o[5], a5 = o[4] - o[5], a6 = o[6] + o[7], a7 = o[6] - o[7];
-            const float b0 = a0 + a2, b1 = a1 + a3, b2 = a0 - a2, b3 = a1 - a3;
-            const float b4 = a4 + a6, b5 = a5 + a7, b6 = a4 - a6, b7 = a5 - a7;
-            const float s = 0.35355339f;
-            h[0] = (b0 + b4) * s;
-            h[1] = (b1 + b5) * s;
-            h[2] = (b2 + b6) * s;
-            h[3] = (b3 + b7) * s;
-            h[4] = (b0 - b4) * s;
-            h[5] = (b1 - b5) * s;
-            h[6] = (b2 - b6) * s;
-            h[7] = (b3 - b7) * s;
-        }
-        const float inj = x * 0.5f;
+        const float a0 = o[0] + o[1], a1 = o[0] - o[1], a2 = o[2] + o[3], a3 = o[2] - o[3];
+        const float a4 = o[4] + o[5], a5 = o[4] - o[5], a6 = o[6] + o[7], a7 = o[6] - o[7];
+        const float b0 = a0 + a2, b1 = a1 + a3, b2 = a0 - a2, b3 = a1 - a3;
+        const float b4 = a4 + a6, b5 = a5 + a7, b6 = a4 - a6, b7 = a5 - a7;
+        const float sc = 0.35355339f, inj = x * 0.5f;
+        const float h[kLines] = {(b0 + b4) * sc - inj, (b1 + b5) * sc + inj, (b2 + b6) * sc - inj, (b3 + b7) * sc + inj,
+                                 (b0 - b4) * sc - inj, (b1 - b5) * sc + inj, (b2 - b6) * sc - inj, (b3 - b7) * sc + inj};
         for (int k = 0; k < kLines; ++k) {
-            line_[k][idx[k]] = h[k] + ((k & 1) ? inj : -inj);
-            if (++idx[k] >= len_[k]) idx[k] = 0;
+            ln[k][idx[k]] = h[k];
+            if (++idx[k] >= len[k]) idx[k] = 0;
         }
         float yl = o[0] - o[2] + o[4] - o[6];
         float yr = o[1] - o[3] + o[5] - o[7];
         if (shimmer) {
             // octave up: two read heads moving at twice the write speed, sin^2 windows
-            const float m = 0.5f * (yl + yr);
-            sh_[shW_] = m;
-            shR_ += 1.0f / 2048.0f;
-            if (shR_ >= 1.0f) shR_ -= 1.0f;
-            float s = 0;
+            sh[shW] = 0.5f * (yl + yr);
+            shR += 1.0f / 1024.0f;
+            if (shR >= 1.0f) shR -= 1.0f;
+            float sacc = 0;
             for (int hd = 0; hd < 2; ++hd) {
-                float ph = shR_ + 0.5f * float(hd);
+                float ph = shR + 0.5f * float(hd);
                 if (ph >= 1.0f) ph -= 1.0f;
-                const float dly = (1.0f - ph) * 2048.0f + 2.0f;
-                float rp = float(shW_) - dly;
+                const float dly = (1.0f - ph) * 1024.0f + 2.0f;
+                float rp = float(shW) - dly;
                 if (rp < 0) rp += float(kShift);
                 uint32_t r0 = uint32_t(rp);
                 const float f = rp - float(r0);
                 if (r0 >= kShift) r0 -= kShift;
                 const uint32_t r1 = r0 + 1 < kShift ? r0 + 1 : 0;
                 const float w = dx::sin2pi(ph * 0.5f);
-                s += (sh_[r0] + (sh_[r1] - sh_[r0]) * f) * w * w;
+                sacc += (sh[r0] + (sh[r1] - sh[r0]) * f) * w * w;
             }
-            shOut_ = s;
-            if (++shW_ >= kShift) shW_ = 0;
+            shOut = sacc;
+            if (++shW >= kShift) shW = 0;
         }
         if (gated) {
-            const float a = in[i] < 0 ? -in[i] : in[i];
-            gateEnv_ = a > gateEnv_ ? a : gateEnv_ * 0.9995f;
-            if (gateEnv_ > 0.015f) gateHold_ = gateHoldLen_;
-            else if (gateHold_) --gateHold_;
-            const float tgt = gateHold_ ? 1.0f : 0.0f;
-            gate_ += (tgt - gate_) * (tgt > gate_ ? 0.02f : 0.004f);
-            yl *= gate_ * 1.4f;
-            yr *= gate_ * 1.4f;
+            const float a = x < 0 ? -x : x;
+            gateEnv = a > gateEnv ? a : gateEnv * 0.999f;
+            if (gateEnv > 0.015f) gateHold = gateHoldLen;
+            else if (gateHold) --gateHold;
+            const float tgt = gateHold ? 1.0f : 0.0f;
+            gate += (tgt - gate) * (tgt > gate ? 0.04f : 0.008f);
+            yl *= gate * 1.4f;
+            yr *= gate * 1.4f;
         }
-        ol[i] = yl * 0.6f;
-        orr[i] = yr * 0.6f;
+        yl *= 0.6f;
+        yr *= 0.6f;
+        ol[i] = 0.5f * (pl + yl);
+        orr[i] = 0.5f * (pr + yr);
+        ol[i + 1] = yl;
+        orr[i + 1] = yr;
+        pl = yl;
+        pr = yr;
     }
+    lastL_ = pl;
+    lastR_ = pr;
+    for (int k = 0; k < kLines; ++k) {
+        idx_[k] = idx[k];
+        lp_[k] = lp[k];
+    }
+    for (int k = 0; k < 4; ++k) apPos_[k] = apPos[k];
+    preW_ = preW;
+    shW_ = shW;
+    shR_ = shR;
+    shOut_ = shOut;
+    gateEnv_ = gateEnv;
+    gate_ = gate;
+    gateHold_ = gateHold;
     return true;
 }
 

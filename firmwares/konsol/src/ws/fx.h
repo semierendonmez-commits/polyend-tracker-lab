@@ -69,7 +69,7 @@ private:
     float* sh_ = nullptr;          // shimmer pitch shifter
     uint32_t shW_ = 0;
     float shR_ = 0;
-    float shOut_ = 0;
+    float shOut_ = 0, lastL_ = 0, lastR_ = 0;
     uint32_t pos_ = 0, preW_ = 0, preLen_ = 0;
     int type_ = 1;
     float size_ = 0.7f, damp_ = 0.5f, pre_ = 0.0f, dampK_ = 0.3f;

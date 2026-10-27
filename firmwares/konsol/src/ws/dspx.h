@@ -43,7 +43,7 @@ inline float exp2fast(float x) {
         int32_t i;
     } u;
     u.f = p;
-    u.i += int32_t(fl) << 23;
+    u.i += int32_t(uint32_t(int32_t(fl)) << 23);
     return u.f;
 }
 inline float semis(float s) { return exp2fast(s * (1.0f / 12.0f)); }

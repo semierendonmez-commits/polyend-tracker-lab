@@ -632,10 +632,14 @@ void Shell::toast(const char* msg) {
 void Shell::drawToast(Canvas& g) {
     if (!toast_[0] || int32_t(toastUntil_ - millis()) <= 0) return;
     const Theme& t = ws_->theme();
+    int w = kit::textWidth(font::kBody, toast_) + 40;
+    if (w < 400) w = 400;
+    if (w > 780) w = 780;
+    const int x = 400 - w / 2;
     g.color(t.panel);
-    g.fillRound(200, 380, 400, 40, 8);
+    g.fillRound(x, 380, w, 40, 8);
     g.color(t.accent);
-    g.frame(200, 380, 400, 40);
+    g.frame(x, 380, w, 40);
     g.color(t.fg);
     g.text(400, 400, font::kBody, toast_, Canvas::kCenter);
 }

@@ -9,8 +9,6 @@
 #include "audio/effects.h"
 #include "lab/dsp.h"
 #include "lab/lab.h"
-#include "lab/nav.h"
-#include "lab/params.h"
 #include "ws/engines.h"
 #include "ws/fx.h"
 #include "ws/model.h"
@@ -90,7 +88,7 @@ public:
     void onTransport(bool playing) override;
     int settings(SettingRow* rows, int cap) override;
     void save() override;
-    int benchScenarios() const override { return 25; }
+    int benchScenarios() const override { return 27; }
     const char* benchName(int i) const override;
     void benchSetup(int i) override;
     void benchSetupNew(int i);
@@ -200,6 +198,8 @@ public:
     void navFocus(kit::ParamId id) override;
     void navParamChanged(kit::ParamId id) override;
     void refreshSlots(int t);                  // engine changed / loaded: names and values of track t's slots
+    void refreshRegistry();                    // after a load / new project: every registered value
+    void refreshFx();                          // the FX page changed FxCfg
     void slotEdited(int t, int param);         // the Sound page changed engine param `param` of track t
     kit::ParamId slotId(int t, int param) const;
 
@@ -239,7 +239,7 @@ private:
     void drawFx(Canvas& g);
     void drawSong(Canvas& g);
     void drawProject(Canvas& g);
-    void drawWave(Canvas& g, int slot, uint32_t a, uint32_t e, int x, int y, int w, int h, Rgb c);
+    void drawWave(Canvas& g, int slot, uint32_t a, uint32_t e, int x, int y, int w, int h, Rgb c, int colW = 4);
 
     Context* ctx_ = nullptr;
     Theme theme_;
@@ -322,10 +322,13 @@ private:
         uint8_t which;
     };
     FxRef fxRef_[16];
+    kit::ParamId fxId_[16] = {};
     bool kitReady_ = false;
     int placedFor_ = -1;
     // browser / keyboard results (picked in the Shell's modal, applied in update())
     char pickPath_[128] = {};
+    static constexpr uint32_t kLkitCap = 32768;
+    uint8_t* lkitBuf_ = nullptr;
     int pickWhat_ = -1;
 
     // ---- UI state -------------------------------------------------------------

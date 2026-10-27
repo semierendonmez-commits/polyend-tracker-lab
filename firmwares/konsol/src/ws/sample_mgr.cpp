@@ -1,6 +1,8 @@
 // KONSOL sample management (main loop): the shared pool, track samples,
 // time-stretch jobs, drum kits (from slices or a folder of one-shots), kit
 // files, garbage collection and compaction of the pool.
+// Main loop only (no audio-interrupt code here): built for size.
+#pragma GCC optimize("Os")
 #include <cstdio>
 #include <cstring>
 
@@ -62,7 +64,8 @@ void Konsol::setTrackBreak(int t) {
     ts.stretched = 0;
     ts.bars = 2;
     int bars = 2;
-    ts.srcBpm = loopBpm(pool_.valid(breakSlot_) ? pool_.slot(breakSlot_).frames : 1, bars, 172.0f);
+    ts.srcBpm = loopBpm(pool_.valid(breakSlot_) ? pool_.slot(breakSlot_).frames : 1, bars, 172.0f,
+                        pool_.valid(breakSlot_) ? &pool_.slot(breakSlot_) : nullptr);
     ts.outBpm = ts.srcBpm;
 }
 
@@ -131,7 +134,7 @@ bool Konsol::loadSample(int t, const char* path) {
     ts.slot = int16_t(s);
     ts.stretched = 0;
     int bars = ts.bars;
-    ts.srcBpm = loopBpm(pool_.slot(s).frames, bars, bpm_);
+    ts.srcBpm = loopBpm(pool_.slot(s).frames, bars, bpm_, &pool_.slot(s));
     ts.bars = uint8_t(bars);
     ts.outBpm = ts.srcBpm;
     (void)oldSlot;
@@ -152,7 +155,7 @@ bool Konsol::stretchTrack(int t) {
     if (!pool_.valid(ts.src)) return false;
     if (str_->busy()) str_->cancel();
     int bars = ts.bars;
-    ts.srcBpm = loopBpm(pool_.slot(ts.src).frames, bars, bpm_);
+    ts.srcBpm = loopBpm(pool_.slot(ts.src).frames, bars, bpm_, &pool_.slot(ts.src));
     ts.bars = uint8_t(bars);
     const float target = ctx_ ? ctx_->bpm() : bpm_;
     const float ratio = ts.srcBpm / (target > 20.0f ? target : 120.0f);
@@ -444,7 +447,12 @@ bool Konsol::loadKit(int t, const char* path) {
     const IStorage::Handle h = ctx_->fs->open(path, IStorage::kRead);
     if (h < 0) return false;
     static uint8_t buf[kKitRec * kKitPads + 8];
-    const int32_t n = ctx_->fs->read(h, buf, sizeof buf);
+    int32_t n = 0;
+    while (n < int32_t(sizeof buf)) {   // cards (and the host fake) may read short
+        const int32_t k = ctx_->fs->read(h, buf + n, uint32_t(sizeof buf) - uint32_t(n));
+        if (k <= 0) break;
+        n += k;
+    }
     ctx_->fs->close(h);
     if (n != int32_t(sizeof buf) || std::memcmp(buf, "KKIT", 4) != 0 || buf[6] != kKitPads) {
         if (ctx_) ctx_->toast("Not a KONSOL kit");
