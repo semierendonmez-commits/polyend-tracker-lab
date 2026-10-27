@@ -29,17 +29,12 @@ inline float fastSin(float p) {
 // Sine wavefolder without sinf: sin(pi/2 x) = fastSin(x / 4).
 inline float fastFold(float x) {
     float p = x * 0.25f;
-    p -= floorf(p);
+    int i = int(p);
+    if (p < float(i)) --i;   // floor without the libm call
+    p -= float(i);
     return fastSin(p);
 }
-// tan(pi f / sr) for the SVF from a rational approximation (f < 0.45 sr).
-inline void svfSet(lab::dsp::Svf& f, float hz, float q) {
-    hz = hz < 20.0f ? 20.0f : (hz > 16000.0f ? 16000.0f : hz);
-    const float x = 3.14159265f * hz / 44100.0f;
-    const float x2 = x * x;
-    f.g = x * (1.0f + x2 * (0.33333f + x2 * 0.13333f)) / (1.0f - x2 * 0.04f);
-    f.k = 1.0f / q;
-}
+inline void svfSet(FastSvf& f, float hz, float q) { f.set(hz, q); }
 inline float tri(float p) { return p < 0.5f ? p * 4.0f - 1.0f : 3.0f - p * 4.0f; }
 inline float levelGain(int v) {
     const float g = float(v) * 0.01f;
@@ -106,14 +101,10 @@ OT_FASTRUN_FN bool DubDelay::process(const float* in, float* outL, float* outR) 
         lpL_ += lpK * (yl - lpL_);
         lpR_ += lpK * (yr - lpR_);
         float el = lpL_, er = lpR_;
-        hpL_ += 0.006f * (el - hpL_);   // ~40 Hz high-pass: no DC build-up
-        hpR_ += 0.006f * (er - hpR_);
-        el -= hpL_;
-        er -= hpR_;
         switch (type) {
             case kDlyTape:
-                el = dsp::softclip(el * fb * 1.3f) * 0.85f;
-                er = dsp::softclip(er * fb * 1.3f) * 0.85f;
+                el = dsp::softclip(el * fb * 1.15f) * 0.85f;   // loop gain < 1: no DC latch
+                er = dsp::softclip(er * fb * 1.15f) * 0.85f;
                 break;
             case kDlyLofi:
                 if (++hold_ >= 4) {   // 11 kHz, 6 bits
@@ -142,9 +133,9 @@ OT_FASTRUN_FN bool DubDelay::process(const float* in, float* outL, float* outR) 
         w_ = (w_ + 1) & mask;
         outL[i] = yl;
         outR[i] = yr;
-        const float m = fabsf(yl) + fabsf(yr);
-        if (m > pk) pk = m;
     }
+    pk = fabsf(outL[kBlock - 1]) + fabsf(outR[kBlock - 1]) + fabsf(lpL_) + fabsf(lpR_);
+    // DC never builds up: the feedback is below 1 and the input is AC
     if (inPk < 1e-6f && pk < 1e-5f) quiet_ += kBlock;
     return true;
 }
@@ -720,10 +711,14 @@ OT_FASTRUN_FN void Engine::renderSegment(uint32_t i0, uint32_t i1) {
     const float drive = 1.0f + float(s.bp.drive) * 0.05f;
     // NEUROSTACK idea: a clean sine sub under the layers, on its own phase, never switched
     const float subLvl = model == kBassSub ? 0.0f : float(s.bp.sub) * 0.01f * 0.8f;
+    const float lfoInc = (float(s.bpm) * (4.0f / 60.0f)) * (1.0f / kSr);   // 16th-note wobble
     for (uint32_t i = i0; i < i1; ++i) bas_[i] = 0.0f;
-    if (b.amp.active()) {
+    if (b.amp.active() || b.e > 0.0f) {
         for (uint32_t i = i0; i < i1; ++i) {
             if (((i - i0) & 15) == 0) {
+                const int n = (i1 - i) < 16u ? int(i1 - i) : 16;
+                b.e = b.amp.v;
+                b.de = (b.amp.advance(n) - b.e) / float(n);
                 b.freq = b.target + (b.freq - b.target) * b.glide16;
                 float f = b.freq;
                 if (model == kBassHoover) {   // dives into the note after every trigger
@@ -746,7 +741,8 @@ OT_FASTRUN_FN void Engine::renderSegment(uint32_t i0, uint32_t i1) {
                 }
             }
             b.fenv *= fdec;
-            const float e = b.amp.process();
+            b.e += b.de;
+            const float e = b.e;
             float x;
             switch (model) {
                 case kBassSub: {   // sine + a touch of the octave
@@ -787,7 +783,7 @@ OT_FASTRUN_FN void Engine::renderSegment(uint32_t i0, uint32_t i1) {
                     float raw = b.o1.saw() + b.o2.saw();
                     if (model == kBassGrowl) {   // square on top, folded
                         raw += b.o3.square(0.3f) * 0.7f;
-                        b.lfo += (s.bpm / 60.0f * 4.0f) * (1.0f / kSr);   // 16th-note wobble
+                        b.lfo += lfoInc;
                         if (b.lfo >= 1.0f) b.lfo -= 1.0f;
                     } else {
                         raw += fastSin(b.o3.step()) * 0.9f;   // sub an octave down
@@ -806,34 +802,52 @@ OT_FASTRUN_FN void Engine::renderSegment(uint32_t i0, uint32_t i1) {
             }
             bas_[i] = x * e * b.vel * 0.55f;
         }
+        if (!b.amp.active()) b.e = 0.0f;
     }
 
-    // ---- lead
+    // ---- lead (each voice's state in locals: the stores into the string
+    // lines could alias the voice's fields and force reloads every sample)
     for (uint32_t i = i0; i < i1; ++i) led_[i] = 0.0f;
     const int lm = s.lp.model;
     const float tone = float(s.lp.tone) * 0.01f;
     const float vibDepth = float(s.lp.vibrato) * 0.0001f;   // up to 1 %
-    const float vibInc = 5.3f / kSr;
+    const float vibInc16 = 16.0f * 5.3f / kSr;
     const float ksDecay = 0.9935f + float(s.lp.decay) * 0.000062f;
+    const float bright = lm == 1 ? 0.55f + tone * 0.4f : 0.7f + tone * 0.28f;
+    const float neyH2 = 0.18f * tone, neyNoise = 1.2f - tone * 0.6f;
+    float* const out = led_;
     for (auto& v : lead_) {
         if (!v.active) continue;
-        if (!v.amp.active()) {
+        if (!v.amp.active() && v.e <= 0.0f) {
             v.active = false;
             continue;
         }
         if (lm == 0) svfSet(v.f, v.freq * 2.0f, 1.2f);
         else if (lm == 3) svfSet(v.f, 1100.0f + tone * 1400.0f, 2.2f);
-        float f = v.freq, inc = f / kSr, d = kSr / f;
+        FastSvf flt = v.f;
+        float* const ks = v.ks;
+        float* const ks2 = v.ks2;
+        uint32_t w = v.ksW;
+        float ksLp = v.ksLp, ksLp2 = v.ksLp2, ph = v.ph, e = v.e, de = v.de;
+        int32_t burst = v.burst;
+        float burstLp = v.burstLp;
+        const float burstK = v.burstK;
+        const float damp = v.gate ? ksDecay : 0.97f;
+        const float gain = v.vel * 0.45f;
+        float inc = v.freq / kSr, d = kSr / v.freq, d2 = d * 0.4985f, chiff = 0.0f;
         for (uint32_t i = i0; i < i1; ++i) {
-            if (((i - i0) & 15) == 0) {   // control rate: glide, vibrato, grace, period
+            if (((i - i0) & 15) == 0) {   // control rate: envelope, glide, vibrato, grace, period
+                const int n = (i1 - i) < 16u ? int(i1 - i) : 16;
+                e = v.amp.v;
+                de = (v.amp.advance(n) - e) / float(n);
                 v.freq += (v.target - v.freq) * v.glide16;
-                v.age += 16.0f / kSr;
-                v.vibPh += vibInc * 16.0f;
+                v.age += float(n) / kSr;
+                v.vibPh += vibInc16;
                 if (v.vibPh >= 1.0f) v.vibPh -= 1.0f;
                 const float vibOn = v.age > 0.25f ? 1.0f : v.age * 4.0f;
-                f = v.freq * (1.0f + vibDepth * vibOn * tri(v.vibPh));
+                float f = v.freq * (1.0f + vibDepth * vibOn * tri(v.vibPh));
                 if (v.graceLeft > 0) {
-                    v.graceLeft -= 16;
+                    v.graceLeft -= n;
                     f = v.graceFreq;
                     if (v.graceLeft <= 0) {
                         v.graceLeft = 0;
@@ -843,66 +857,78 @@ OT_FASTRUN_FN void Engine::renderSegment(uint32_t i0, uint32_t i1) {
                 inc = f * (1.0f / kSr);
                 d = kSr / f;
                 if (d > float(kKsLen - 4)) d = float(kKsLen - 4);
+                d2 = d * 0.4985f;
+                chiff = v.age < 0.08f ? (0.08f - v.age) * 6.0f : 0.0f;
             }
-            const float e = v.amp.process();
-            float x = 0.0f;
+            e += de;
+            float x;
             switch (lm) {
                 case 0: {   // Ney: breathy, few harmonics, chiff of noise
-                    v.ph += inc;
-                    if (v.ph >= 1.0f) v.ph -= 1.0f;
-                    float p2 = v.ph * 2.0f;
+                    ph += inc;
+                    if (ph >= 1.0f) ph -= 1.0f;
+                    float p2 = ph * 2.0f;
                     if (p2 >= 1.0f) p2 -= 1.0f;
-                    v.f.process(rng_.bi());
-                    const float chiff = v.age < 0.08f ? (0.08f - v.age) * 6.0f : 0.0f;
-                    x = fastSin(v.ph) * 0.75f + fastSin(p2) * 0.18f * tone + v.f.bp * (0.22f + chiff) * (1.2f - tone * 0.6f);
+                    flt.process(rng_.bi());
+                    x = fastSin(ph) * 0.75f + fastSin(p2) * neyH2 + flt.bp * (0.22f + chiff) * neyNoise;
                     break;
                 }
                 case 3: {   // Zurna: bright saw through a nasal formant, driven
-                    v.ph += inc;
-                    if (v.ph >= 1.0f) v.ph -= 1.0f;
-                    const float saw = 2.0f * v.ph - 1.0f;
-                    v.f.process(saw);
-                    x = dsp::softclip((v.f.bp * 1.8f + saw * 0.25f) * 1.6f) * 0.7f;
+                    ph += inc;
+                    if (ph >= 1.0f) ph -= 1.0f;
+                    const float saw = 2.0f * ph - 1.0f;
+                    flt.process(saw);
+                    x = dsp::softclip((flt.bp * 1.8f + saw * 0.25f) * 1.6f) * 0.7f;
                     break;
                 }
                 default: {  // Kanun (1) / Saz (2): Karplus-Strong strings
-                    float rp = float(v.ksW) - d;
+                    float rp = float(w) - d;
                     if (rp < 0.0f) rp += float(kKsLen);
                     const uint32_t j = uint32_t(rp);
                     const float fr = rp - float(j);
-                    const float a0 = v.ks[j & (kKsLen - 1)], a1 = v.ks[(j + 1) & (kKsLen - 1)];
+                    const float a0 = ks[j & (kKsLen - 1)], a1 = ks[(j + 1) & (kKsLen - 1)];
                     const float y = a0 + (a1 - a0) * fr;
-                    const float damp = v.gate ? ksDecay : 0.97f;
-                    const float bright = lm == 1 ? 0.55f + tone * 0.4f : 0.7f + tone * 0.28f;
                     float in = y;
-                    if (v.burst > 0) {   // excitation: the noise burst replaces the loop for one period
-                        --v.burst;
-                        v.burstLp += v.burstK * (rng_.bi() - v.burstLp);
-                        in = v.burstLp * 0.9f;
+                    const bool exc = burst > 0;
+                    if (exc) {   // excitation: the noise burst replaces the loop for one period
+                        --burst;
+                        burstLp += burstK * (rng_.bi() - burstLp);
+                        in = burstLp * 0.9f;
                     }
-                    v.ksLp += bright * (in - v.ksLp);
-                    v.ks[v.ksW] = v.burst > 0 ? in : v.ksLp * damp;
-                    x = v.burst > 0 ? in : y;
+                    ksLp += bright * (in - ksLp);
+                    ks[w] = exc ? in : ksLp * damp;
+                    x = exc ? in : y;
                     if (lm == 2) {   // Saz: second course an octave up, slightly off
-                        float rp2 = float(v.ksW) - d * 0.4985f;
+                        float rp2 = float(w) - d2;
                         if (rp2 < 0.0f) rp2 += float(kKsLen);
                         const uint32_t j2 = uint32_t(rp2);
                         const float f2 = rp2 - float(j2);
-                        const float b0 = v.ks2[j2 & (kKsLen - 1)], b1 = v.ks2[(j2 + 1) & (kKsLen - 1)];
+                        const float b0 = ks2[j2 & (kKsLen - 1)], b1 = ks2[(j2 + 1) & (kKsLen - 1)];
                         const float y2 = b0 + (b1 - b0) * f2;
-                        const float in2 = v.burst > 0 ? in * 0.75f : y2;
-                        v.ksLp2 += 0.8f * (in2 - v.ksLp2);
-                        v.ks2[v.ksW] = v.burst > 0 ? in2 : v.ksLp2 * damp;
-                        x = dsp::softclip((y + y2 * 0.6f) * 1.5f) * 0.8f;
+                        const float in2 = exc ? in * 0.75f : y2;
+                        ksLp2 += 0.8f * (in2 - ksLp2);
+                        ks2[w] = exc ? in2 : ksLp2 * damp;
+                        x = (y + y2 * 0.6f) * 1.2f;   // saturated once on the lead bus
                     }
-                    v.ksW = (v.ksW + 1) & (kKsLen - 1);
+                    w = (w + 1) & (kKsLen - 1);
                     x *= 1.3f;
                     break;
                 }
             }
-            led_[i] += x * e * v.vel * 0.45f;
+            out[i] += x * e * gain;
         }
+        v.f = flt;
+        v.ksW = w;
+        v.ksLp = ksLp;
+        v.ksLp2 = ksLp2;
+        v.ph = ph;
+        v.e = e;
+        v.de = de;
+        v.burst = burst;
+        v.burstLp = burstLp;
+        if (!v.amp.active()) v.e = 0.0f;
     }
+    if (lm == 2)   // Saz: the courses through one saturation on the bus
+        for (uint32_t i = i0; i < i1; ++i) led_[i] = dsp::softclip(led_[i] * 2.4f) * 0.42f;
 }
 
 void Engine::updateFx(float bpm) {

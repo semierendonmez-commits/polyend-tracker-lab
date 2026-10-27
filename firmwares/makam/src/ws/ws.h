@@ -72,6 +72,7 @@ public:
     // Host tests.
     Song& song() { return *song_; }
     lab::kit::ParamId paramOf(const void* field) const;
+    void pullFields();   // the song's fields -> the registry's base values
     Engine& engine() { return eng_; }
     Kit& kit(int i) { return kits_[i]; }
     int page() const { return page_; }
@@ -82,7 +83,6 @@ public:
 private:
     // LABKIT glue (makam_nav.cpp)
     void registerParams();
-    void pullFields();
     void defaultMacros();
     void applyRid(uint8_t rid);
     uint8_t ridOf(const void* field) const;

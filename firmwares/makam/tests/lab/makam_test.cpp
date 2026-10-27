@@ -1,6 +1,7 @@
 // MAKAM host tests: makam interval tables and frequencies in both tunings,
 // usul strokes, slice scheduling on aksak grids at 172 BPM, the seyir
 // generator, the project file round trip.
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <vector>
@@ -372,4 +373,322 @@ LAB_TEST(midi_pitch_bend_for_microtones) {
     CHECK(n == 71);
     const int bend = 8192 + int((semis - float(n)) / 2.0f * 8192.0f);
     CHECK(bend < 8192 && bend > 7300);
+}
+
+// ============================== round 2 ==============================
+namespace {
+// A booted workstation with a fake card and a tick helper.
+struct Station {
+    MemStorage fs;
+    lab::Shell shell;
+    MakamWs* ws = nullptr;
+    lab::Transport tr;
+    explicit Station(bool card = true) {
+        lab::Hal h;
+        if (card) h.fs = &fs;
+        if (shell.init(h, gMem.data(), uint32_t(gMem.size()), "MAKAM")) ws = static_cast<MakamWs*>(shell.workstation());
+        tr.playing = true;
+        tr.startedThisBlock = true;
+        tr.bpm = 172.0f;
+        tr.beatsPerSample = 172.0 / 60.0 / 44100.0;
+    }
+    void run(int blocks, float* peak = nullptr) {
+        float l[lab::kBlock], r[lab::kBlock];
+        for (int b = 0; b < blocks; ++b) {
+            for (uint32_t i = 0; i < lab::kBlock; ++i) l[i] = r[i] = 0.0f;
+            shell.kitBlock(tr);
+            ws->render(tr, lab::AudioIn(), l, r);
+            tr.startedThisBlock = false;
+            tr.beat += tr.beatsPerSample * lab::kBlock;
+            for (uint32_t i = 0; i < lab::kBlock; ++i)
+                if (peak) *peak = std::max(*peak, std::max(std::fabs(l[i]), std::fabs(r[i])));
+            if ((b & 7) == 0) ws->update(uint32_t(b) * 3u);
+        }
+    }
+    void press(uint8_t id, bool shift = false) {
+        lab::Event e;
+        e.type = lab::Event::kPress;
+        e.id = id;
+        e.shift = shift;
+        ws->onEvent(e);
+        e.type = lab::Event::kRelease;
+        ws->onEvent(e);
+    }
+};
+}  // namespace
+
+LAB_TEST(call_and_response_phrases) {
+    for (int mi = 0; mi < kMakamCount; ++mi) {
+        const Makam& m = kMakams[mi];
+        for (int u = 0; u < kUsulCount; ++u)
+            for (uint32_t seed = 1; seed < 6; ++seed) {
+                GenParams p;
+                p.form = 1;
+                p.range = 9;
+                p.density = 40 + int(seed * 11);
+                Phrase ph;
+                ph.cycles = 2 + int(seed % 3);
+                genPhrase(m, p, u, ph, seed * 31u + uint32_t(mi));
+                const int g = m.guclu < p.range ? m.guclu : p.range;
+                CHECK(phraseCallEnd(ph, u) == g);          // the call stops on the guclu (yarim karar)
+                CHECK(phraseLastDegree(ph, u) == 0);       // the response closes on the karar
+                for (int i = 0; i < phraseSteps(ph, u); ++i)
+                    if (ph.s[i].flags & kNoteOn) CHECK(inMakam(m, degreeComma(m, ph.s[i].deg)) || ph.s[i].deg == -1);
+            }
+    }
+}
+
+LAB_TEST(practice_intonation_shifts) {
+    auto idx = [](const char* n) {
+        for (int i = 0; i < kMakamCount; ++i)
+            if (std::strcmp(kMakams[i].name, n) == 0) return i;
+        return -1;
+    };
+    CHECK(practiceComma(idx("Saba"), 58) == 60);       // Hicaz up 2
+    CHECK(practiceComma(idx("Huzzam"), 67) == 68);     // Hisar up 1
+    CHECK(practiceComma(idx("Ussak"), 48) == 47);      // Segah down 1
+    CHECK(practiceComma(idx("Ussak"), 48 + 53) == 100);   // every octave
+    CHECK(practiceComma(idx("Rast"), 48) == 48);       // Rast's Segah as written
+    CHECK(practiceComma(idx("Segah"), 48) == 48);
+    // a practice pitch off the AEU grid sounds on the 53-comma grid
+    CHECK(!isAeuPitch(47));
+    CHECK_NEAR(aeuCents(47), tetCents(47), 1e-3);
+    // the engine plays it
+    Station st(false);
+    if (!st.ws) return;
+    st.ws->song().makam = idx("Ussak");
+    st.ws->song().intonation = 1;
+    CHECK(st.ws->engine().degreeToComma(1, 0) == 47);
+    st.ws->song().intonation = 0;
+    CHECK(st.ws->engine().degreeToComma(1, 0) == 48);
+}
+
+LAB_TEST(cut_modes_and_phrase_end_fills) {
+    Station st(false);
+    if (!st.ws) return;
+    Song& s = st.ws->song();
+    Engine& e = st.ws->engine();
+    for (int mode = 0; mode < kCutModes; ++mode) {
+        s.songMode = 0;
+        s.curSection = 0;
+        s.sec[0].brk = 1;
+        s.sec[0].cut = mode;
+        s.sec[0].fill = 100;
+        s.sec[0].chaos = 30;
+        st.ws->pullFields();
+        e.reset();
+        st.tr.beat = 0.0;
+        st.tr.startedThisBlock = true;
+        const int hits0 = e.st.sliceHit;
+        bool sawFill3 = false, sawFill1 = false;
+        float peak = 0.0f;
+        // 16 aksak cycles at 172 = 144 units * 3846 samples / 128 = ~4330 blocks
+        float l[lab::kBlock], r[lab::kBlock];
+        for (int b = 0; b < 4500; ++b) {
+            for (uint32_t i = 0; i < lab::kBlock; ++i) l[i] = r[i] = 0.0f;
+            st.shell.kitBlock(st.tr);
+            st.ws->render(st.tr, lab::AudioIn(), l, r);
+            st.tr.startedThisBlock = false;
+            st.tr.beat += st.tr.beatsPerSample * lab::kBlock;
+            for (uint32_t i = 0; i < lab::kBlock; ++i) {
+                CHECK(std::isfinite(l[i]));
+                peak = std::max(peak, std::fabs(l[i]));
+            }
+            if (e.st.fill == 3) sawFill3 = true;
+            if (e.st.fill == 1) sawFill1 = true;
+        }
+        std::fprintf(stderr, "  cut %s: %d hits, peak %.2f\n", kCutNames[mode], e.st.sliceHit - hits0, double(peak));
+        CHECK(e.st.sliceHit - hits0 > 60);
+        CHECK(e.st.cut == mode);
+        CHECK(sawFill1 && sawFill3);   // the 4th and the 16th cycle end got their tails
+        CHECK(peak > 0.05f && peak < 8.0f);
+    }
+}
+
+LAB_TEST(onset_slicer_finds_the_hits) {
+    Station st(false);
+    if (!st.ws) return;
+    // kit 1 (Sert Funk) has a hit on most 16ths; the onsets land near the hit grid
+    Kit k = st.ws->kit(1);
+    static float scratch[4096];
+    const int found = onsetSlices(k, scratch);
+    std::fprintf(stderr, "  onsets found %d\n", found);
+    CHECK(found >= 12);
+    CHECK(k.start[0] == 0);
+    for (int i = 1; i < kSlices; ++i) CHECK(k.start[i] > k.start[i - 1]);
+    const float sixteenth = 60.0f / k.bpm / 4.0f * 44100.0f;
+    int near = 0;
+    for (int i = 1; i < kSlices; ++i) {
+        const float q = float(k.start[i]) / sixteenth;
+        const float d = std::fabs(q - std::round(q)) * sixteenth;
+        if (d < 400.0f) ++near;   // within 9 ms of a 16th
+    }
+    CHECK(near >= 12);
+}
+
+LAB_TEST(dub_delay_types_stay_bounded) {
+    lab::Arena a;
+    static std::vector<uint8_t> mem(4u * 1024u * 1024u);
+    a.attach(mem.data(), uint32_t(mem.size()));
+    for (int type = 0; type < kDlyTypes; ++type) {
+        DubDelay d;
+        CHECK(d.init(a));
+        d.setType(type);
+        d.setTime(5000.0f);
+        d.setFeedback(0.95f);
+        float in[lab::kBlock] = {}, l[lab::kBlock], r[lab::kBlock];
+        float peak = 0.0f, late = 0.0f;
+        for (int b = 0; b < 3000; ++b) {
+            for (uint32_t i = 0; i < lab::kBlock; ++i) in[i] = (b < 4) ? 0.8f * std::sin(float(i) * 0.3f) : 0.0f;
+            const bool on = d.process(in, l, r);
+            for (uint32_t i = 0; i < lab::kBlock && on; ++i) {
+                peak = std::max(peak, std::max(std::fabs(l[i]), std::fabs(r[i])));
+                if (b > 2900) late = std::max(late, std::fabs(l[i]) + std::fabs(r[i]));
+            }
+        }
+        std::fprintf(stderr, "  delay %d: peak %.3f, late %.4f\n", type, double(peak), double(late));
+        CHECK(peak > 0.05f);
+        CHECK(peak < 2.0f);   // feedback 95 % never runs away
+    }
+}
+
+LAB_TEST(labkit_registry_sources_and_edits) {
+    Station st(false);
+    if (!st.ws) return;
+    MakamWs& ws = *st.ws;
+    lab::kit::Registry& R = st.shell.context().params();
+    Song& s = ws.song();
+    CHECK(R.count() >= 60);
+    CHECK(std::strcmp(st.shell.context().mod().macroName(0), "DUB") == 0);   // first-boot macros
+    st.shell.context().mod().clearRoutes();
+    // registration keeps the song's values (negative ints included)
+    CHECK(s.bp.octave == -3 && s.lp.octave == 0);
+    CHECK_NEAR(R.get(ws.paramOf(&s.bp.octave)), -3.0, 0.01);
+    // every page with values has params on it
+    lab::kit::ParamId ids[64];
+    CHECK(R.onPage(kPgSynth, ids, 64) >= 17);
+    CHECK(R.onPage(kPgMixer, ids, 64) >= 20);
+    // registry edits land in the song; song edits come back (sync)
+    const lab::kit::ParamId cut = ws.paramOf(&s.bp.cutoff);
+    CHECK(cut != lab::kit::kNoParam);
+    R.set(cut, 80.0f);
+    R.applyNow();
+    CHECK(s.bp.cutoff == 80);
+    s.bp.cutoff = 12;
+    R.sync();
+    CHECK_NEAR(R.get(cut), 12.0, 0.01);
+    // the makam / usul pickers are not modulation targets
+    CHECK(!R.modulatable(ws.paramOf(&s.makam)));
+    CHECK(!R.modulatable(ws.paramOf(&s.usul)));
+    // changing the makam from a Shell view regenerates the phrases in that makam
+    const lab::kit::ParamId mk = ws.paramOf(&s.makam);
+    R.set(mk, 4.0f);   // Saba
+    R.applyNow();
+    ws.navParamChanged(mk);
+    CHECK(s.makam == 4);
+    for (int p = 0; p < kPhrases; ++p) CHECK(phraseLastDegree(s.phr[p], s.usul) == 0);
+    // the sources
+    lab::kit::Mod& M = st.shell.context().mod();
+    for (const char* n : {"USUL", "DUM", "TEK", "SLICE", "ENERGY", "SEYIR", "SECTION", "FILL"}) CHECK(M.findSource(n) >= 0);
+    st.run(2000);
+    CHECK(ws.engine().srcEnergy > 0.0f);
+    // an LFO on the bass cutoff moves the field; the base stays
+    R.set(cut, 50.0f);
+    CHECK(M.route(lab::kit::kSrcLfo, cut, 0.5f) >= 0);
+    M.update(false);
+    int lo = 100, hi = 0;
+    for (int b = 0; b < 3000; ++b) {
+        st.run(1);
+        lo = std::min(lo, s.bp.cutoff);
+        hi = std::max(hi, s.bp.cutoff);
+    }
+    CHECK(hi - lo > 20);
+    CHECK_NEAR(R.get(cut), 50.0, 0.6);
+    M.clearRoutes();
+}
+
+LAB_TEST(scenes_morph_and_project_trailers) {
+    Station st;
+    if (!st.ws) return;
+    MakamWs& ws = *st.ws;
+    lab::kit::Registry& R = st.shell.context().params();
+    Song& s = ws.song();
+    st.shell.context().mod().clearRoutes();
+    const lab::kit::ParamId fb = ws.paramOf(&s.dlyFb), cut = ws.paramOf(&s.bp.cutoff);
+    R.set(fb, 10.0f);
+    R.set(cut, 20.0f);
+    ws.storeScene(0);
+    R.set(fb, 90.0f);
+    R.set(cut, 90.0f);
+    ws.storeScene(1);
+    s.morphCycles = 0;
+    ws.recallScene(0);   // a jump
+    R.applyNow();
+    CHECK(s.dlyFb == 10 && s.bp.cutoff == 20);
+    CHECK(!ws.morphing());
+    // the project file keeps the scenes and the routes
+    lab::kit::Mod& M = st.shell.context().mod();
+    M.route(lab::kit::kSrcLfo + 1, cut, 0.3f);
+    CHECK(ws.saveProject("Lab/MAKAM/Projects/SONG2.mkm"));
+    R.set(fb, 55.0f);
+    M.clearRoutes();
+    ws.storeScene(1);   // overwritten
+    CHECK(ws.loadProject("Lab/MAKAM/Projects/SONG2.mkm"));
+    CHECK(ws.sceneUsed(0) && ws.sceneUsed(1));
+    CHECK(M.findRoute(lab::kit::kSrcLfo + 1, cut) >= 0);
+    s.morphCycles = 0;
+    ws.recallScene(1);
+    R.applyNow();
+    CHECK(s.dlyFb == 90);
+    // a morph is gradual
+    s.morphCycles = 4;
+    ws.recallScene(0);
+    CHECK(ws.morphing());
+}
+
+LAB_TEST(real_tracker_keys_only) {
+    Station st(false);
+    if (!st.ws) return;
+    MakamWs& ws = *st.ws;
+    st.run(200);
+    // Aux, Help and the encoder push do nothing (they are not on the hardware)
+    st.press(lab::btn::F4);
+    const int seed = ws.song().gen.seed;
+    const int page = ws.page();
+    st.press(lab::btn::Aux);
+    st.press(lab::btn::Help);
+    st.press(lab::btn::EncPush);
+    CHECK(ws.page() == page);
+    CHECK(ws.song().gen.seed == seed);
+    // Insert is the page action (here: a new seyir phrase)
+    st.press(lab::btn::Insert);
+    CHECK(ws.song().gen.seed != seed);
+    // F1..F8 are the pages; Master and I.Param belong to LABKIT (never a MAKAM page change)
+    st.press(lab::btn::F3);
+    CHECK(ws.page() == kPgBreak);
+    st.press(lab::btn::Master);
+    st.press(lab::btn::InstrParams);
+    CHECK(ws.page() == kPgBreak);
+    // Song toggles the arrangement / loop
+    const int mode = ws.song().songMode;
+    st.press(lab::btn::Song);
+    CHECK(ws.song().songMode != mode);
+    // the File page: Insert on the browser entry opens the LABKIT browser only with a card
+    st.press(lab::btn::F8);
+    CHECK(ws.page() == kPgFile);
+    // Perform + pad recalls a scene, Perform + Shift + pad stores one
+    lab::Event e;
+    e.type = lab::Event::kPress;
+    e.id = lab::btn::Performance;
+    ws.onEvent(e);
+    e.type = lab::Event::kPadDown;
+    e.id = 3;
+    e.shift = true;
+    e.velocity = 100;
+    ws.onEvent(e);
+    CHECK(ws.sceneUsed(3));
+    e.type = lab::Event::kRelease;
+    e.id = lab::btn::Performance;
+    e.shift = false;
+    ws.onEvent(e);
 }

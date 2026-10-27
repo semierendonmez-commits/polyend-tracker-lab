@@ -252,7 +252,9 @@ Param& Registry::add(const char* key, const char* name, int* value) {
         bind_[p.id_].curve = uint8_t(Curve::kInt);
         bind_[p.id_].hi = float(value && *value > 1 ? *value : 1);
         bind_[p.id_].k = bind_[p.id_].hi;
-        writeNow(p.id_, toNorm(p.id_, regValue(p.id_)));
+        // Only the base: never write the field through this provisional 0..max range
+        // (a negative int, e.g. an octave of -3, would be clamped before range() runs).
+        base_[p.id_] = eff_[p.id_] = clamp01(toNorm(p.id_, regValue(p.id_)));
     }
     return p;
 }

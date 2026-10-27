@@ -47,6 +47,72 @@ enum FillStyle : int { kFillRolls, kFillStutter, kFillReverse, kFillDrop, kFillB
 extern const char* const kFillStyleNames[kFillStyles];
 extern const char* const kCutNames[kCutModes];
 
+// SVF with its coefficients cached at set() (lab::dsp::Svf divides every
+// sample); the same TPT structure, so the same sound.
+struct FastSvf {
+    float ic1 = 0, ic2 = 0, k = 1.4f, a1 = 0.9f, a2 = 0.09f, a3 = 0.009f;
+    float lp = 0, bp = 0, hp = 0;
+    void set(float hz, float q) {
+        hz = hz < 20.0f ? 20.0f : (hz > 16000.0f ? 16000.0f : hz);
+        const float x = 3.14159265f * hz * (1.0f / 44100.0f);
+        const float x2 = x * x;
+        const float g = x * (1.0f + x2 * (0.33333f + x2 * 0.13333f)) / (1.0f - x2 * 0.04f);   // tan(x)
+        k = 1.0f / (q < 0.5f ? 0.5f : q);
+        a1 = 1.0f / (1.0f + g * (g + k));
+        a2 = g * a1;
+        a3 = g * a2;
+    }
+    void process(float x) {
+        const float v3 = x - ic2;
+        const float v1 = a1 * ic1 + a2 * v3;
+        const float v2 = ic2 + a2 * ic1 + a3 * v3;
+        ic1 = 2.0f * v1 - ic1;
+        ic2 = 2.0f * v2 - ic2;
+        lp = v2;
+        bp = v1;
+        hp = x - k * v1 - v2;
+    }
+};
+
+// Linear ADSR (times in seconds) advanced at control rate: advance(n) moves
+// it n samples at once; the voices interpolate between the control points.
+struct CtlEnv {
+    enum Stage : uint8_t { kIdle, kAttack, kDecay, kSustain, kRelease };
+    Stage st = kIdle;
+    float v = 0.0f, a = 0.005f, d = 0.2f, s = 0.7f, r = 0.3f;
+    void gate(bool on) { st = on ? kAttack : (st == kIdle ? kIdle : kRelease); }
+    bool active() const { return st != kIdle; }
+    float advance(int n) {
+        float t = float(n);
+        while (t > 0.0f) {
+            switch (st) {
+                case kAttack: {
+                    const float rate = 1.0f / ((a > 0.0005f ? a : 0.0005f) * 44100.0f);
+                    const float need = (1.0f - v) / rate;
+                    if (need > t) { v += rate * t; t = 0.0f; } else { v = 1.0f; t -= need; st = kDecay; }
+                    break;
+                }
+                case kDecay: {
+                    const float rate = (1.0f - s) / ((d > 0.0005f ? d : 0.0005f) * 44100.0f);
+                    if (rate <= 0.0f || v <= s) { v = s; st = kSustain; break; }
+                    const float need = (v - s) / rate;
+                    if (need > t) { v -= rate * t; t = 0.0f; } else { v = s; t -= need; st = kSustain; }
+                    break;
+                }
+                case kRelease: {
+                    const float rate = 1.0f / ((r > 0.0005f ? r : 0.0005f) * 44100.0f);
+                    const float need = v / rate;
+                    if (need > t) { v -= rate * t; t = 0.0f; } else { v = 0.0f; t = 0.0f; st = kIdle; }
+                    break;
+                }
+                case kSustain: t = 0.0f; break;
+                default: v = 0.0f; t = 0.0f; break;
+            }
+        }
+        return v;
+    }
+};
+
 struct SliceVoice {
     const int16_t* data = nullptr;
     uint32_t frames = 0;
@@ -57,8 +123,9 @@ struct SliceVoice {
 
 struct BassVoice {
     lab::dsp::Osc o1, o2, o3;
-    lab::dsp::Svf f, f2, f3;
-    lab::dsp::Adsr amp;
+    FastSvf f, f2, f3;
+    CtlEnv amp;
+    float e = 0, de = 0;   // the envelope between control points
     float freq = 55, target = 55, glide = 0.999f, glide16 = 0.98f;
     float fenv = 0, lfo = 0, vel = 1;
     float pc = 0, pm = 0, fb = 0, subPh = 0, dive = 1;
@@ -68,8 +135,9 @@ struct BassVoice {
 struct LeadVoice {
     float freq = 220, target = 220, glideK = 0.0f, glide16 = 1.0f;
     float ph = 0, ph2 = 0, vibPh = 0, vibAmt = 0;
-    lab::dsp::Adsr amp;
-    lab::dsp::Svf f;
+    CtlEnv amp;
+    float e = 0, de = 0;
+    FastSvf f;
     float* ks = nullptr;            // Karplus-Strong line (kKsLen)
     float* ks2 = nullptr;
     uint32_t ksW = 0;
@@ -167,7 +235,7 @@ private:
     BassVoice bass_;
     LeadVoice lead_[kLeadVoices];
     int leadNext_ = 0;
-    lab::dsp::Svf brkF_;
+    FastSvf brkF_;
     lab::dsp::Rng rng_{0xA5A5A5u};
     float duck_ = 0;
     // per-block working buffers

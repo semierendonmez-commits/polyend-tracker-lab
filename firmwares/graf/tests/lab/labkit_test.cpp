@@ -225,6 +225,22 @@ void registerState(kit::Registry& P, State& s) {
 
 }  // namespace
 
+LAB_TEST(labkit_negative_int_survives_registration) {
+    Rig r;
+    int octave = -3, big = 12;
+    float freq = 440.0f;
+    kit::Registry& P = r.reg();
+    P.add("oct", "Octave", &octave).range(-4, 4);
+    P.add("big", "Big", &big).range(0, 24);
+    P.add("freq", "Freq", &freq).range(20.0f, 2000.0f);
+    CHECK(octave == -3);
+    CHECK(big == 12);
+    CHECK_NEAR(freq, 440.0, 0.01);
+    CHECK(P.get(P.find("oct")) == -3.0f);
+    P.nudge(P.find("oct"), -1);
+    CHECK(octave == -4);
+}
+
 LAB_TEST(labkit_registry_basics) {
     Rig r;
     State s;

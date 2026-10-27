@@ -165,11 +165,13 @@ void MakamWs::registerParams() {
 }
 
 // The song's fields were written directly (load, new song, generators, the
-// bench): make them the registry's base values -- also of modulated params,
-// whose fields the audio block would otherwise overwrite with the old base.
+// bench): make them the registry's base values. A modulated param's field
+// holds base + modulation, so it is skipped (its base comes from the
+// registry chunk of a project, or stays).
 void MakamWs::pullFields() {
     kit::Registry& P = ctx_->params();
     for (int i = 0; i < regCount_; ++i) {
+        if (P.meta(regId_[i]).mods) continue;
         const int v = *static_cast<const int*>(regPtr_[i]);
         if (int(P.get(regId_[i]) + (P.get(regId_[i]) < 0 ? -0.5f : 0.5f)) != v) P.set(regId_[i], float(v), false);
     }

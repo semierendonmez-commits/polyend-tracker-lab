@@ -178,7 +178,7 @@ struct PatchVoices {
 
 // A mixer strip: patch n (8 patches) or OUT n (Rack).
 struct MixStrip {
-    float level = 0.8f;
+    float level = 1.0f;
     float pan = 0.0f;
     int mute = 0;
 };

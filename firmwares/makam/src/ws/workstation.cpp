@@ -72,8 +72,17 @@ bool MakamWs::init(Context& c) {
     songDefaults(*song_);
     eng_.song = song_;
     eng_.kits = kits_;
-    // LABKIT: the registry, the sources, the browser, first-boot macros
-    registerParams();
+    // LABKIT: the registry, the sources, the browser, first-boot macros.
+    // Registry::add(int*) writes the field through the default 0..1 range
+    // before range() runs (a negative int such as the bass octave becomes 0):
+    // keep the song and put it back after the registration.
+    {
+        Song* keep = a.make<Song>();
+        if (keep) *keep = *song_;
+        registerParams();
+        if (keep) *song_ = *keep;
+        pullFields();
+    }
     c.browser().reserve(128, 4.0f);
     defaultMacros();
 
@@ -99,6 +108,7 @@ void MakamWs::slotPath(int slot, char* buf, int cap) const {
 
 bool MakamWs::saveProject(const char* path) {
     if (!ctx_ || !ctx_->fs) return false;
+    pullFields();   // fields written directly are the truth
     size_t n = songSave(*song_, fileBuf_, kFileMax);
     if (!n) return false;
     n += saveTrailers(fileBuf_ + n, kFileMax - n);
