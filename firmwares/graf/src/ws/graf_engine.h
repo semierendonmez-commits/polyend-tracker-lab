@@ -189,6 +189,7 @@ struct MixStrip {
 
 constexpr int kTaps = 8, kLanes = 4;
 constexpr int kPlaitsPool = 4;
+constexpr int32_t kPartTrainCost = 74000;   // PART with Type = trainlet (measured, GRAF_CAL)
 
 // A snapshot holds a whole patch state. Modules are keyed by where they sit
 // (patch * 48 + cell), so morphing matches modules by position.

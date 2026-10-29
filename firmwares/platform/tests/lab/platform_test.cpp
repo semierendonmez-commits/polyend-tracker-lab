@@ -1,8 +1,10 @@
 // PLATFORM host tests: the Lua heap, the Lua API, the voice engine's timing,
 // the .papp relocation (host side), the launcher, the crash guard and safe boot.
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -10,6 +12,7 @@
 
 #include "../mem_storage.h"
 #include "lab/lab.h"
+#include "lab/nav.h"
 #include "lab_test.h"
 #include "ws/engine.h"
 #include "ws/examples_data.h"
@@ -54,12 +57,14 @@ struct Rig {
         static uint32_t ms = 1000;
         for (int b = 0; b < blocks; ++b) {
             float l[lab::kBlock] = {}, r[lab::kBlock] = {};
+            shell.kitBlock(t);   // LABKIT: mod sources, routes, registry writes (as Shell::fill)
             ws->render(t, lab::AudioIn(), l, r);
             for (uint32_t i = 0; i < lab::kBlock; ++i) peak = std::fmax(peak, std::fmax(std::fabs(l[i]), std::fabs(r[i])));
             if (t.playing) t.beat += t.beatsPerSample * lab::kBlock;
             t.startedThisBlock = false;
             ms += 3;
             ws->update(ms);
+            shell.labkit().update(ms);
         }
         return peak;
     }
@@ -71,6 +76,21 @@ lab::Event press(uint8_t id, bool shift = false) {
     e.id = id;
     e.shift = shift;
     return e;
+}
+lab::Event release(uint8_t id, bool shift = false) {
+    lab::Event e = press(id, shift);
+    e.type = lab::Event::kRelease;
+    return e;
+}
+lab::Event hold(uint8_t id, bool shift = true) {
+    lab::Event e = press(id, shift);
+    e.type = lab::Event::kHold;
+    return e;
+}
+bool consoleHas(plat::LuaSession& l, const char* s) {
+    for (int i = 0; i < l.consoleCount(); ++i)
+        if (std::strstr(l.consoleLine(i), s)) return true;
+    return false;
 }
 
 }  // namespace
@@ -201,10 +221,19 @@ function pad(n, v, z) if z == 1 then engine.note(1, 48 + n, v / 127) else engine
     // key callback
     r.ws->onEvent(press(lab::btn::F3));
     CHECK(r.ws->lua().running());
-    // params saved on close, restored on the next open
+    // params live in the LABKIT registry ("lua.<id>"), saved per script on close
+    lab::kit::Registry& R = r.shell.labkit().reg;
+    const lab::kit::ParamId n = R.find("lua.n");
+    CHECK(R.valid(n));
+    if (R.valid(n)) R.set(n, 7.0f);
+    r.run(2);
     r.ws->closeSession(true);
     r.run(1);
-    CHECK(r.fs.files.count("Lab/PLATFORM/Data/api/params.txt") == 1);
+    CHECK(r.fs.files.count("Lab/PLATFORM/Data/api/labkit.lkc") == 1);
+    CHECK(!R.valid(R.find("lua.n")));   // gone with the session
+    CHECK(r.ws->openByName("api.lua"));
+    r.run(2);
+    CHECK(R.valid(R.find("lua.n")) && std::fabs(R.get(R.find("lua.n")) - 7.0f) < 0.01f);
 }
 
 LAB_TEST(platform_lua_clock_is_sample_accurate) {
@@ -432,10 +461,30 @@ LAB_TEST(platform_native_app_runs_from_the_card) {
     e.id = 2;
     r.ws->onEvent(e);
     CHECK(r.run(200) > 0.01f);
+    // LABKIT: the app's params (PlatHost::paramAdd), its page and mod source
+    lab::kit::Kit& K = r.shell.labkit();
+    const int base = int(r.ws->kitBaseParams());
+    CHECK(K.reg.count() == base + 4);
+    const lab::kit::ParamId cut = K.reg.find("drone.cutoff");
+    CHECK(K.reg.valid(cut) && K.reg.curve(cut) == lab::kit::Curve::kExp);
+    CHECK(K.nav.pageCount() == 3 && !std::strcmp(K.nav.pageName(0), "DRONE"));
+    CHECK(K.mod.findSource("DRONE") >= 0);
+    CHECK(K.mod.route(K.mod.findSource("LFO1"), cut, 0.4f) >= 0);
+    K.reg.set(cut, 3000.0f);
+    CHECK(r.run(20) > 0.0f);
     r.ws->closeSession(true);
     r.run(1);
     CHECK(r.fs.files.count("Lab/PLATFORM/Data/drone/state.bin") == 1);   // save() on close
+    CHECK(r.fs.files.count("Lab/PLATFORM/Data/drone/labkit.lkc") == 1);  // its params, routes, macros
     CHECK(r.ws->mode() == plat::Platform::kLauncher);
+    CHECK(K.reg.count() == base && K.mod.routeCount() == 0 && K.mod.findSource("DRONE") < 0);
+    r.run(4);   // the registry no longer writes into the unloaded app (ASan)
+    CHECK(r.ws->openByName("drone.so"));
+    r.run(2);
+    CHECK(K.reg.valid(K.reg.find("drone.cutoff")) && std::fabs(K.reg.get(K.reg.find("drone.cutoff")) - 3000.0f) < 2.0f);
+    CHECK(K.mod.routeCount() == 1);
+    r.ws->closeSession(true);
+    r.run(1);
 }
 
 // ---- crash guard, safe boot -----------------------------------------------------------------
@@ -501,20 +550,189 @@ LAB_TEST(platform_crash_guard_and_safe_boot) {
 }
 
 LAB_TEST(platform_exit_combos_return_to_the_launcher) {
+    // Real Tracker keys only: Shift + F8 held = launcher, Shift + F7 held = LOG.
+    // A tap of either still reaches the script (on the release).
     Rig r;
-    r.addScript("a.lua", "function init() end\nfunction key(n, z) end\n");
+    r.addScript("a.lua", "function init() end\nfunction key(n, z, s) print('key', n, z) end\n");
     r.boot();
     if (!r.ok) return;
     r.run(2);
     CHECK(r.ws->openByName("a.lua"));
-    r.ws->onEvent(press(lab::btn::Help, true));   // Shift + Help
+    plat::LuaSession& L = r.ws->lua();
+    r.ws->onEvent(press(lab::btn::F8, true));
+    CHECK(!consoleHas(L, "key F8 1"));   // held back until the release / hold
+    r.ws->onEvent(release(lab::btn::F8, true));
+    CHECK(consoleHas(L, "key F8 1") && consoleHas(L, "key F8 0"));
+    CHECK(r.ws->mode() == plat::Platform::kScriptRun);
+    // held: back to the launcher, the release is swallowed
+    r.ws->onEvent(press(lab::btn::F8, true));
+    r.ws->onEvent(hold(lab::btn::F8));
     r.run(2);
     CHECK(r.ws->mode() == plat::Platform::kLauncher);
+    r.ws->onEvent(release(lab::btn::F8, true));
+    CHECK(r.ws->mode() == plat::Platform::kLauncher);
+    // Shift + F7 held: the LOG view over the running script; F8 closes it
     CHECK(r.ws->openByName("a.lua"));
-    lab::Event aux = press(lab::btn::Aux);
-    aux.ms = 0;
-    r.ws->onEvent(aux);
-    r.run(400);   // hold 1.2 s
+    r.ws->onEvent(press(lab::btn::F7, true));
+    r.ws->onEvent(hold(lab::btn::F7));
+    r.ws->onEvent(release(lab::btn::F7, true));
+    CHECK(r.ws->logOpen());
+    r.ws->onEvent(press(lab::btn::Up));   // scrolls, does not reach the script
+    CHECK(!consoleHas(L, "key UP"));
+    r.ws->onEvent(press(lab::btn::F8));
+    CHECK(!r.ws->logOpen());
+    CHECK(r.ws->mode() == plat::Platform::kScriptRun);
+    // keys that are not on the Tracker do nothing (no callback, no exit)
+    r.ws->onEvent(press(lab::btn::Aux));
+    r.ws->onEvent(press(lab::btn::Help, true));
+    r.ws->onEvent(press(lab::btn::EncPush));
+    r.run(400);
+    CHECK(r.ws->mode() == plat::Platform::kScriptRun);
+    CHECK(!consoleHas(L, "key ?"));
+}
+
+// No source uses a key the original Tracker does not have (Aux 0x22, Help
+// 0x2b, the encoder push 0x21): PLATFORM, the SDK examples, the station glue,
+// the example scripts and the manual.
+LAB_TEST(platform_uses_only_real_tracker_keys) {
+    namespace fs = std::filesystem;
+    // a token counts when the next character cannot continue an identifier
+    auto uses = [](const std::string& text, const char* tok) {
+        for (size_t at = text.find(tok); at != std::string::npos; at = text.find(tok, at + 1)) {
+            const char c = at + std::strlen(tok) < text.size() ? text[at + std::strlen(tok)] : ' ';
+            if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) return true;
+        }
+        return false;
+    };
+    static const char* const kCpp[] = {"btn::Aux", "btn::Help", "btn::EncPush", "PLAT_BTN_AUX", "PLAT_BTN_HELP",
+                                       "PLAT_BTN_ENCPUSH"};
+    static const char* const kLua[] = {"\"ENC\"", "\"AUX\"", "\"HELP\"", "'ENC'", "'AUX'", "'HELP'"};
+    int files = 0;
+    for (const char* dir : {"../src/ws", "../sdk/examples", "../sdk/station", "../sdk/include", "../examples"}) {
+        if (!fs::exists(dir)) continue;
+        for (const auto& f : fs::recursive_directory_iterator(dir)) {
+            if (!f.is_regular_file()) continue;
+            const std::string p = f.path().string(), ext = f.path().extension().string();
+            if (ext != ".cpp" && ext != ".h" && ext != ".hpp" && ext != ".lua") continue;
+            const std::string text = slurp(p);
+            ++files;
+            bool hit = false;
+            for (const char* t : kCpp) hit = hit || uses(text, t);
+            if (ext == ".lua")
+                for (const char* t : kLua) hit = hit || text.find(t) != std::string::npos;
+            if (hit) std::fprintf(stderr, "  %s uses a key the Tracker does not have\n", p.c_str());
+            CHECK(!hit);
+        }
+    }
+    CHECK(files > 20);
+    // the Lua key table has no such names either
+    CHECK(!std::strcmp(plat::keyName(lab::btn::Aux), "?"));
+    CHECK(!std::strcmp(plat::keyName(lab::btn::Help), "?"));
+    CHECK(!std::strcmp(plat::keyName(lab::btn::EncPush), "?"));
+    CHECK(!std::strcmp(plat::keyName(lab::btn::Insert), "INSERT"));
+}
+
+// LABKIT v2 in scripts: params:add{...} in the shared registry with pages,
+// mod.source / mod.route / macros, saved per script, and the kit put back as
+// it was when the session closes.
+LAB_TEST(platform_lua_params_and_mod_live_in_labkit) {
+    Rig r;
+    r.addScript("k.lua", R"(
+function init()
+  params:add{id = "cut", name = "Cutoff", min = 100, max = 8000, default = 1000, unit = "Hz", page = "FILTER",
+             action = function(v) lastCut = v end}
+  params:add{id = "res", name = "Reso", min = 0, max = 1, default = 0.2, page = "FILTER"}
+  params:add{id = "mode", name = "Mode", kind = "option", options = {"a", "b", "c"}, default = 2, page = "SEQ"}
+  env = mod.source("ENV")
+  mod.route("LFO1", "cut", 0.5)
+  mod.macro_target(1, "res", 1)
+  mod.macro_name(1, "OPEN")
+end
+function redraw() end
+)");
+    r.boot();
+    if (!r.ok) return;
+    r.run(2);
+    lab::kit::Kit& K = r.shell.labkit();
+    CHECK(K.active);   // the launcher has a page: the navigation is on from boot
+    const int base = K.reg.count();
+    CHECK(int(r.ws->kitBaseParams()) == base);
+    CHECK(r.ws->openByName("k.lua"));
+    if (r.ws->mode() != plat::Platform::kScriptRun) {
+        std::fprintf(stderr, "  error: %s\n", r.ws->lua().error());
+        return;
+    }
+    r.run(4);
+    CHECK(K.active);
+    CHECK(K.reg.count() == base + 3);
+    const lab::kit::ParamId cut = K.reg.find("lua.cut"), res = K.reg.find("lua.res"), mode = K.reg.find("lua.mode");
+    CHECK(K.reg.valid(cut) && K.reg.valid(res) && K.reg.valid(mode));
+    CHECK(K.reg.page(cut) == 0 && K.reg.page(mode) == 1);
+    CHECK(K.nav.pageCount() == 4);   // FILTER, SEQ, MACRO, MOD
+    CHECK(!std::strcmp(K.nav.pageName(0), "FILTER") && !std::strcmp(K.nav.pageName(1), "SEQ"));
+    CHECK(K.mod.routeCount() == 2);
+    CHECK(K.mod.findSource("ENV") >= 0);
+    CHECK(!std::strcmp(K.mod.macroName(0), "OPEN"));
+    CHECK(K.reg.enumCount(mode) == 3 && std::fabs(K.reg.get(mode) - 1.0f) < 0.01f);   // Lua 2 = registry 1
+    // a change from the Shell side (pads / MAP) reaches the script's action
+    K.reg.set(cut, 2000.0f);
+    r.run(8);
+    // (actions get the effective value: base + the LFO route)
+    CHECK(std::fabs(K.reg.get(cut) - 2000.0f) < 0.5f);
+    r.ws->lua().eval("math.abs(lastCut - 1000) > 50");
+    CHECK(consoleHas(r.ws->lua(), "true"));
+    // the REPL: a param id alone shows it, id(v) sets it
+    CHECK(r.ws->lua().eval("res(0.5)"));
+    r.run(2);
+    CHECK(std::fabs(K.reg.get(res) - 0.5f) < 0.01f);
+    CHECK(consoleHas(r.ws->lua(), "res = "));
+    // close: saved per script, the kit back to the launcher's state
+    r.ws->closeSession(true);
+    r.run(2);
+    CHECK(r.fs.files.count("Lab/PLATFORM/Data/k/labkit.lkc") == 1);
+    CHECK(K.reg.count() == base);
+    CHECK(K.mod.routeCount() == 0);
+    CHECK(K.mod.findSource("ENV") < 0);
+    CHECK(std::strcmp(K.mod.macroName(0), "OPEN") != 0);
+    CHECK(K.nav.pageCount() == 3 && !std::strcmp(K.nav.pageName(0), "LAUNCHER"));
+    for (int b = 0; b < 4; ++b) r.run(1);   // no write into the freed session memory (ASan)
+    // reopen: values, routes and macro names come back from labkit.lkc
+    CHECK(r.ws->openByName("k.lua"));
+    r.run(2);
+    const lab::kit::ParamId cut2 = K.reg.find("lua.cut");
+    CHECK(K.reg.valid(cut2) && std::fabs(K.reg.get(cut2) - 2000.0f) < 1.0f);
+    CHECK(K.mod.routeCount() == 2);
+    CHECK(!std::strcmp(K.mod.macroName(0), "OPEN"));
+    r.ws->closeSession(true);
+    r.run(1);
+}
+
+// The crash-safe runner: an error in a callback is logged and the script keeps
+// running; more than kMaxErrors within kErrorWindowMs stop it (error page).
+LAB_TEST(platform_crash_safe_runner) {
+    Rig r;
+    r.addScript("c.lua", "function init() end\nfunction key(n, z) if z == 1 then error('boom ' .. n) end end\n");
+    r.boot();
+    if (!r.ok) return;
+    r.run(2);
+    CHECK(r.ws->openByName("c.lua"));
+    for (int i = 0; i < 3; ++i) r.ws->onEvent(press(lab::btn::Up));
+    r.run(2);
+    CHECK(r.ws->mode() == plat::Platform::kScriptRun);
+    CHECK(r.ws->lua().errorsTotal() == 3);
+    CHECK(std::strstr(r.ws->lua().lastError(), "boom UP") != nullptr);
+    CHECK(consoleHas(r.ws->lua(), "boom UP"));
+    for (int i = 0; i < 3; ++i) r.ws->onEvent(press(lab::btn::Down));
+    r.run(2);
+    CHECK(r.ws->mode() == plat::Platform::kError);
+    CHECK(std::strstr(r.ws->lua().error(), "boom DOWN") != nullptr);
+    // the error page: F1 shows the LOG, F8 the launcher
+    r.ws->onEvent(press(lab::btn::F1));
+    CHECK(r.ws->logOpen());
+    r.ws->onEvent(press(lab::btn::F8));
+    CHECK(!r.ws->logOpen());
+    r.ws->onEvent(press(lab::btn::F8));
+    r.run(2);
     CHECK(r.ws->mode() == plat::Platform::kLauncher);
 }
 

@@ -267,7 +267,7 @@ void Graf::editKnob(int slot, int p, int delta, bool fine) {
         const float v = clampf(m.v[p] + float(delta), pd.min, mx);
         eng_.setParamK(slot, p, Engine::unmapParam(pd, v));
         if (m.type == kMidi && p == 0) eng_.rebuild();
-        if (m.type == kPlts && p == 0 && eng_.lastError()[0] && Engine::unmapParam(pd, v) != m.k[p]) toastErr();
+        if ((m.type == kPlts || m.type == kPart) && p == 0 && eng_.lastError()[0] && Engine::unmapParam(pd, v) != m.k[p]) toastErr();
     } else {
         eng_.setParamK(slot, p, m.k[p] + float(delta) * (fine ? 0.002f : 0.01f));
     }

@@ -80,7 +80,7 @@ static_assert(sizeof kMainKnob == kTypeCount, "a main knob per type");
 
 bool noModParam(int type, int p) {
     const char* n = def(type).p[p].name;
-    if (type == kPlts && p == 0) return true;   // the model (CPU)
+    if ((type == kPlts || type == kPart) && p == 0) return true;   // model / type: they set the CPU cost
     return !std::strcmp(n, "Sample") || !std::strcmp(n, "Voice") || !std::strcmp(n, "MIDI out") ||
            !std::strcmp(n, "Stem") || !std::strcmp(n, "Seed");
 }

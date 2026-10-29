@@ -34,6 +34,12 @@ public:
     virtual int settings(PlatSetting* rows, int cap) { (void)rows; (void)cap; return 0; }
     virtual void save() {}
     virtual void close() {}
+    // LABKIT navigation (optional): pages for the MAP / PARAM pads / HELP
+    virtual int navPages(PlatPage* out, int cap) { (void)out; (void)cap; return 0; }
+    virtual int navPage() { return -1; }
+    virtual void navGoto(int page) { (void)page; }
+    virtual void navFocus(int param) { (void)param; }
+    virtual void navParamChanged(int param) { (void)param; }
 
     // ---- helpers ----
     template <class T> T* alloc(uint32_t n = 1) {
@@ -49,6 +55,20 @@ public:
     void toast(const char* m) const { host->toast(host->ctx, m); }
     void log(const char* m) const { host->log(host->ctx, m); }
     uint32_t millis() const { return host->millis(host->ctx); }
+    // LABKIT: a parameter in the shared registry (PARAM pads, MAP, macros, mod
+    // routes, MIDI learn, saved per app). *value gets base + modulation once
+    // per audio block before render(). Returns the id (< 0: none).
+    int param(const char* key, const char* name, float* value, float lo, float hi, float def, const char* unit = nullptr,
+              int page = 0, uint32_t flags = 0) const {
+        return host->paramAdd ? host->paramAdd(host->ctx, key, name, value, lo, hi, def, unit, page, flags) : -1;
+    }
+    float paramGet(int id, bool effective = false) const { return host->paramGet ? host->paramGet(host->ctx, id, effective) : 0.0f; }
+    void paramSet(int id, float v) const {
+        if (host->paramSet && id >= 0) host->paramSet(host->ctx, id, v);
+    }
+    int modSource(const char* name, const float* value, bool bipolar = false) const {
+        return host->modSource ? host->modSource(host->ctx, name, value, bipolar) : -1;
+    }
 };
 
 // Adapter: a static App object -> the PlatApp table.
@@ -74,6 +94,11 @@ struct AppGlue {
     static int settings(void*, PlatSetting* rows, int cap) { return obj().settings(rows, cap); }
     static void save(void*) { obj().save(); }
     static void close(void*) { obj().close(); }
+    static int navPages(void*, PlatPage* out, int cap) { return obj().navPages(out, cap); }
+    static int navPage(void*) { return obj().navPage(); }
+    static void navGoto(void*, int p) { obj().navGoto(p); }
+    static void navFocus(void*, int id) { obj().navFocus(id); }
+    static void navParamChanged(void*, int id) { obj().navParamChanged(id); }
     static const PlatApp* table(const char* name, const char* tagline, const uint32_t theme[8], uint32_t introMs) {
         static PlatApp a;
         a.abi = PLAT_ABI_VERSION;
@@ -95,6 +120,11 @@ struct AppGlue {
         a.settings = settings;
         a.save = save;
         a.close = close;
+        a.navPages = navPages;
+        a.navPage = navPage;
+        a.navGoto = navGoto;
+        a.navFocus = navFocus;
+        a.navParamChanged = navParamChanged;
         return &a;
     }
 };

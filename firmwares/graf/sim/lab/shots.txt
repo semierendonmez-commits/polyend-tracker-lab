@@ -6,18 +6,36 @@ wait 1800
 tap Play
 wait 1500
 panelshot docs/screenshots/graph.png
+# the pad gesture: hold SEQ, tap ADSR (the cable it already has is shown)
+pad 0 down
+pad 14 tap
+wait 100
+panelshot docs/screenshots/graph-gesture.png
+pad 0 up
 tap F2
 pad 2 down
+enc 2
 wait 50
 panelshot docs/screenshots/matrix.png
+enc -2
 pad 2 up
 tap F1
+pad 2 tap
+tap F3
+wait 300
+panelshot docs/screenshots/module-vco.png
+tap F1
+pad 0 tap
 tap F3
 wait 300
 panelshot docs/screenshots/module-seq.png
 tap F4
-pad 47 tap
+pad 0 tap
+pad 18 tap
 panelshot docs/screenshots/add.png
+pad 7 tap
+pad 13 tap
+panelshot docs/screenshots/add-templates.png
 tap F5
 pad 11 tap
 wait 2500
@@ -29,8 +47,21 @@ panelshot docs/screenshots/play.png
 pad 40 up
 tap F7
 panelshot docs/screenshots/file.png
+# LABKIT: MAP (Master) and MOD (Shift + Master)
+tap F1
+tap Master
+wait 300
+panelshot docs/screenshots/map.png
+tap Master
+press Shift
+tap Master
+release Shift
+wait 300
+panelshot docs/screenshots/mod.png
+tap F8
 tap Play
-# RETICULUM demo, its macro module page
+# RETICULUM demo and its macro module
+tap F7
 pad 37 tap
 tap Insert
 tap Play
@@ -41,6 +72,39 @@ pad 2 tap
 tap F3
 wait 500
 panelshot docs/screenshots/module-rete.png
+tap Play
+# Resonators: Plaits, RESO, EXCT
+tap F7
+pad 42 tap
+tap Insert
+tap Play
+wait 2500
+tap F1
+panelshot docs/screenshots/graph-resonators.png
+pad 36 tap
+tap F3
+wait 300
+panelshot docs/screenshots/module-plts.png
+tap F1
+pad 2 tap
+tap F3
+wait 300
+panelshot docs/screenshots/module-reso.png
+tap Play
+# Acid net: ACID, FLTR, NET, MG, MGAT (Perform)
+tap F7
+pad 43 tap
+tap Insert
+tap Play
+press Perform
+wait 2500
+tap F1
+panelshot docs/screenshots/graph-acid.png
+release Perform
+pad 15 tap
+tap F3
+wait 300
+panelshot docs/screenshots/module-net.png
 tap Play
 # 8 patches demo
 tap F7

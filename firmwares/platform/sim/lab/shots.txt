@@ -1,13 +1,18 @@
 # PLATFORM screenshots for MANUAL.md (make lab-shots). Card from `make sim-card`
-# (stations installed from /Firmware/Apps at boot). Launcher order: 0-5 stations
-# (BULUT DATAMATICS FLIPPER GRAF KONSOL MAKAM), 6 Drone, 7 StepSeq, 8 Arp, 9 Broken,
-# 10 Drift, 11 Euclid, 12 Hello, 13 Spin, 14 Steps.
+# (stations installed from /Firmware/Apps at boot). Launcher order: 0-6 stations
+# (BULUT DATAMATICS FLIPPER GRAF KONSOL MAKAM TILT), 7 Drone, 8 StepSeq, 9 Arp,
+# 10 Broken, 11 Datum, 12 Drift, 13 Euclid, 14 Hello, 15 Pinball, 16 Seyir,
+# 17 Spin, 18 Steps. Back to the launcher: Shift + F8 held.
 wait 1500
 panelshot docs/screenshots/intro.png
 wait 2000
 panelshot docs/screenshots/launcher.png
+tap F3
+wait 300
+panelshot docs/screenshots/launcher-preview.png
+tap F3
 # Hello
-pad 12 tap
+pad 14 tap
 wait 400
 pad 20 down
 pad 30 down
@@ -15,39 +20,65 @@ wait 500
 panelshot docs/screenshots/script-hello.png
 pad 20 up
 pad 30 up
-hold Aux 1200
+# its params on the PARAM pads, the MAP and the MOD page (LABKIT)
+tap I.Param
+wait 300
+panelshot docs/screenshots/params.png
+tap I.Param
+tap Master
+wait 300
+panelshot docs/screenshots/map.png
+tap Master
+wait 200
+press Shift
+tap Master
+release Shift
+wait 300
+panelshot docs/screenshots/mod.png
+press Shift
+tap Master
+release Shift
+wait 200
+# the LOG view
+press Shift
+hold F7 700
+release Shift
+wait 300
+panelshot docs/screenshots/log.png
+tap F8
+press Shift
+hold F8 700
+release Shift
 wait 300
 # Steps, playing
-pad 14 tap
+pad 18 tap
 wait 300
 tap Play
 wait 2200
 panelshot docs/screenshots/script-steps.png
-press Shift
-tap Aux
-release Shift
-wait 300
-panelshot docs/screenshots/params.png
-press Shift
-tap Aux
-release Shift
 tap Play
-hold Aux 1200
+press Shift
+hold F8 700
+release Shift
 wait 300
 # Euclid
-pad 11 tap
+pad 13 tap
 wait 2500
 panelshot docs/screenshots/script-euclid.png
-hold Aux 1200
+press Shift
+hold F8 700
+release Shift
 wait 300
 # Drift
-pad 10 tap
+pad 12 tap
 wait 9000
 panelshot docs/screenshots/script-drift.png
-hold Aux 1200
+press Shift
+hold F8 700
+release Shift
 wait 300
 # Arp
-pad 8 tap
+pad 9 tap
 wait 300
 pad 24 down
 pad 28 down
@@ -57,30 +88,58 @@ panelshot docs/screenshots/script-arp.png
 pad 24 up
 pad 28 up
 pad 31 up
-hold Aux 1200
+press Shift
+hold F8 700
+release Shift
+wait 300
+# Pinball
+pad 15 tap
+wait 4000
+panelshot docs/screenshots/script-pinball.png
+press Shift
+hold F8 700
+release Shift
+wait 300
+# Datum
+pad 11 tap
+wait 3000
+panelshot docs/screenshots/script-datum.png
+press Shift
+hold F8 700
+release Shift
+wait 300
+# Seyir
+pad 16 tap
+wait 6000
+panelshot docs/screenshots/script-seyir.png
+press Shift
+hold F8 700
+release Shift
 wait 300
 # error page
-pad 9 tap
+pad 10 tap
 wait 2500
 panelshot docs/screenshots/error.png
 tap F8
 wait 300
 # native apps (SDK examples)
-pad 6 tap
+pad 7 tap
 wait 300
 pad 3 tap
 wait 1500
 panelshot docs/screenshots/app-drone.png
-hold Aux 1200
+press Shift
+hold F8 700
+release Shift
 wait 300
-pad 7 tap
+pad 8 tap
 wait 300
 tap Play
 wait 1800
 panelshot docs/screenshots/app-stepseq.png
 tap Play
 press Shift
-tap Help
+hold F8 700
 release Shift
 wait 300
 # station BULUT (QUANTA on cloud 3)
@@ -98,9 +157,9 @@ pad 31 up
 panelshot docs/screenshots/station-bulut.png
 tap Play
 press Shift
-tap Help
+hold F8 700
 release Shift
-wait 500
+wait 300
 # station DATAMATICS
 pad 1 tap
 wait 2000
@@ -113,9 +172,9 @@ pad 40 up
 panelshot docs/screenshots/station-datamatics.png
 tap Play
 press Shift
-tap Help
+hold F8 700
 release Shift
-wait 500
+wait 300
 # station FLIPPER
 pad 2 tap
 wait 2000
@@ -128,9 +187,9 @@ pad 40 up
 panelshot docs/screenshots/station-flipper.png
 tap Play
 press Shift
-tap Help
+hold F8 700
 release Shift
-wait 500
+wait 300
 # station GRAF
 pad 3 tap
 wait 2000
@@ -143,9 +202,9 @@ pad 40 up
 panelshot docs/screenshots/station-graf.png
 tap Play
 press Shift
-tap Help
+hold F8 700
 release Shift
-wait 500
+wait 300
 # station KONSOL
 pad 4 tap
 wait 2000
@@ -158,9 +217,9 @@ pad 40 up
 panelshot docs/screenshots/station-konsol.png
 tap Play
 press Shift
-tap Help
+hold F8 700
 release Shift
-wait 500
+wait 300
 # station MAKAM
 pad 5 tap
 wait 2000
@@ -173,6 +232,21 @@ pad 40 up
 panelshot docs/screenshots/station-makam.png
 tap Play
 press Shift
-tap Help
+hold F8 700
 release Shift
-wait 500
+wait 300
+# station TILT
+pad 6 tap
+wait 2000
+tap Play
+pad 13 down
+pad 40 down
+wait 3000
+pad 13 up
+pad 40 up
+panelshot docs/screenshots/station-tilt.png
+tap Play
+press Shift
+hold F8 700
+release Shift
+wait 300

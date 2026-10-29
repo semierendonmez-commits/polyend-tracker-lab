@@ -116,14 +116,14 @@ void Engine::setParamK(int slot, int p, float k) {
     const ModDef& d = def(m.type);
     if (p < 0 || p >= d.nParam) return;
     k = clampf(k, 0.0f, 1.0f);
-    if (m.type == kPlts && p == 0 && m.used) {   // a model change must fit the CPU budget
+    if ((m.type == kPlts || m.type == kPart) && p == 0 && m.used) {   // a model / type change must fit the budget
         const int32_t was = modCost(slot);
         const float old = m.k[0];
         m.k[0] = k;
         const int32_t now = modCost(slot);
         m.k[0] = old;
         if (now > was && cpuCost() - was + now > kCpuBudget) {
-            err_ = "CPU budget full for that model";
+            err_ = m.type == kPlts ? "CPU budget full for that model" : "CPU budget full for that type";
             return;
         }
     }
@@ -146,7 +146,14 @@ void Engine::refresh(int slot) {
 void Engine::resetParams(int slot) {
     Module& m = mods_[slot];
     const ModDef& d = def(m.type);
+    const float keep = m.k[0];
     for (int p = 0; p < d.nParam; ++p) m.k[p] = unmapParam(d.p[p], d.p[p].def);
+    if (m.type == kPlts || m.type == kPart) {   // the default model / type only when it fits
+        const float want = m.k[0];
+        m.k[0] = keep;
+        refresh(slot);
+        setParamK(slot, 0, want);
+    }
     refresh(slot);
 }
 
@@ -159,7 +166,7 @@ void Engine::randomize(int slot, Rand& r) {
         if (!std::strcmp(n, "Level") || !std::strcmp(n, "MIDI out") || !std::strcmp(n, "Voice") ||
             !std::strcmp(n, "Sample") || !std::strcmp(n, "Stem") || !std::strcmp(n, "Freeze"))
             continue;
-        if (m.type == kPlts && p == 0) continue;   // the model (CPU)
+        if ((m.type == kPlts || m.type == kPart) && p == 0) continue;   // model / type (CPU)
         m.k[p] = clampf(m.k[p] + r.bi() * 0.35f, 0.0f, 1.0f);
     }
     refresh(slot);
@@ -202,6 +209,7 @@ int32_t Engine::modCost(int slot, bool allOuts) const {
     const Module& m = mods_[slot];
     const ModDef& d = def(m.type);
     if (m.type == kPlts) return plaitsCost(int(mapParam(d.p[0], m.k[0])));
+    if (m.type == kPart) return int(mapParam(d.p[0], m.k[0])) == 3 ? kPartTrainCost : d.cost;   // trainlets: dearer
     if (m.type != kVco && m.type != kNoise) return d.cost;
     uint8_t used = 0;
     bool fm = false;
@@ -258,7 +266,7 @@ int Engine::addAt(int slot, int type, int patch, int cell) {
         return -1;
     }
     const ModDef& d = def(type);
-    if (!fits(d.cost)) {
+    if (!fits(type == kPlts ? plaitsCost(int(d.p[0].def)) : d.cost)) {   // Plaits: its default model
         err_ = "CPU budget full";
         return -1;
     }

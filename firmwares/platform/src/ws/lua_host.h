@@ -85,6 +85,7 @@ public:
     int pageOf(const char* name);               // find or create (-1 when full)
     // REPL: evaluate one line in the script's state; the result is printed
     bool eval(const char* line);
+    void clearConsole();
     // the crash-safe runner: callback errors so far, the latest one
     int errorsTotal() const { return errorsTotal_; }
     const char* lastError() const { return lastError_; }

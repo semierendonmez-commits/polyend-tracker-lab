@@ -263,7 +263,7 @@ papp-qemu: $(BENCH_OUT)/papp_qemu.elf
 # PLATFORM: hosted bench -- every station (build/stations/*.papp, built by
 # tools/build_stations.sh) inside PLATFORM under QEMU, with its own bench
 # scenarios (tests/papp/hosted_bench.cpp). Output: ../build/perf/lab_hosted.txt.
-STATIONS ?= bulut datamatics flipper graf konsol makam
+STATIONS ?= konsol bulut datamatics makam tilt flipper graf
 HOSTED_SRCS := papp/hosted_bench.cpp $(LAB_SRCS) $(SRC)/core/formats/wav.cpp $(SRC)/core/formats/format_common.cpp \
                $(SRC)/core/fmath.cpp
 $(BENCH_OUT)/hosted_bench.elf: $(HOSTED_SRCS) $(LAB_DEPS) bench_m4/startup.c bench_m4/mps2.ld $(SRC)/hal/fast_mem.c

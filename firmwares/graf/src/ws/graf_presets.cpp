@@ -229,14 +229,14 @@ void Graf::loadDemo(int i) {
             }
             break;
         }
-        case 6: {   // resonators: Euclidean strikes an exciter into a Rings-style resonator; Plaits chords pad
+        case 6: {   // resonators: Euclidean strikes an exciter into a Rings-style resonator; Plaits chiptune chords
             const int clk = b.add(kClk, 0, {4});
             const int eu = b.add(kEucl, 12, {16, 7, 0, 4, 0.3f});
             const int tur = b.add(kTuring, 24, {0.12f, 8, 6, 1.5f, 0, 4});
             const int ex = b.add(kExct, 1, {0.0f, 0.5f, 0.15f, 0.4f, 0.9f, 0.6f, 0.05f, 0.8f});
             const int rs = b.add(kReso, 2, {0, -1, 0, 0.25f, 0.6f, 0.6f, 0.3f, 0.4f, 0.8f});
             const int lfo = b.add(kLfo, 37, {0.05f});
-            const int pl = b.add(kPlts, 36, {14, -1, 0, 0.4f, 0.5f, 0.5f, 0.7f, 0.5f, 0.45f});
+            const int pl = b.add(kPlts, 36, {7, -1, 0, 0.4f, 0.5f, 0.5f, 0.7f, 0.5f, 0.45f});
             const int mx = b.add(kMix, 3, {0.9f, 0.6f, 0.0f, 0.0f, 1.0f});
             const int vb = b.add(kVerb, 4, {0.85f, 0.4f, 0.02f, 0.4f});
             const int out = b.add(kOut, 5, {0.8f});
@@ -262,28 +262,22 @@ void Graf::loadDemo(int i) {
             const int bern = b.add(kBern, 12, {0.3f, 1});
             const int eu = b.add(kEucl, 24, {16, 4, 0, 4});
             const int ki = b.add(kFltr, 25, {0, 0.25f, 0.3f, 0.5f, 0.4f, 0.4f, 0.9f});
-            const int eu2 = b.add(kEucl, 36, {16, 5, 2, 4});
-            const int pc = b.add(kFltr, 37, {2, 0.5f, 0.2f, 0.85f, 0.2f, 0.2f, 0.5f});
             const int mg = b.add(kMgate, 13);
             const int mgen = b.add(kMg, 14, {0.4f, -0.4f, 1, 0, 0.6f});
             const int net = b.add(kNet, 15, {0.5f, 0.6f, 0.55f, 0.45f, 0.5f, 3, 0.35f});
-            const int dly = b.add(kDelay, 2, {0.3f, 3, 0.4f, 0.5f, 0.3f});
-            const int mx = b.add(kMix, 3, {0.8f, 0.8f, 0.5f, 0.45f, 1.2f});
-            const int out = b.add(kOut, 4, {0.8f});
+            const int mx = b.add(kMix, 2, {0.8f, 0.8f, 0.5f, 0.45f, 1.2f});
+            const int out = b.add(kOut, 3, {0.8f});
             b.c(seq, 0, acid, 1);
             b.c(seq, 1, acid, 2);
             b.c(seq, 1, bern, 0);
             b.c(bern, 0, acid, 3);
             b.c(eu, 0, ki, 0);
-            b.c(eu2, 0, pc, 0);
             b.c(mg, 1, net, 0);
             b.c(mg, 1, mgen, 0);
             b.c(mgen, 0, net, 3, 0.3f);
             b.c(mgen, 1, net, 2, 0.4f);
-            b.c(acid, 0, dly, 0);
-            b.c(dly, 0, mx, 0);
+            b.c(acid, 0, mx, 0);
             b.c(ki, 0, mx, 1);
-            b.c(pc, 0, mx, 2);
             b.c(net, 2, mx, 3);
             b.c(mx, 0, out, 0);
             varyA = acid;
@@ -503,7 +497,7 @@ void fillRack(Engine& e, const int* types, int nTypes) {
 
 int Graf::benchScenarios() const {
 #ifdef GRAF_CAL
-    return 2 + kTypeCount + 3 + 4;
+    return 2 + kTypeCount + 3 + 5 + 24;
 #else
     return kBench;
 #endif
@@ -518,8 +512,13 @@ const char* Graf::benchName(int i) const {
     if (i == 3 + kTypeCount) return "cal-vco-saw";
     if (i == 4 + kTypeCount) return "cal-vco-4out";
     if (i >= 5 + kTypeCount) {
-        static const char* const kX[4] = {"cal-part-grain", "cal-part-train", "cal-fltr-kick", "cal-fltr-snare"};
-        return kX[(i - 5 - kTypeCount) & 3];
+        static const char* const kX[5] = {"cal-part-grain", "cal-part-train", "cal-fltr-kick", "cal-fltr-snare", "cal-fltr-perc"};
+        const int x = i - 5 - kTypeCount;
+        if (x >= 5) {
+            std::snprintf(buf, sizeof buf, "cal-plts-m%02d", x - 5);
+            return buf;
+        }
+        return kX[x];
     }
     std::snprintf(buf, sizeof buf, "cal-%s", def(i - 2).tag);
     return buf;
@@ -542,6 +541,15 @@ void Graf::benchSetup(int i) {
     eng_.setParamK(v, 0, 0.5f);
     if (i >= 5 + kTypeCount) {   // worst cases: 4 PART with all 6 particles busy, 4 FLTR always sounding
         const int x = i - 5 - kTypeCount;
+        if (x >= 5) {   // Plaits: every model, all inputs patched
+            for (int k = 0; k < 4; ++k) {
+                const int s = eng_.add(kPlts, 0, k + 1);
+                eng_.setParamK(s, 0, Engine::unmapParam(def(kPlts).p[0], float(x - 5)));
+                for (int in = 0; in < def(kPlts).nIn; ++in) eng_.connect(v, 0, s, in, 0.5f);
+            }
+            eng_.rebuild();
+            return;
+        }
         for (int k = 0; k < 4; ++k) {
             const int s = eng_.add(x < 2 ? kPart : kFltr, 0, k + 1);
             if (x < 2) {
@@ -550,7 +558,7 @@ void Graf::benchSetup(int i) {
                 eng_.setParamK(s, 4, 1.0f);   // duration max
                 eng_.setParamK(s, 5, 1.0f);   // jitter
             } else {
-                eng_.setParamK(s, 0, Engine::unmapParam(def(kFltr).p[0], x == 2 ? 0.0f : 1.0f));
+                eng_.setParamK(s, 0, Engine::unmapParam(def(kFltr).p[0], float(x - 2)));
                 eng_.setParamK(s, 2, 1.0f);   // decay max
                 eng_.setParamK(s, 4, 1.0f);   // grit
                 eng_.connect(v, 1, s, 0, 1.0f);

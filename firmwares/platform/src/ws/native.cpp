@@ -19,6 +19,10 @@ namespace plat {
 
 static_assert(sizeof(PlatSetting) == sizeof(lab::SettingRow), "PlatSetting must mirror lab::SettingRow");
 static_assert(sizeof(PlatEvent) == 12, "PlatEvent layout");
+static_assert(sizeof(PlatPage) == sizeof(lab::kit::PageInfo) && offsetof(PlatPage, help) == offsetof(lab::kit::PageInfo, help) &&
+                  offsetof(PlatPage, fkeys) == offsetof(lab::kit::PageInfo, fkeys) &&
+                  offsetof(PlatPage, r) == offsetof(lab::kit::PageInfo, color),
+              "PlatPage must mirror lab::kit::PageInfo");
 
 #if defined(__arm__)
 // The fast segment buffer: in .noinit, which the device linker script places
@@ -155,6 +159,51 @@ bool hRadioSeek(void* c, bool up) { return radio(c) && radio(c)->seek(up); }
 bool hRadioBusy(void* c) { return radio(c) && radio(c)->busy(); }
 float hRadioFreq(void* c) { return radio(c) ? radio(c)->frequency() : 0.0f; }
 
+// ---- LABKIT (main loop). The registry is grown with the kit's audio block
+// off: Registry::add counts the param before its binding is complete.
+int hParamAdd(void* c, const char* key, const char* name, float* value, float lo, float hi, float def, const char* unit,
+              int page, uint32_t flags) {
+    NativeSession* n = N(c);
+    lab::Context* ctx = n->ctx();
+    if (!ctx->shell || !key || !key[0] || !value) return -1;
+    lab::kit::Kit& k = ctx->shell->labkit();
+    lab::kit::Registry& R = k.reg;
+    if (R.count() >= lab::kit::kMaxParams) return -1;
+    if (!(hi > lo)) hi = lo + 1.0f;
+    if ((flags & PLAT_PARAM_EXP) && lo <= 0.0f) flags &= ~uint32_t(PLAT_PARAM_EXP);
+    def = def < lo ? lo : (def > hi ? hi : def);
+    const bool was = k.active;
+    k.active = false;
+    R.setPage(page < 0 ? 0 : (page >= lab::kit::kMaxPages ? lab::kit::kMaxPages - 1 : page));
+    *value = def;
+    lab::kit::Param& P = R.add(key, name && name[0] ? name : key, value).range(lo, hi).def(def);
+    const lab::kit::ParamId id = P;
+    if (id != lab::kit::kNoParam) {
+        if (flags & PLAT_PARAM_INT) P.integer();
+        if (flags & PLAT_PARAM_EXP) P.exp();
+        if (flags & PLAT_PARAM_PERCENT) P.percent();
+        if (flags & PLAT_PARAM_BIPOLAR) P.bipolar();
+        if (flags & PLAT_PARAM_NOMOD) P.noMod();
+        if (unit && unit[0]) P.unit(unit);
+        n->noteParam();
+    }
+    k.active = was;
+    return id;
+}
+float hParamGet(void* c, int id, bool effective) {
+    lab::kit::Registry& R = N(c)->ctx()->params();
+    if (!R.valid(lab::kit::ParamId(id))) return 0.0f;
+    return effective ? R.effective(lab::kit::ParamId(id)) : R.get(lab::kit::ParamId(id));
+}
+void hParamSet(void* c, int id, float v) {
+    lab::kit::Registry& R = N(c)->ctx()->params();
+    if (R.valid(lab::kit::ParamId(id))) R.set(lab::kit::ParamId(id), v);
+}
+int hModSource(void* c, const char* name, const float* value, bool bipolar) {
+    if (!name || !value || !N(c)->ctx()->shell) return -1;
+    return N(c)->ctx()->mod().addSource(name, value, bipolar);
+}
+
 bool validApp(const PlatApp* a) {
     return a && a->abi == PLAT_ABI_VERSION && a->size >= offsetof(PlatApp, close) + sizeof(void*);
 }
@@ -242,8 +291,47 @@ void NativeSession::buildHost() {
     h.labCanvas = nullptr;
     h.labStorage = ctx_->fs;
     h.labRadio = ctx_->radio;
-    h.labLayout = kLabLayout;
+    h.labLayout = kKitLayout;
     h.midiNote = hMidiNote;
+    if (ctx_->shell) {
+        h.paramAdd = hParamAdd;
+        h.paramGet = hParamGet;
+        h.paramSet = hParamSet;
+        h.modSource = hModSource;
+    }
+}
+
+bool NativeSession::hasNav() const {
+    return running() && app_->size >= offsetof(PlatApp, labTheme) + sizeof(void*);
+}
+
+bool NativeSession::kitPath(char* out, uint32_t cap) const {
+    if (!home_[0]) return false;
+    std::snprintf(out, cap, "%s/labkit.lkc", home_);
+    return true;
+}
+
+int NativeSession::navPages(lab::kit::PageInfo* out, int cap) {
+    if (!hasNav() || !app_->navPages) return 0;
+    const int n = app_->navPages(app_->self, reinterpret_cast<PlatPage*>(out), cap);
+    return n < 0 ? 0 : (n > cap ? cap : n);
+}
+int NativeSession::navPage() const { return hasNav() && app_->navPage ? app_->navPage(app_->self) : -1; }
+void NativeSession::navGoto(int page) {
+    if (hasNav() && app_->navGoto) app_->navGoto(app_->self, page);
+}
+void NativeSession::navFocus(int id) {
+    if (hasNav() && app_->navFocus) app_->navFocus(app_->self, id);
+}
+void NativeSession::navParamChanged(int id) {
+    if (hasNav() && app_->navParamChanged) app_->navParamChanged(app_->self, id);
+}
+void NativeSession::navKeys(lab::kit::NavKeys& keys) {
+    if (hasNav() && app_->navKeys && (info_.flags & PLAT_INFO_WORKSTATION)) app_->navKeys(app_->self, &keys);
+}
+const lab::Theme* NativeSession::labTheme() const {
+    if (!hasNav() || !app_->labTheme || !(info_.flags & PLAT_INFO_WORKSTATION)) return nullptr;
+    return static_cast<const lab::Theme*>(app_->labTheme(app_->self));
 }
 
 bool readAppInfo(lab::Context& ctx, const char* path, PlatInfo& info) {
@@ -436,6 +524,7 @@ bool NativeSession::open(Pool& pool, lab::Context& ctx, const char* path, const 
     failed_ = false;
     error_[0] = 0;
     logN_ = 0;
+    params_ = 0;
     fastInSram_ = false;
     imageBytes_ = fastBytes_ = 0;
     std::memset(&info_, 0, sizeof info_);
@@ -473,11 +562,21 @@ bool NativeSession::open(Pool& pool, lab::Context& ctx, const char* path, const 
         fail(m);
         return false;
     }
+    char kp[96];
+    if (params_ && !(info_.flags & PLAT_INFO_WORKSTATION) && ctx.fs && kitPath(kp, sizeof kp) && ctx.fs->exists(kp))
+        ctx.params().loadFile(ctx.fs, kp);
     return true;
+}
+
+void NativeSession::saveKit() {
+    char kp[96];
+    if (params_ && !(info_.flags & PLAT_INFO_WORKSTATION) && ctx_->fs && ctx_->shell && kitPath(kp, sizeof kp))
+        ctx_->params().saveFile(ctx_->fs, kp);
 }
 
 void NativeSession::close() {
     if (app_ && !failed_) {
+        saveKit();
         if (app_->save) app_->save(app_->self);
         if (app_->close) app_->close(app_->self);
     }
@@ -541,6 +640,7 @@ int NativeSession::settings(lab::SettingRow* rows, int cap) {
     return n < 0 ? 0 : (n > cap ? cap : n);
 }
 void NativeSession::save() {
+    if (running()) saveKit();
     if (running() && app_->save) app_->save(app_->self);
 }
 static bool hasBench(const PlatApp* a) {

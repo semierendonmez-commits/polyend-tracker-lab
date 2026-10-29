@@ -1,22 +1,43 @@
-# GRAF lab-gate check: boot, every page, patching on the matrix and the graph,
-# a module page, snapshots + song, MIDI in, play, sound, display budget.
+# GRAF lab-gate check: boot, every page, patching on the graph (pad gesture)
+# and the matrix, a module page, undo / redo, follow-the-signal, the Add page
+# with a template, snapshots + crossfader + song, MIDI in, play, sound, the
+# LABKIT views, the display budget. Only keys of the original Tracker are used.
 wait 3200
 budget
-# Graph page (demo "First light" on a fresh card)
+# demo "First light": two LABKIT showcase routes (macro BRIGHT + LFO1)
+expect-routes 2
+# Graph: an empty cell, Insert opens the Add page there, Insert adds
 tap F1
+pad 1 tap
+tap Insert
+pad 15 tap
+tap Insert
+budget
+# hold a module, tap another: a cable; the encoder sets its amount
+pad 0 down
+pad 14 tap
+enc 3
+wait 50
+budget
 tap Right
 tap Down
-tap EncPush            # empty cell -> Add page
-tap F4
-pad 3 tap              # pick a module type
-tap F8                 # add it
-tap F1
-budget
-# connect two modules by holding one pad and tapping another
-pad 0 down
-pad 2 tap
 pad 0 up
-# Matrix: tap a pin (patch), turn the amount, tap again (unpatch)
+# undo / redo (Pattern / Shift + Pattern)
+tap Pattern
+tap Pattern
+press Shift
+tap Pattern
+release Shift
+# follow the signal and tidy (Shift + Insert)
+pad 0 tap
+tap Instr
+tap Instr
+tap Note
+press Shift
+tap Insert
+release Shift
+budget
+# Matrix: hold a pin and turn (patch + amount), tap twice (patch, unpatch)
 tap F2
 pad 14 down
 enc 5
@@ -25,19 +46,38 @@ pad 27 tap
 pad 27 tap
 tap Right
 tap Down
-tap Shift
+press Shift
+tap Right
+release Shift
 budget
-# Module page: knobs, parameter pads, keyboard pads
+# Module page: pads as knobs, the encoder, the keyboard rows, scope / tap
 tap F3
-pad 1 tap
+pad 1 down
 enc 3
+pad 1 up
 tap Right
 enc -2
+tap Delete
 pad 30 down
 wait 200
 pad 30 up
+tap FX2
+press Shift
+tap FX2
+release Shift
+tap FX1
+tap Pattern
 budget
-# Snapshots + song
+# Add page: categories, a template block, undo
+tap F4
+pad 3 tap
+enc 2
+pad 7 tap
+pad 13 tap
+tap Insert
+budget
+tap Pattern
+# Snapshots, song, crossfader
 tap F5
 pad 0 tap
 pad 12 tap
@@ -45,12 +85,27 @@ enc 1
 tap Down
 enc 1
 tap F8
+pad 9 tap
+pad 1 tap
+pad 10 tap
+pad 8 tap
+expect-param xf.on 1
+tap Down
+tap Down
+tap Down
+tap Down
+tap Down
+enc 10
 budget
-# Play page, keyboard
+pad 8 tap
+expect-param xf.on 0
+# Play page, keyboard, a strip
 tap F6
 pad 40 down
 wait 200
 pad 40 up
+pad 2 tap
+enc -3
 tap F7
 budget
 # MIDI note into the MIDI-to-CV modules
@@ -71,12 +126,29 @@ pad 11 tap             # song on
 wait 1500
 expect-sound 600
 budget
+# the LABKIT views over a running patch
+tap Master
+wait 300
+budget
+tap Master
+press Shift
+tap Master
+release Shift
+wait 200
+budget
+tap F8
+press Shift
+tap I.Param
+release Shift
+wait 200
+budget
+tap F8
 tap Play
 # Settings rows (Shell page) and back
 tap Config
 tap Down
 tap Config
-# 8-patch model demo and a RETICULUM demo
+# 8-patch model demo, RETICULUM, Resonators (Plaits + RESO), Acid net (NET, ACID, FLTR, Perform gate)
 tap F7
 pad 41 tap
 tap Insert
@@ -90,6 +162,7 @@ tap F2
 tap F6
 budget
 tap Play
+tap F7
 pad 37 tap
 tap Insert
 tap Play
@@ -99,37 +172,65 @@ expect-sound 300
 tap F3
 budget
 tap Play
+tap F7
+pad 42 tap
+tap Insert
+tap Play
+peak-reset
+wait 3000
+expect-sound 300
+tap F1
+budget
+tap Play
+tap F7
+pad 43 tap
+tap Insert
+tap Play
+peak-reset
+hold Perform 400
+wait 2500
+expect-sound 300
+tap F1
+budget
+tap F3
+budget
+tap Play
 # The MANUAL quick start, from an empty patch (it must keep working)
 tap F7
 tap Delete
 tap Delete
 tap F1
-# SEQ at pad 0
+# SEQ at pad 0: tap an empty pad twice = Add page there; SEQ tab, 3rd item, Insert
 pad 0 tap
 pad 0 tap
-pad 24 tap
-tap F8
-# VCO at pad 1
+pad 3 tap
+pad 14 tap
+tap Insert
+# VCO at pad 1: SOURCE tab, first item
 pad 1 tap
 pad 1 tap
 pad 0 tap
-tap F8
-# ADSR at pad 13
+pad 12 tap
+tap Insert
+# ADSR at pad 13: MOD tab
 pad 13 tap
 pad 13 tap
+pad 2 tap
+pad 15 tap
+tap Insert
+# VCA at pad 2: SHAPE tab
+pad 2 tap
+pad 2 tap
+pad 1 tap
 pad 16 tap
-tap F8
-# VCA at pad 2
-pad 2 tap
-pad 2 tap
-pad 10 tap
-tap F8
-# OUT at pad 3
+tap Insert
+# OUT at pad 3: I/O tab
 pad 3 tap
 pad 3 tap
-pad 34 tap
-tap F8
-# cables
+pad 5 tap
+pad 14 tap
+tap Insert
+# cables: hold the source, tap the destinations
 pad 0 down
 pad 1 tap
 pad 13 tap

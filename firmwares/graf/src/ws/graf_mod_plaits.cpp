@@ -18,8 +18,10 @@ const char* const kPlaitsModels[24] = {"VA VCF",   "PhaseDist", "6op FM A", "6op
 
 namespace {
 // QEMU-measured M4 instructions per 128 frames (2 x 64, LPG on), per model (KONSOL's bench).
-const int32_t kPlCost[24] = {38500, 51400, 32300, 31700, 31900, 41600, 57000, 18600, 41000, 33000, 54300, 53400,
-                             83900, 49300, 49800, 14900, 42000, 39300, 62700, 67000, 85600, 44300, 54000, 46900};
+// Measured in GRAF (QEMU, tests/lab GRAF_CAL "cal-plts-mNN": all six inputs
+// patched with audio, worst block, per voice, cables excluded).
+const int32_t kPlCost[24] = {49200, 59200, 45100, 45600, 40300, 59800, 63300, 33500, 52300, 45400, 61100, 60000,
+                             83000, 59800, 62100, 49400, 51400, 50100, 69300, 69200, 84200, 52900, 60700, 55400};
 constexpr uint32_t kPlBuf = 32768;
 struct PlVoice {
     plaits::Voice* v;
@@ -30,7 +32,7 @@ struct PlVoice {
 
 int32_t plaitsCost(int model) {
     model = model < 0 ? 0 : (model > 23 ? 23 : model);
-    return kPlCost[model] * 11 / 10 + 2500;
+    return kPlCost[model] * 11 / 10 + 1000;
 }
 
 void* plaitsAlloc(lab::Arena& a) {
@@ -79,6 +81,11 @@ OT_FASTRUN_FN void pPlts(Module& m, Proc& p) {
         const uint32_t at = uint32_t(h) * 64u;
         pa.note = 60.0f + m.v[1] * 12.0f + m.v[2] + pit[at] * 12.0f;
         pa.harmonics = clampf(m.v[3] + har[at], 0.0f, 1.0f);
+        // Speech: formant, SAM and LPC phonemes only. Its upper half decodes an
+        // LPC word bank whenever the bank changes, ~240k instructions in one
+        // block, more than the whole audio budget. The first bank starts at
+        // harmonics 0.394 (group 2.364, quantiser step 0.1 with hysteresis).
+        if (pa.engine == 15) pa.harmonics *= 0.38f;
         pa.timbre = clampf(m.v[4] + tim[at], 0.0f, 1.0f);
         pa.morph = clampf(m.v[5] + mor[at], 0.0f, 1.0f);
         if (md.trigger_patched) {

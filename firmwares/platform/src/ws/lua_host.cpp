@@ -800,6 +800,19 @@ bool fieldNum(lua_State* L, int t, const char* k, float& out) {
     return ok;
 }
 
+// Registry::add counts a param before its binding is complete: the kit's
+// audio block is off around it (PLATFORM keeps it off for the whole init()).
+bool kitPause(LuaSession* s) {
+    if (!s->ctx()->shell) return false;
+    lab::kit::Kit& k = s->ctx()->shell->labkit();
+    const bool was = k.active;
+    k.active = false;
+    return was;
+}
+void kitResume(LuaSession* s, bool was) {
+    if (s->ctx()->shell) s->ctx()->shell->labkit().active = was;
+}
+
 int k_paramAdd(lua_State* L) {
     LuaSession* s = S(L);
     luaL_checktype(L, 1, LUA_TTABLE);
@@ -857,18 +870,25 @@ int k_paramAdd(lua_State* L) {
         }
         lua_pop(L, 1);
         *slot = def - 1.0f;   // Lua options are 1..n, the registry's 0..n-1
-        rid = R.add(key, s->keep(name), slot).names(names, n).def(def - 1.0f);
+        const char* nm = s->keep(name);
+        const bool was = kitPause(s);
+        rid = R.add(key, nm, slot).names(names, n).def(def - 1.0f);
+        kitResume(s, was);
         if (rid != lab::kit::kNoParam) s->markEnum(rid);
     } else {
         *slot = def;
-        lab::kit::Param& P = R.add(key, s->keep(name), slot).range(lo, hi).def(def);
+        const char* nm = s->keep(name);
+        const char* un = unit ? s->keep(unit) : nullptr;
+        const bool was = kitPause(s);
+        lab::kit::Param& P = R.add(key, nm, slot).range(lo, hi).def(def);
         rid = P;
         if (rid != lab::kit::kNoParam) {
             if (!std::strcmp(kind, "number")) P.integer();
             if (hasStep && step > 0.0f) P.step(step);
-            if (unit) P.unit(s->keep(unit));
+            if (un) P.unit(un);
             if (lo < 0.0f && hi > 0.0f) P.bipolar();
         }
+        kitResume(s, was);
     }
     if (rid == lab::kit::kNoParam) return luaL_error(L, "params: the registry is full (512 params)");
     lua_pushinteger(L, rid);
@@ -1282,6 +1302,11 @@ bool LuaSession::call(int nargs, uint32_t limit, bool fatal) {
     return true;
 }
 
+void LuaSession::clearConsole() {
+    consoleN_ = consoleCol_ = 0;
+    console_[0][0] = 0;
+}
+
 bool LuaSession::eval(const char* line) {
     if (!running() || !line) return false;
     print("> ", 2);
@@ -1301,6 +1326,14 @@ bool LuaSession::eval(const char* line) {
             return false;
         }
     }
+    // run in the REPL environment (param ids as names, the globals behind them)
+    lua_getfield(L_, LUA_REGISTRYINDEX, "plat.host");
+    if (lua_istable(L_, -1)) {
+        lua_getfield(L_, -1, "repl_env");
+        if (lua_istable(L_, -1)) lua_setupvalue(L_, -3, 1);
+        else lua_pop(L_, 1);
+    }
+    lua_pop(L_, 1);
     // results printed through print(...)
     lua_getglobal(L_, "print");
     lua_insert(L_, -2);
@@ -1574,6 +1607,7 @@ void LuaSession::event(const lab::Event& e) {
         case lab::Event::kPress:
         case lab::Event::kRelease:
         case lab::Event::kHold:
+            if (keyName(e.id)[0] == '?') break;   // not a key of the Tracker's matrix
             lua_pushstring(L_, keyName(e.id));
             lua_pushinteger(L_, e.type == lab::Event::kPress ? 1 : (e.type == lab::Event::kHold ? 2 : 0));
             lua_pushboolean(L_, e.shift);

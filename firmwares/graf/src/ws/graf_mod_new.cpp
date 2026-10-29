@@ -335,6 +335,19 @@ OT_FASTRUN_FN void pNet(Module& m, Proc& p) {
     const float outK = m.v[6] * 0.2f * 5.0f / (float(kNetN) * 0.5f);
     float *oL = m.out[0], *oR = m.out[1], *oM = m.out[2], *oE = m.out[3];
     uint32_t ns = s.noise;
+    // state in locals: the output stores may alias the struct, which would
+    // otherwise reload every field each sample
+    float integ[kNetN], fb[kNetN], hpX[kNetN], hpY[kNetN], mat[kNetN][kNetN], pl[kNetN], pr[kNetN];
+    for (int i = 0; i < kNetN; ++i) {
+        integ[i] = s.integ[i];
+        fb[i] = s.fb[i];
+        hpX[i] = s.hpX[i];
+        hpY[i] = s.hpY[i];
+        pl[i] = s.panL[i];
+        pr[i] = s.panR[i];
+        for (int j = 0; j < kNetN; ++j) mat[i][j] = s.matrix[i][j];
+    }
+    float env = s.env;
     for (uint32_t n = 0; n < kBlock; ++n) {
         const float excite = ex[n] * exLvl;
         ns ^= ns << 13;
@@ -342,23 +355,25 @@ OT_FASTRUN_FN void pNet(Module& m, Proc& p) {
         ns ^= ns << 5;
         const float life = 1.0e-5f * (float(ns >> 8) * (2.0f / 16777216.0f) - 1.0f);
         float g[kNetN];
+#pragma GCC unroll 8
         for (int i = 0; i < kNetN; ++i) {
-            const float in = s.fb[i] + ((i & 1) ? -excite : excite) + life;
-            s.integ[i] = leak * s.integ[i] + in;
-            g[i] = gi[i] * s.integ[i];
+            const float in = fb[i] + ((i & 1) ? -excite : excite) + life;
+            integ[i] = leak * integ[i] + in;
+            g[i] = gi[i] * integ[i];
         }
         float l = 0.0f, r = 0.0f;
+#pragma GCC unroll 8
         for (int i = 0; i < kNetN; ++i) {
-            const float* row = s.matrix[i];
+            const float* row = mat[i];
             const float mm = row[0] * g[0] + row[1] * g[1] + row[2] * g[2] + row[3] * g[3] + row[4] * g[4] +
                              row[5] * g[5] + row[6] * g[6] + row[7] * g[7];
-            const float y = mm - s.hpX[i] + dcR * s.hpY[i];
-            s.hpX[i] = mm;
-            s.hpY[i] = y;
+            const float y = mm - hpX[i] + dcR * hpY[i];
+            hpX[i] = mm;
+            hpY[i] = y;
             const float c = y > 1.0f ? 1.0f : (y < -1.0f ? -1.0f : y);
-            s.fb[i] = c;
-            l += c * s.panL[i];
-            r += c * s.panR[i];
+            fb[i] = c;
+            l += c * pl[i];
+            r += c * pr[i];
         }
         l *= outK;
         r *= outK;
@@ -366,10 +381,17 @@ OT_FASTRUN_FN void pNet(Module& m, Proc& p) {
         oR[n] = r;
         oM[n] = 0.5f * (l + r);
         const float a = fabsf(l) + fabsf(r);
-        s.env += (a > s.env ? 0.05f : 0.001f) * (a - s.env);
-        oE[n] = s.env;
+        env += (a > env ? 0.05f : 0.001f) * (a - env);
+        oE[n] = env;
     }
     s.noise = ns;
+    s.env = env;
+    for (int i = 0; i < kNetN; ++i) {
+        s.integ[i] = integ[i];
+        s.fb[i] = fb[i];
+        s.hpX[i] = hpX[i];
+        s.hpY[i] = hpY[i];
+    }
     for (int i = 0; i < kNetN; ++i)
         if (!(s.hpY[i] == s.hpY[i]) || !(s.integ[i] == s.integ[i]) || fabsf(s.integ[i]) > 1e9f) {
             s.hpX[i] = s.hpY[i] = s.integ[i] = s.fb[i] = 0.0f;

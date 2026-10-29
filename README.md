@@ -7,7 +7,7 @@ finished WAV (sound sources, sequencing, arrangement, mixing, stems).
 
 | Firmware | What it is | Image | Manual |
 |---|---|---|---|
-| [GRAF](#graf) | Modular synth: pin matrix + patch graph, 37 modules | [`PolyendTrackerGRAFMD.ptf`](firmwares/graf/release/PolyendTrackerGRAFMD.ptf) | [MANUAL](firmwares/graf/MANUAL.md) |
+| [GRAF](#graf) | Modular synth: pad patching, 49 modules (Plaits, rete net, Open303...), templates, undo | [`PolyendTrackerGRAFMD.ptf`](firmwares/graf/release/PolyendTrackerGRAFMD.ptf) | [MANUAL](firmwares/graf/MANUAL.md) |
 | [FLIPPER](#flipper) | The song is a pinball machine: physics + Markov | [`PolyendTrackerFLIPPR.ptf`](firmwares/flipper/release/PolyendTrackerFLIPPR.ptf) | [MANUAL](firmwares/flipper/MANUAL.md) |
 | [BULUT](#bulut) | Granular: 4 deep channels (Granular, Quanta, Beads, Tape), quick sample browser | [`PolyendTrackerBULUTG.ptf`](firmwares/bulut/release/PolyendTrackerBULUTG.ptf) | [MANUAL](firmwares/bulut/MANUAL.md) |
 | [KONSOL](#konsol) | Clip/scene workstation: 8 tracks, 16 engines (Plaits, TB303...), kits, time-stretch | [`PolyendTrackerKONSOL.ptf`](firmwares/konsol/release/PolyendTrackerKONSOL.ptf) | [MANUAL](firmwares/konsol/MANUAL.md) |
@@ -40,7 +40,7 @@ Boot intro turns it off).
 
 ### Common navigation (LABKIT)
 
-The round-2 firmwares (KONSOL, BULUT, DATAMATICS, MAKAM and TILT so far) share one
+The round-2 firmwares (KONSOL, GRAF, BULUT, DATAMATICS, MAKAM and TILT so far) share one
 navigation layer, [LABKIT](labkit/NAV.md):
 
 | Key | Action |
@@ -59,29 +59,50 @@ Tracker has none of them, so no firmware uses them.
 
 ## GRAF
 
-![GRAF graph page](firmwares/graf/docs/screenshots/graph-reticulum.png)
+![GRAF graph page](firmwares/graf/docs/screenshots/graph-resonators.png)
 
 A modular synthesizer. The same patch is shown twice: as a **VCS3-style pin
-matrix** on the pads (rows are outputs, columns are inputs) and as a **node
-graph** on the screen, with cables coloured by signal type.
+matrix** and as a **node graph** on the screen, with cables coloured by signal
+type.
 
-- **37 modules**, east and west coast:
-  - **Sources:** VCO, complex oscillator, wavetable, noise, sampler.
-  - **Sequencers:** Turing machine, Markov, Euclidean, step sequencer, Pinball ball sequencer.
-  - **Control:** Maths-style function generator, LPG, wavefolder.
-  - **Filters and effects:** ladder, SVF, delay, plate reverb, granular.
-  - **I/O:** MIDI-to-CV.
-- **RETICULUM**: a macro module rebuilt from a Eurorack noise patch (forsitan
-  rete + random values + manual gate): four resonant noise nodes in a
-  recurrent net with random / walk / drunk modulation.
-- Two polyphony models (a setting): **Rack** (one big patch) or **8 patches**
-  (one per MIDI channel).
-- Songs are **snapshots that morph** into each other along a 32-step timeline.
-- A CPU guard refuses a module that would not fit.
+- **Patching on the pads:** hold one module's pad and tap another to make a
+  cable.
+  - While holding, the encoder sets the amount, the arrows pick the jack, and a
+    strip shows the cable with a scope.
+  - Hold a module and tap an empty pad to move it.
+  - Shift+Insert tidies the graph by signal flow; Pattern / Shift+Pattern are
+    24-step undo and redo.
+- **49 module types**, east and west coast:
+  - **New this round:**
+    - **Plaits:** the real Mutable Instruments code, 24 models, up to 4 at once.
+    - **Rings / Elements-style:** a resonator and an exciter.
+    - **From the user's own patches and plugins:** the original **rete
+      circuit** with Random Values, MG-16 and Manual Gate (RETICULUM), an
+      Open303 **ACID** voice / 303 filter, **FLOATER** drums and **QUANTA**
+      particles.
+    - **Generators:** chaos, Bernoulli gate.
+  - **From round 1:** VCOs, complex osc, wavetable, Turing / Markov / Euclid /
+    Pinball sequencers, Maths-style function generator, LPG, folder, ladder,
+    SVF, delay, plate, granular, quantiser, clock divider, S&H, slew, VCA, mixer.
+- **Add page:**
+  - categories, recent modules and the CPU share on each tile;
+  - "add and patch";
+  - 9 templates: East voice, West bongo, Reticulum noise, Plaits voice, Rings
+    pluck, Acid line, Drum kit, Particle cloud, FX chain.
+- **Module page:** one module per screen, big knobs, the top pad row as its
+  knobs, and a dot where modulation moves each knob.
+- **LABKIT:** every knob (640 parameters) can be reached by macros, LFOs and
+  MIDI learn. Module outputs can be marked as modulation sources (TAP1-8),
+  along with the sequencer lanes.
+- **Snapshots:** they morph along a 32-step timeline, plus an A/B crossfader.
+- **Polyphony:** two models (a setting): **Rack** (one big patch) or **8
+  patches** (one per MIDI channel).
+- **CPU guard:** it refuses a module, or a Plaits model change, that would not
+  fit.
 
-| Matrix | Module page |
+| Add page with templates | Plaits module |
 |---|---|
-| ![Matrix](firmwares/graf/docs/screenshots/matrix.png) | ![RETICULUM](firmwares/graf/docs/screenshots/module-rete.png) |
+| ![Add](firmwares/graf/docs/screenshots/add-templates.png) | ![Plaits](firmwares/graf/docs/screenshots/module-plts.png) |
 
 [Manual](firmwares/graf/MANUAL.md) · [Image](firmwares/graf/release/PolyendTrackerGRAFMD.ptf)
 

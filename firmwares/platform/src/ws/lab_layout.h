@@ -10,6 +10,7 @@
 #include <cstdint>
 
 #include "lab/lab.h"
+#include "lab/nav.h"
 
 namespace plat {
 
@@ -25,5 +26,15 @@ constexpr uint32_t kLabLayout = layoutMix(
                         uint32_t(sizeof(lab::SettingRow))),
               uint32_t(sizeof(lab::Arena))),
     uint32_t(lab::Canvas::kBudgetWords) + uint32_t(lab::kBlock) * 65536u);
+
+// LABKIT v2: stations register into the host's registry / mod engine and
+// draw with its nav; their copies of the kit code use these layouts.
+constexpr uint32_t kKitLayout =
+    layoutMix(layoutMix(layoutMix(layoutMix(layoutMix(layoutMix(kLabLayout, uint32_t(sizeof(lab::kit::Kit))),
+                                                      uint32_t(sizeof(lab::kit::Registry))),
+                                            uint32_t(sizeof(lab::kit::Mod))),
+                                  uint32_t(sizeof(lab::kit::Nav))),
+                        uint32_t(sizeof(lab::kit::PageInfo))),
+              uint32_t(lab::kit::kMaxParams) + uint32_t(lab::kit::kMaxRoutes) * 4096u);
 
 }  // namespace plat

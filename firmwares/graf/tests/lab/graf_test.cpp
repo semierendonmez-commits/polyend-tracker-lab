@@ -492,7 +492,7 @@ LAB_TEST(graf_workstation_pages_and_demos) {
     auto* g = static_cast<Graf*>(shell.workstation());
     CHECK(g != nullptr);
     if (!g) return;
-    static const int kDemoModules[] = {9, 9, 6, 14, 22, 16, 10, 13};
+    static const int kDemoModules[] = {9, 9, 6, 14, 22, 16, 10, 10};
     CHECK(Graf::demoCount() == 8);
     for (int d = 0; d < Graf::demoCount(); ++d) {
         g->loadDemo(d);

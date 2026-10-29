@@ -169,7 +169,7 @@ void Graf::drawTop(Canvas& g, const char* title) {
     g.text(436, 16, kTiny, "DSP", Canvas::kCenterY);
     g.color(col::kRail);
     g.fill(466, 11, 80, 10);
-    g.color(load > 0.9f ? col::kWarn : (load > 0.7f ? col::kAccent : col::kOk));
+    g.color(load > 0.98f ? col::kWarn : (load > 0.85f ? col::kAccent : col::kOk));
     g.fill(466, 11, int(80.0f * clampf(load, 0.0f, 1.0f)), 10);
     g.color(col::kDim);
     g.textf(556, 16, kTiny, Canvas::kCenterY, "%d/%d", eng_.moduleCount(), kMaxSlots);
@@ -432,7 +432,9 @@ void Graf::drawGraph(Canvas& g) {
             g.color(sigCol(d.out[o].sig));
             g.fill(bx + 8, by + 40, int(float(kBoxW - 16) * pk), 5);
         }
-        if (!dense && eng_.tapOf(s, 0) >= 0) {
+        bool tapped = false;
+        for (int o = 0; o < d.nOut && !dense; ++o) tapped = tapped || eng_.tapOf(s, o) >= 0;
+        if (tapped) {
             g.color(col::kSig[1]);
             g.text(bx + kBoxW - 4, by + 52, kTiny, "T", Canvas::kRight | Canvas::kCenterY);
         }
@@ -675,7 +677,7 @@ void Graf::drawMatrix(Canvas& g) {
         g.color(col::kFg);
         g.textf(420, 375, kBody, Canvas::kCenterY, "%+.2f", double(cb.amount));
         g.color(col::kDim);
-        g.text(170, 400, kTiny, "encoder: amount (Shift fine)  Insert: + / -  Delete: remove", Canvas::kCenterY);
+        g.text(170, 400, kTiny, "encoder: amount  Insert: + / -  Delete: remove", Canvas::kCenterY);
         drawScope(g, 520, 340, 262, 70, sigCol(sig));
     } else {
         g.color(col::kDim);
@@ -862,7 +864,7 @@ void Graf::drawModule(Canvas& g) {
         case kNet: {
             const int nn = m.type == kRete ? 4 : 8;
             for (int i = 0; i < nn; ++i) {
-                const float a = clampf((m.type == kRete ? reteNode(m, i) : netNode(m, i)) * 3.0f, 0.0f, 1.0f);
+                const float a = m.type == kRete ? clampf(reteNode(m, i) * 3.0f, 0.0f, 1.0f) : clampf(fabsf(netNode(m, i)), 0.0f, 1.0f);
                 g.color(mix(col::kRail, catCol(d.cat), a));
                 g.point(float(vx + 16 + i * (240 / nn)), float(vy + 30), 5.0f + 12.0f * a);
             }

@@ -223,6 +223,18 @@ function mod.macro_name(i, name) _plat_macro_name(i, name) end
 function mod.macro_target(i, param, depth) return _plat_mod_route(srcid("M" .. i), parid(param), depth or 1.0) end
 -- LFOs 1..4: field "shape" (sine tri saw square sh smooth), "rate" (Hz), "sync" (0 free, 1..), "phase"
 function mod.lfo(i, field, v) return _plat_lfo(i, field, v) end
+-- REPL (LOG view, Insert): the pad keyboard has no quotes, '=' or ',', so a
+-- param id alone shows the param and id(v) sets it; other names are globals.
+local RP = {}
+RP.__tostring = function(r) return r.id .. " = " .. P:string(r.id) end
+RP.__call = function(r, v) if v ~= nil then P:set(r.id, v) end return r end
+_plat.repl_env = setmetatable({}, {
+  __index = function(_, k)
+    local g = _G[k]
+    if g ~= nil then return g end
+    if P.by[k] then return setmetatable({id = k}, RP) end
+  end,
+  __newindex = _G})
 return _plat
 )LUA";
 

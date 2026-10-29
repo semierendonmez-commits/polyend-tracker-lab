@@ -62,8 +62,11 @@ enum {
     PLAT_BTN_NOTE = 0x12, PLAT_BTN_INSTR = 0x13, PLAT_BTN_FX1 = 0x14, PLAT_BTN_FX2 = 0x15,
     PLAT_BTN_PATTERN = 0x16, PLAT_BTN_PLAY = 0x17, PLAT_BTN_COPY = 0x18, PLAT_BTN_INSERT = 0x19,
     PLAT_BTN_UP = 0x1a, PLAT_BTN_DELETE = 0x1b, PLAT_BTN_REC = 0x1c, PLAT_BTN_SHIFT = 0x1d,
-    PLAT_BTN_LEFT = 0x1e, PLAT_BTN_DOWN = 0x1f, PLAT_BTN_RIGHT = 0x20, PLAT_BTN_ENCPUSH = 0x21,
-    PLAT_BTN_AUX = 0x22, PLAT_BTN_HELP = 0x2b
+    PLAT_BTN_LEFT = 0x1e, PLAT_BTN_DOWN = 0x1f, PLAT_BTN_RIGHT = 0x20
+    /* The original Tracker has no encoder push, Aux or Help key (they never
+     * arrive on the device): use Insert / an F-key instead. PLATFORM keeps
+     * I.Param, Master (LABKIT), Config, Play, Shift + Rec, and Shift + F7 /
+     * Shift + F8 held (LOG view / back to the launcher) for itself. */
 };
 
 /* FT81x ROM fonts (lab::font): 26 tiny .. 31 huge. */
@@ -107,6 +110,18 @@ typedef struct PlatSetting {
 } PlatSetting;
 
 typedef bool (*PlatDirFn)(const char* name, bool isDir, uint32_t size, void* user);
+
+/* A page for the LABKIT navigation (MAP, PARAM pads, HELP). Same layout as
+ * lab::kit::PageInfo. */
+typedef struct PlatPage {
+    const char* name;      /* short, upper case: "OSC" */
+    const char* help;      /* one line */
+    const char* fkeys[8];  /* one line per F-key, null = unused */
+    uint8_t r, g, b;       /* 0,0,0 = the theme accent */
+} PlatPage;
+
+/* paramAdd flags */
+enum { PLAT_PARAM_INT = 1, PLAT_PARAM_EXP = 2, PLAT_PARAM_PERCENT = 4, PLAT_PARAM_BIPOLAR = 8, PLAT_PARAM_NOMOD = 16 };
 
 /* Services of the host. Every call takes `ctx` first. Drawing calls are valid
  * only inside draw() / drawIntro(); they go through PLATFORM's budgeted canvas
@@ -205,6 +220,19 @@ typedef struct PlatHost {
     void* labRadio;     /* ot::IRadio* (may be null) */
     uint32_t labLayout;
     void (*midiNote)(void* ctx, bool on, uint8_t note, uint8_t vel, uint8_t chOffset);
+
+    /* LABKIT (init / main loop): a parameter in the shared registry -- it then
+     * shows on the PARAM pads (I.Param) and in the MAP (Master), takes macros,
+     * mod routes and MIDI learn, and is saved per app (Data/<app>/labkit.lkc).
+     * `value` is written with base + modulation once per audio block, before
+     * render(); `key` and the strings must stay valid while the app runs.
+     * Returns the param id, < 0 when the registry is full. */
+    int (*paramAdd)(void* ctx, const char* key, const char* name, float* value, float lo, float hi, float def,
+                    const char* unit, int page, uint32_t flags);
+    float (*paramGet)(void* ctx, int id, bool effective);
+    void (*paramSet)(void* ctx, int id, float v);
+    /* A modulation source the app updates (0..1, or -1..1 when bipolar). */
+    int (*modSource)(void* ctx, const char* name, const float* value, bool bipolar);
 } PlatHost;
 
 /* What the app gives PLATFORM. */
@@ -234,6 +262,16 @@ typedef struct PlatApp {
     int (*benchScenarios)(void* self);
     const char* (*benchName)(void* self, int i);
     void (*benchSetup)(void* self, int i);
+    /* LABKIT navigation (optional): the app's pages, the page on screen, a jump
+     * from the MAP, a focused / changed param (ids from paramAdd). */
+    int (*navPages)(void* self, PlatPage* out, int cap);
+    int (*navPage)(void* self);
+    void (*navGoto)(void* self, int page);
+    void (*navFocus)(void* self, int param);
+    void (*navParamChanged)(void* self, int param);
+    /* stations only (sdk/station): lab::kit::NavKeys* to fill, lab::Theme* */
+    void (*navKeys)(void* self, void* labNavKeys);
+    const void* (*labTheme)(void* self);
 } PlatApp;
 
 /* Metadata the launcher reads without running the app. Put exactly one in each
@@ -262,7 +300,7 @@ typedef struct PlatInfo {
 #define PLAT_EXTERN_C
 #endif
 #define PLAT_APP_INFO(NAME, AUTHOR, DESC, ICON, MEMKB, FLAGS) \
-    PLAT_EXTERN_C PLAT_USED const PlatInfo plat_app_info = {"PLATINF", NAME, AUTHOR, DESC, ICON, MEMKB, FLAGS}
+    PLAT_EXTERN_C PLAT_USED const PlatInfo plat_app_info = {"PLATINF", NAME, AUTHOR, DESC, ICON, MEMKB, FLAGS, 0}
 
 /* Hot code for the fast RAM (SRAM_L, on the Cortex-M4 code bus): the loader
  * copies the .fast segment there when it fits (up to PLAT_FAST_MAX bytes, 24 KB),

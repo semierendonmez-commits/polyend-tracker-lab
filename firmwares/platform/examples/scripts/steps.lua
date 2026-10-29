@@ -19,11 +19,16 @@ function init()
   engine.voice(2, {wave = "noise", env_mode = "perc", decay = 0.16, ftype = "bp", cutoff = 1800, res = 1.2, amp = 0.6, send_reverb = 0.25})
   engine.voice(3, {wave = "noise", env_mode = "perc", decay = 0.04, ftype = "hp", cutoff = 7000, amp = 0.25})
   engine.voice(4, {wave = "saw", env_mode = "perc", decay = 0.22, cutoff = 400, res = 3, fenv = 3, amp = 0.45, send_delay = 0.2})
-  params:add_number("root", "bass root", 24, 48, 33, function(v) return music.note_name(v) end)
-  params:add_control("swing", "swing", 0, 0.4, 0, 0.01)
-  params:add_control("hat_level", "hat level", 0, 1, 0.25, 0.01)
-  params:set_action("hat_level", function(v) engine.set(3, "amp", v) end)
-  params:add_toggle("run_stopped", "run when stopped", false)
+  params:add_number("root", "bass root", 24, 48, 33, function(v) return music.note_name(v) end, nil, "GROOVE")
+  params:add_control("swing", "swing", 0, 0.4, 0, 0.01, nil, "GROOVE")
+  params:add_toggle("run_stopped", "run when stopped", false, "GROOVE")
+  -- the sound on its own page: macros and LFO routes reach it from the MOD page
+  params:add{id = "hat_level", name = "hat level", min = 0, max = 1, default = 0.25, page = "SOUND",
+             action = function(v) engine.set(3, "amp", v) end}
+  params:add{id = "bass_cut", name = "bass cutoff", min = 100, max = 4000, default = 400, unit = "Hz", page = "SOUND",
+             action = function(v) engine.set(4, "cutoff", v) end}
+  params:add{id = "snare_tone", name = "snare tone", min = 600, max = 6000, default = 1800, unit = "Hz", page = "SOUND",
+             action = function(v) engine.set(2, "cutoff", v) end}
   clock.run(function()
     while true do
       local swing = params:get("swing")
@@ -69,7 +74,7 @@ function key(name, z)
   if z ~= 1 then return end
   if name == "F1" or name == "F2" or name == "F3" or name == "F4" then sel = tonumber(name:sub(2)) end
   if name == "DELETE" then for i = 1, STEPS do tracks[sel].pat[i] = 0 end end
-  if name == "ENC" then if clock.playing() then clock.stop() else clock.start() end end
+  if name == "INSERT" then if clock.playing() then clock.stop() else clock.start() end end
 end
 
 function redraw()
@@ -103,7 +108,7 @@ function redraw()
   end
   screen.level(6)
   screen.font("tiny")
-  screen.text(30, 456, "pads: toggle steps   enc: tempo (shift: swing)   push: play/stop   F1-F4: track   Delete: clear track")
+  screen.text(30, 456, "pads: toggle steps   enc: tempo (shift: swing)   Insert: play/stop   F1-F4: track   Delete: clear track")
   -- pad LEDs
   for r, t in ipairs(tracks) do
     for c = 1, STEPS do

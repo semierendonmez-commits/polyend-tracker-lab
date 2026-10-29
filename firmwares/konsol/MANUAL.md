@@ -513,6 +513,11 @@ engine budget (which shrinks with each sounding track and with the heavier
 send effects) by stealing the oldest voice; a PLAITS *Modal* alone uses most
 of it, so heavy Plaits models play on fewer tracks at once.
 
+**Plaits Speech** covers its formant, SAM and LPC-phoneme range (Harmonics is
+scaled to that range). The upper half of the original, the LPC word banks,
+is left out: choosing a bank decodes it in one audio block, longer than the
+whole block budget, and would click.
+
 ## Samples: memory, stretch, warp, slices
 
 - **Memory.** All samples share one pool of about 10.6 MB (about 120 s
