@@ -51,7 +51,10 @@ struct LuaConfig {
 class LuaSession {
 public:
     static constexpr int kMaxOps = 2048, kMaxVerts = 4096, kMaxText = 12288;
-    static constexpr int kConsoleLines = 8, kConsoleCols = 96;
+    static constexpr int kConsoleLines = 64, kConsoleCols = 96;
+    static constexpr int kMaxErrors = 5;              // errors in a window before the script stops
+    static constexpr uint32_t kErrorWindowMs = 3000;
+    static constexpr int kMaxPages = 12, kMaxSources = 8;
 
     // Creates the state in `pool` (the session's memory), runs the script and
     // its init(). Returns false when anything failed; failed() / error() tell.
@@ -76,9 +79,27 @@ public:
     void transport(bool playing);
     void save();
 
-    bool paramsOpen() const { return paramsOpen_; }
-    void toggleParams();
-    int paramCount();
+    // LABKIT: the pages the script's params live on (params:add{page = ...})
+    int pageCount() const { return nPages_; }
+    const char* pageName(int i) const { return (i >= 0 && i < nPages_) ? pageNames_[i] : ""; }
+    int pageOf(const char* name);               // find or create (-1 when full)
+    // REPL: evaluate one line in the script's state; the result is printed
+    bool eval(const char* line);
+    // the crash-safe runner: callback errors so far, the latest one
+    int errorsTotal() const { return errorsTotal_; }
+    const char* lastError() const { return lastError_; }
+    uint32_t lastErrorMs() const { return lastErrorMs_; }
+    // console history for the LOG view (0 = oldest kept line)
+    int consoleTotal() const { return consoleN_; }
+    // a copy of a string in the session pool (registry names live as long as the session)
+    const char* keep(const char* s);
+    float* modSlot(int i) { return (modSlots_ && i >= 0 && i < kMaxSources) ? &modSlots_[i] : nullptr; }
+    int addModSlot() { return nModSlots_ < kMaxSources ? nModSlots_++ : -1; }
+    bool isEnumParam(int rid) const { return rid >= 0 && rid < 512 && (enumBits_[rid >> 5] >> (rid & 31)) & 1u; }
+    void markEnum(int rid) {
+        if (rid >= 0 && rid < 512) enumBits_[rid >> 5] |= 1u << (rid & 31);
+    }
+    bool kitPath(char* out, uint32_t cap) const;   // Data/<script>/labkit.lkc
 
     // stats
     uint32_t heapUsed() const { return heap_.used(); }
@@ -120,7 +141,7 @@ public:
 private:
     bool run(const char* src, uint32_t len);   // load + run the chunk
     bool start();                               // init(), params
-    bool call(int nargs, uint32_t limit);       // pcall with the traceback handler; sets the error
+    bool call(int nargs, uint32_t limit, bool fatal = true);   // pcall + traceback; fatal: stop the script
     bool callGlobal(const char* fn, int nargs); // global function (skipped when absent)
     void fail(const char* msg);
     void loadParams();
@@ -139,8 +160,15 @@ private:
     char path_[96] = {};
     bool failed_ = false;
     char error_[640] = {};
-    bool paramsOpen_ = false;
-    int paramSel_ = 0;
+    char pageNames_[kMaxPages][16] = {};
+    int nPages_ = 0;
+    float* modSlots_ = nullptr;
+    int nModSlots_ = 0;
+    uint32_t enumBits_[16] = {};
+    uint32_t lastPollMs_ = 0;
+    int errInWindow_ = 0, errorsTotal_ = 0;
+    uint32_t errWindowStart_ = 0, lastErrorMs_ = 0;
+    char lastError_[160] = {};
     uint32_t lastRedrawMs_ = 0;
     uint32_t lastDropped_ = 0;
     uint32_t sampleBytes_ = 0;

@@ -34,7 +34,11 @@ constexpr int kMaxSampleFiles = 32;
 constexpr int kExtBytes = 64;              // per-module extra data (sequencer steps)
 // CPU budget in M4 instructions per block (the gate limit is 180,000; the
 // rest covers the engine itself, cable sums and the shell's work).
+#ifdef GRAF_CAL
+constexpr int32_t kCpuBudget = 100000000;   // calibration builds: no guard
+#else
 constexpr int32_t kCpuBudget = 168000;
+#endif
 constexpr int32_t kCableCost = 950;         // a cable summed into an input that already has one
 constexpr int32_t kEngineCost = 6000;      // fixed per block
 

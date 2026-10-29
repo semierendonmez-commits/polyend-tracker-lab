@@ -503,7 +503,7 @@ void fillRack(Engine& e, const int* types, int nTypes) {
 
 int Graf::benchScenarios() const {
 #ifdef GRAF_CAL
-    return 2 + kTypeCount + 3;
+    return 2 + kTypeCount + 3 + 4;
 #else
     return kBench;
 #endif
@@ -517,6 +517,10 @@ const char* Graf::benchName(int i) const {
     if (i == 2 + kTypeCount) return "cal-mix4";
     if (i == 3 + kTypeCount) return "cal-vco-saw";
     if (i == 4 + kTypeCount) return "cal-vco-4out";
+    if (i >= 5 + kTypeCount) {
+        static const char* const kX[4] = {"cal-part-grain", "cal-part-train", "cal-fltr-kick", "cal-fltr-snare"};
+        return kX[(i - 5 - kTypeCount) & 3];
+    }
     std::snprintf(buf, sizeof buf, "cal-%s", def(i - 2).tag);
     return buf;
 #else
@@ -536,6 +540,25 @@ void Graf::benchSetup(int i) {
     eng_.allOutputs = true;
     const int v = eng_.add(kVco, 0, 0);
     eng_.setParamK(v, 0, 0.5f);
+    if (i >= 5 + kTypeCount) {   // worst cases: 4 PART with all 6 particles busy, 4 FLTR always sounding
+        const int x = i - 5 - kTypeCount;
+        for (int k = 0; k < 4; ++k) {
+            const int s = eng_.add(x < 2 ? kPart : kFltr, 0, k + 1);
+            if (x < 2) {
+                eng_.setParamK(s, 0, Engine::unmapParam(def(kPart).p[0], x == 0 ? 0.0f : 3.0f));
+                eng_.setParamK(s, 3, 1.0f);   // density max
+                eng_.setParamK(s, 4, 1.0f);   // duration max
+                eng_.setParamK(s, 5, 1.0f);   // jitter
+            } else {
+                eng_.setParamK(s, 0, Engine::unmapParam(def(kFltr).p[0], x == 2 ? 0.0f : 1.0f));
+                eng_.setParamK(s, 2, 1.0f);   // decay max
+                eng_.setParamK(s, 4, 1.0f);   // grit
+                eng_.connect(v, 1, s, 0, 1.0f);
+            }
+        }
+        eng_.rebuild();
+        return;
+    }
     if (i >= 2 + kTypeCount) {   // VCO variants: pitch patched, no FM, into one MIX (4 cables)
         eng_.allOutputs = false;
         eng_.scopeSlot = -1;

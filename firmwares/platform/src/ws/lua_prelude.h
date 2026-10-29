@@ -6,128 +6,6 @@ namespace plat {
 
 constexpr const char kLuaPrelude[] = R"LUA(
 local _plat = {}
--- params -------------------------------------------------------------------
-local P = {list = {}, by = {}}
-params = P
-local function addp(p)
-  assert(type(p.id) == "string", "params: id must be a string")
-  if P.by[p.id] then error("params: duplicate id '" .. p.id .. "'", 3) end
-  p.name = p.name or p.id
-  P.list[#P.list + 1] = p
-  P.by[p.id] = p
-  p.value = p.default
-  return p
-end
-function P:add_number(id, name, min, max, default, formatter)
-  return addp{id = id, name = name, kind = "number", min = min or 0, max = max or 127,
-              default = default or min or 0, step = 1, formatter = formatter}
-end
-function P:add_option(id, name, options, default)
-  assert(type(options) == "table" and #options > 0, "params: options must be a non-empty list")
-  return addp{id = id, name = name, kind = "option", options = options, min = 1, max = #options,
-              default = default or 1, step = 1}
-end
-function P:add_control(id, name, min, max, default, step, units)
-  return addp{id = id, name = name, kind = "control", min = min or 0, max = max or 1,
-              default = default or min or 0, step = step or ((max or 1) - (min or 0)) / 100, units = units or ""}
-end
-function P:add_toggle(id, name, default)
-  return addp{id = id, name = name, kind = "option", options = {"off", "on"}, min = 1, max = 2,
-              default = default and 2 or 1, step = 1, toggle = true}
-end
-function P:add_trigger(id, name)
-  return addp{id = id, name = name, kind = "trigger", min = 0, max = 0, default = 0, step = 0}
-end
-function P:add_separator(name)
-  return addp{id = "__sep" .. (#P.list + 1), name = name or "", kind = "separator", min = 0, max = 0, default = 0}
-end
-function P:add(t)
-  local k = t.type or "number"
-  local p
-  if k == "option" then p = P:add_option(t.id, t.name, t.options, t.default)
-  elseif k == "control" then p = P:add_control(t.id, t.name, t.min, t.max, t.default, t.step, t.units)
-  elseif k == "toggle" then p = P:add_toggle(t.id, t.name, t.default)
-  elseif k == "trigger" then p = P:add_trigger(t.id, t.name)
-  elseif k == "separator" then p = P:add_separator(t.name)
-  else p = P:add_number(t.id, t.name, t.min, t.max, t.default, t.formatter) end
-  p.action = t.action
-  return p
-end
-local function getp(id)
-  local p = P.by[id]
-  if not p then error("params: no parameter '" .. tostring(id) .. "'", 3) end
-  return p
-end
-local function clampv(p, v)
-  if p.kind == "trigger" or p.kind == "separator" then return 0 end
-  if v < p.min then v = p.min end
-  if v > p.max then v = p.max end
-  if p.kind ~= "control" then v = math.floor(v + 0.5) end
-  return v
-end
-function P:set(id, v, silent)
-  local p = getp(id)
-  if p.kind == "trigger" then if p.action and not silent then p.action() end return end
-  v = clampv(p, v)
-  local changed = v ~= p.value
-  p.value = v
-  if p.action and not silent and changed then p.action(p.toggle and (v == 2) or v) end
-end
-function P:get(id)
-  local p = getp(id)
-  if p.toggle then return p.value == 2 end
-  return p.value
-end
-function P:string(id)
-  local p = getp(id)
-  if p.kind == "option" then return tostring(p.options[p.value]) end
-  if p.kind == "trigger" then return "press" end
-  if p.kind == "separator" then return "" end
-  if p.formatter then return p.formatter(p.value) end
-  if p.kind == "control" then return string.format("%.3g%s", p.value, p.units or "") end
-  return tostring(math.floor(p.value))
-end
-function P:delta(id, d)
-  local p = getp(id)
-  if p.kind == "trigger" then if d ~= 0 and p.action then p.action() end return end
-  P:set(id, p.value + d * (p.step or 1))
-end
-function P:set_action(id, f) getp(id).action = f end
-function P:lookup(id) return P.by[id] end
-function P:bang()
-  for _, p in ipairs(P.list) do
-    if p.action and p.kind ~= "trigger" and p.kind ~= "separator" then p.action(p.toggle and (p.value == 2) or p.value) end
-  end
-end
-function P:write()
-  local out = {}
-  for _, p in ipairs(P.list) do
-    if p.kind ~= "trigger" and p.kind ~= "separator" then out[#out + 1] = p.id .. "=" .. tostring(p.value) end
-  end
-  return file.write("params.txt", table.concat(out, "\n") .. "\n")
-end
-function P:read()
-  local s = file.read("params.txt")
-  if not s then return false end
-  for id, v in s:gmatch("([%w_%-%.]+)=([^\n]*)") do
-    local p = P.by[id]
-    local n = tonumber(v)
-    if p and n then p.value = clampv(p, n) end
-  end
-  return true
-end
-function _plat.param_count() return #P.list end
-function _plat.param_row(i)
-  local p = P.list[i]
-  if not p then return "", "" end
-  return p.name, P:string(p.id), p.kind
-end
-function _plat.param_delta(i, d)
-  local p = P.list[i]
-  if p and p.kind ~= "separator" then P:delta(p.id, d) end
-end
-function _plat.after_init() P:read(); P:bang() end
-function _plat.save() if #P.list > 0 then P:write() end end
 -- metro (on the clock) -----------------------------------------------------
 metro = {}
 function metro.init(f, time, count)
@@ -190,6 +68,161 @@ function music.euclid(steps, hits, rotate)
   end
   return t
 end
+-- params (LABKIT registry: PARAM pads, MAP, macros, mod routes, MIDI learn) ----
+local P = {list = {}, by = {}}
+params = P
+local reg_add, reg_get, reg_set, reg_str, reg_nudge = _plat_param_add, _plat_param_get, _plat_param_set,
+  _plat_param_string, _plat_param_nudge
+local function addp(p)
+  assert(type(p.id) == "string" and #p.id > 0, "params: id must be a string")
+  if P.by[p.id] then error("params: duplicate id '" .. p.id .. "'", 3) end
+  p.name = p.name or p.id
+  if p.kind ~= "trigger" and p.kind ~= "separator" then
+    p.rid = reg_add(p)            -- the registry param (error when full)
+  end
+  P.list[#P.list + 1] = p
+  P.by[p.id] = p
+  p.value = nil                   -- actions run once after init (bang)
+  return p
+end
+function P:add_number(id, name, min, max, default, formatter, unit, page)
+  return addp{id = id, name = name, kind = "number", min = min or 0, max = max or 127,
+              default = default or min or 0, formatter = formatter, unit = unit, page = page}
+end
+function P:add_option(id, name, options, default, page)
+  assert(type(options) == "table" and #options > 0, "params: options must be a non-empty list")
+  return addp{id = id, name = name, kind = "option", options = options, min = 1, max = #options,
+              default = default or 1, page = page}
+end
+function P:add_control(id, name, min, max, default, step, unit, page)
+  return addp{id = id, name = name, kind = "control", min = min or 0, max = max or 1,
+              default = default or min or 0, step = step, unit = unit, page = page}
+end
+function P:add_toggle(id, name, default, page)
+  return addp{id = id, name = name, kind = "option", options = {"off", "on"}, min = 1, max = 2,
+              default = default and 2 or 1, toggle = true, page = page}
+end
+function P:add_trigger(id, name) return addp{id = id, name = name, kind = "trigger"} end
+function P:add_separator(name) return addp{id = "__sep" .. (#P.list + 1), name = name or "", kind = "separator"} end
+-- norns-style: params:add{id=, name=, min=, max=, default=, unit=, page=, type=, step=, options=, action=, formatter=}
+function P:add(t)
+  local k = t.type or (t.options and "option") or "control"
+  local p
+  if k == "option" then p = P:add_option(t.id, t.name, t.options, t.default, t.page)
+  elseif k == "toggle" then p = P:add_toggle(t.id, t.name, t.default, t.page)
+  elseif k == "trigger" then p = P:add_trigger(t.id, t.name)
+  elseif k == "separator" then p = P:add_separator(t.name)
+  elseif k == "number" then p = P:add_number(t.id, t.name, t.min, t.max, t.default, t.formatter, t.unit, t.page)
+  else p = P:add_control(t.id, t.name, t.min, t.max, t.default, t.step, t.unit, t.page) end
+  p.action = t.action
+  if t.formatter then p.formatter = t.formatter end
+  return p
+end
+local function getp(id)
+  local p = P.by[id]
+  if not p then error("params: no parameter '" .. tostring(id) .. "'", 3) end
+  return p
+end
+local function out(p, v)
+  if p.toggle then return v == 2 end
+  return v
+end
+-- the value with modulation (what the sound should use)
+function P:get(id)
+  local p = getp(id)
+  if not p.rid then return nil end
+  return out(p, reg_get(p.rid))
+end
+-- the value the user set (without modulation)
+function P:get_base(id) local p = getp(id) return p.rid and out(p, reg_get(p.rid, true)) end
+function P:set(id, v, silent)
+  local p = getp(id)
+  if p.kind == "trigger" then if p.action and not silent then p.action() end return end
+  if not p.rid then return end
+  if type(v) == "boolean" then v = v and 2 or 1 end
+  reg_set(p.rid, v)
+  if silent then p.value = reg_get(p.rid) end
+end
+function P:delta(id, d)
+  local p = getp(id)
+  if p.kind == "trigger" then if d ~= 0 and p.action then p.action() end return end
+  if p.rid then reg_nudge(p.rid, d) end
+end
+function P:string(id)
+  local p = getp(id)
+  if not p.rid then return p.kind == "trigger" and "press" or "" end
+  if p.formatter then return p.formatter(out(p, reg_get(p.rid))) end
+  return reg_str(p.rid)
+end
+function P:set_action(id, f) getp(id).action = f end
+function P:lookup(id) return P.by[id] end
+function P:bang()
+  for _, p in ipairs(P.list) do
+    if p.rid then
+      p.value = reg_get(p.rid)
+      if p.action then p.action(out(p, p.value)) end
+    end
+  end
+end
+-- base values + macros + routes + MIDI learn of this script (Data/<script>/labkit.lkc)
+function P:write() return _plat_kit_save() end
+function P:read() return _plat_kit_load() end
+-- every frame: values changed by pads, MAP, macros, routes, MIDI -> actions
+local sources = {}
+function _plat.poll()
+  for _, s in ipairs(sources) do
+    if s.fn then
+      local ok, v = pcall(s.fn)
+      if ok and type(v) == "number" then _plat_mod_set(s.slot, v) end
+    end
+  end
+  for _, p in ipairs(P.list) do
+    if p.rid then
+      local v = reg_get(p.rid)
+      if v ~= p.value then
+        p.value = v
+        if p.action then p.action(out(p, v)) end
+      end
+    end
+  end
+end
+function _plat.after_init() _plat_kit_load(); P:bang() end
+function _plat.save() _plat_kit_save() end
+-- mod: sources the script feeds, routes, macros -----------------------------------
+mod = {}
+-- mod.source("ENV" [, {bipolar = true, fn = function() return x end}]) -> source;
+-- source:set(v) with 0..1 (or -1..1 when bipolar), or fn is polled every frame
+function mod.source(name, opt)
+  opt = opt or {}
+  local slot, id = _plat_mod_source(name, opt.bipolar and true or false)
+  local s = {name = name, slot = slot, id = id, fn = opt.fn}
+  function s:set(v) _plat_mod_set(self.slot, v) end
+  sources[#sources + 1] = s
+  return s
+end
+function mod.set(s, v) _plat_mod_set(s.slot, v) end
+local function srcid(s)
+  if type(s) == "table" then return s.id end
+  local id = _plat_mod_find(s)
+  if not id then error("mod: no source '" .. tostring(s) .. "'", 3) end
+  return id
+end
+local function parid(p)
+  local q = P.by[p]
+  if not q or not q.rid then error("mod: no parameter '" .. tostring(p) .. "'", 3) end
+  return q.rid
+end
+-- source: a mod.source, or "LFO1".."LFO4", "RND1", "RND2", "M1".."M8"; depth -1..1
+function mod.route(src, param, depth) return _plat_mod_route(srcid(src), parid(param), depth or 0.5) end
+function mod.unroute(src, param) return _plat_mod_unroute(srcid(src), parid(param)) end
+function mod.clear() _plat_mod_clear() end
+function mod.routes() return _plat_mod_count() end
+-- macros 1..8: value 0..1 (get, or set when v is given), names, targets
+function mod.macro(i, v) if v ~= nil then _plat_macro_set(i, v) end return _plat_macro_get(i) end
+function mod.macro_name(i, name) _plat_macro_name(i, name) end
+function mod.macro_target(i, param, depth) return _plat_mod_route(srcid("M" .. i), parid(param), depth or 1.0) end
+-- LFOs 1..4: field "shape" (sine tri saw square sh smooth), "rate" (Hz), "sync" (0 free, 1..), "phase"
+function mod.lfo(i, field, v) return _plat_lfo(i, field, v) end
 return _plat
 )LUA";
 
