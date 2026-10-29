@@ -37,6 +37,10 @@ void visit(Song& s, F&& f) {
     f(s.bp.drive); f(s.bp.glide);
     f(s.lp.model); f(s.lp.octave); f(s.lp.tone); f(s.lp.decay); f(s.lp.vibrato); f(s.lp.glide);
     f(s.midiBend); f(s.midiOut);
+    // v2
+    for (auto& sec : s.sec) { f(sec.cut); f(sec.fill); f(sec.scene); }
+    f(s.gen.form); f(s.bp.sub); f(s.bp.motion);
+    f(s.intonation); f(s.dlyType); f(s.rvbType); f(s.brkPitch); f(s.morphCycles); f(s.autoSlice); f(s.brkStart);
 }
 
 inline int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
@@ -80,12 +84,27 @@ void sanitize(Song& s) {
     s.gen.range = clampi(s.gen.range, 4, 14);
     s.gen.start = clampi(s.gen.start, 0, 3);
     s.gen.seed = clampi(s.gen.seed, 1, 999);
-    s.bp.model = clampi(s.bp.model, 0, 2);
+    s.bp.model = clampi(s.bp.model, 0, kBassModels - 1);
     s.bp.octave = clampi(s.bp.octave, -4, -1);
     s.lp.model = clampi(s.lp.model, 0, 3);
     s.lp.octave = clampi(s.lp.octave, -2, 1);
     s.midiBend = clampi(s.midiBend, 1, 24);
     s.midiOut = clampi(s.midiOut, 0, 1);
+    for (auto& sec : s.sec) {
+        sec.cut = clampi(sec.cut, 0, kCutModes - 1);
+        sec.fill = clampi(sec.fill, 0, 100);
+        sec.scene = clampi(sec.scene, 0, 8);
+    }
+    s.gen.form = clampi(s.gen.form, 0, 1);
+    s.bp.sub = clampi(s.bp.sub, 0, 100);
+    s.bp.motion = clampi(s.bp.motion, 0, 100);
+    s.intonation = clampi(s.intonation, 0, 1);
+    s.dlyType = clampi(s.dlyType, 0, kDlyTypes - 1);
+    s.rvbType = clampi(s.rvbType, 0, kRvbTypes - 1);
+    s.brkPitch = clampi(s.brkPitch, -12, 12);
+    s.morphCycles = clampi(s.morphCycles, 0, 16);
+    s.autoSlice = clampi(s.autoSlice, 0, 1);
+    s.brkStart = clampi(s.brkStart, 0, kSlices - 1);
     s.wav[sizeof s.wav - 1] = 0;
 }
 
@@ -119,10 +138,11 @@ void songApplyMakam(Song& s) {
 
 void songDefaults(Song& s) {
     s = Song();
-    struct Def { int type, cycles, brk, bass, lead, chaos, filter; };
+    struct Def { int type, cycles, brk, bass, lead, chaos, filter, cut, fill; };
     const Def d[6] = {
-        {kSecIntro, 16, 1, 0, 0, 0, -55},  {kSecBuild, 16, 2, 1, 0, 10, -20}, {kSecDrop, 32, 3, 2, 1, 25, 0},
-        {kSecTaksim, 16, 0, 1, 2, 0, 0},   {kSecDrop2, 32, 4, 3, 3, 45, 0},   {kSecOutro, 16, 1, 1, 4, 10, 40},
+        {kSecIntro, 16, 1, 0, 0, 0, -55, kCutUsul, 20},     {kSecBuild, 16, 2, 1, 0, 10, -20, kCutClassic, 60},
+        {kSecDrop, 32, 3, 2, 1, 25, 0, kCutUsul, 40},        {kSecTaksim, 16, 0, 1, 2, 0, 0, kCutUsul, 0},
+        {kSecDrop2, 32, 4, 3, 3, 45, 0, kCutWarp, 55},       {kSecOutro, 16, 1, 1, 4, 10, 40, kCutDna, 30},
     };
     for (int i = 0; i < 6; ++i) {
         Section& x = s.sec[i];
@@ -133,6 +153,8 @@ void songDefaults(Song& s) {
         x.lead = d[i].lead;
         x.chaos = d[i].chaos;
         x.filter = d[i].filter;
+        x.cut = d[i].cut;
+        x.fill = d[i].fill;
     }
     s.sectionCount = 6;
     s.ch[0] = Channel{85, 0, 0, 8, 0};    // break
@@ -165,11 +187,17 @@ int songSectionAt(const Song& s, uint32_t cycle, uint32_t* startCycle) {
     return 0;
 }
 
+size_t songPayloadEnd(const uint8_t* data, size_t len) {
+    if (len < 16 || std::memcmp(data, "MKMJ", 4) != 0) return 0;
+    const size_t end = 12 + size_t(get32(data + 8)) + 4;
+    return end <= len ? end : 0;
+}
+
 size_t songSave(const Song& sIn, uint8_t* out, size_t cap) {
     Song& s = const_cast<Song&>(sIn);   // visit() only reads here
     size_t fields = 0;
     visit(s, [&](int&) { ++fields; });
-    const size_t payload = fields * 2 + sizeof s.wav;
+    const size_t payload = fields * 2 + sizeof s.wav;   // v2: 96-byte path
     const size_t total = 12 + payload + 4;
     if (cap < total) return 0;
     std::memcpy(out, "MKMJ", 4);
@@ -193,14 +221,25 @@ bool songLoad(Song& s, const uint8_t* data, size_t len) {
     const uint16_t ver = uint16_t(data[4] | (data[5] << 8));
     if (ver == 0 || ver > kFileVersion) return false;
     const uint32_t payload = get32(data + 8);
-    if (payload < sizeof s.wav || 12 + size_t(payload) + 4 > len) return false;
+    const uint32_t wavLen = ver == 1 ? 40u : uint32_t(sizeof s.wav);
+    if (payload < wavLen || 12 + size_t(payload) + 4 > len) return false;
     if (ot::crc32(data + 12, payload) != get32(data + 12 + payload)) return false;
     Song t;
     songDefaults(t);
     const uint8_t* p = data + 12;
     const uint8_t* end = p + payload;
-    std::memcpy(t.wav, p, sizeof t.wav);
-    p += sizeof t.wav;
+    std::memset(t.wav, 0, sizeof t.wav);
+    if (ver == 1) {   // a name in /Lab/MAKAM/Breaks
+        char name[41] = {};
+        std::memcpy(name, p, 40);
+        if (name[0]) {
+            std::memcpy(t.wav, "Lab/MAKAM/Breaks/", 17);
+            std::memcpy(t.wav + 17, name, std::strlen(name) + 1 < sizeof t.wav - 17 ? std::strlen(name) + 1 : sizeof t.wav - 18);
+        }
+    } else {
+        std::memcpy(t.wav, p, sizeof t.wav);
+    }
+    p += wavLen;
     visit(t, [&](int& v) {
         if (p + 2 <= end) {
             v = get16(p);

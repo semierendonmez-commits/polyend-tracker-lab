@@ -1,6 +1,10 @@
-# MAKAM lab-gate simulator check: boot (intro), every page, the transport,
-# sound from the built-in break with no WAV on the card, pads, MIDI out,
-# settings, save, and the display-list budget on every page.
+# MAKAM lab-gate simulator check (round 2): boot, sound with no WAV, every
+# page and its Insert action, the LABKIT views (PARAM pads, MAP, MACRO, MOD,
+# HELP), a route, a registry edit from a page, the break browser loading a
+# card WAV, scenes (Perform + pad), loop mode, MIDI out, Config, budgets.
+# Keys: Insert = the page action (no encoder push on the Tracker),
+# I.Param = PARAM pads, Master = MAP, Shift + Config = HELP.
+mkwav Lab/MAKAM/Breaks/brk.wav 2.8 110
 wait 3000
 budget
 # the play pads sound with the transport stopped (lead + bass in makam tuning)
@@ -18,10 +22,11 @@ tap Play
 wait 2500
 expect-sound 3000
 budget
-# every page while playing
+# every page while playing, with its Insert action
 tap F2
 wait 200
 enc 3
+tap Insert
 wait 100
 budget
 tap F3
@@ -35,17 +40,21 @@ pad 36 up
 pad 44 down
 wait 400
 pad 44 up
-tap Push
+tap Insert
 budget
 tap F4
 wait 200
-tap Push
+tap Insert
 enc 2
 budget
+# the synth page edits through the registry: Bass Octave Detune Cutoff
 tap F5
-enc 1
 tap Down
-enc 1
+tap Down
+tap Down
+expect-param s.cut 55
+enc 10
+expect-param s.cut 65
 budget
 tap F6
 tap Right
@@ -57,12 +66,82 @@ tap F7
 tap Right
 enc -5
 budget
-tap F8
-tap Right
-tap Left
-hold Shift 900
+# LABKIT: PARAM pads (mixer page), a route LFO2 -> BREAK Reverb, MAP, MACRO, MOD, HELP
+tap INSTRPARAMS
+expect-overlay param
+wait 100
 budget
-# loop mode on the Drop section, louder: the mix still sounds
+expect-routes 9
+pad 37 down
+pad 3 down
+enc 20
+wait 100
+pad 3 up
+pad 37 up
+expect-routes 10
+tap INSTRPARAMS
+expect-overlay none
+press MASTER
+wait 100
+expect-overlay map
+pad 4 down
+pad 4 up
+wait 100
+budget
+release MASTER
+expect-overlay none
+press SHIFT
+tap INSTRPARAMS
+release SHIFT
+expect-overlay macro
+wait 100
+budget
+press SHIFT
+tap INSTRPARAMS
+release SHIFT
+expect-overlay none
+press SHIFT
+tap MASTER
+release SHIFT
+expect-overlay mod
+wait 100
+budget
+tap F8
+expect-overlay none
+press SHIFT
+tap CONFIG
+release SHIFT
+expect-overlay help
+wait 100
+budget
+tap F8
+expect-overlay none
+# FILE: the break browser (entry 1 of the breaks column) loads and slices a card WAV
+tap F8
+wait 100
+tap Right
+tap Insert
+expect-overlay browser
+wait 600
+budget
+tap F8
+wait 400
+expect-overlay none
+expect-param u.kit 3
+budget
+# scenes: Perform + Shift + pad 1 stores, Perform + pad 1 recalls
+press PERFORMANCE
+press SHIFT
+pad 0 tap
+release SHIFT
+release PERFORMANCE
+press PERFORMANCE
+pad 0 tap
+release PERFORMANCE
+tap F7
+wait 200
+budget
+# loop mode on the playing section: the mix still sounds
 peak-reset
 tap F1
 wait 1500

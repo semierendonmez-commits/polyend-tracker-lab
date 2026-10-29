@@ -176,6 +176,30 @@ const Makam kMakams[kMakamCount] = {
      {53, 62, 71, 75, 84, 93, 102, 106}, 4, 49, kSeyirAsc, {2, 5}, true},
 };
 
+const PracticeShift kPractice[kPracticeShifts] = {
+    {"Saba", 5, 2},          // Hicaz -> about Dik Hicaz (TDV: 2-2.5 commas sharper)
+    {"Huzzam", 14, 1},       // Hisar 1 comma sharp (TDV: 1-1.5)
+    {"Karcigar", 14, 1},     // the same Hisar in the hicaz pentachord on Neva
+    {"Suzinak", 14, 0},      // (written: the TDV raises it only for a huzzam cadence)
+    {"Ussak", 48, -1},       // Segah about a comma low in the Ussak family
+    {"Beyati", 48, -1},
+    {"Huseyni", 48, -1},
+    {"Muhayyer", 48, -1},
+    {"Neva", 48, -1},
+    {"Karcigar", 48, -1},
+    {"Saba", 48, -1},
+    {"Segah", 48, 0},        // Segah's own karar stays where it is written
+};
+
+int practiceComma(int makamIndex, int comma) {
+    if (makamIndex < 0 || makamIndex >= kMakamCount) return comma;
+    const char* n = kMakams[makamIndex].name;
+    const int pc = comma - floorDiv(comma, kCommasPerOctave) * kCommasPerOctave;
+    for (const PracticeShift& p : kPractice)
+        if (p.pitchClass == pc && std::strcmp(p.makam, n) == 0) return comma + p.delta;
+    return comma;
+}
+
 const char* seyirName(uint8_t s) {
     switch (s) {
         case kSeyirAsc: return "Ascending";

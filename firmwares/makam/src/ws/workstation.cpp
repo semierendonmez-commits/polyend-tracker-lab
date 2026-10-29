@@ -23,12 +23,19 @@ const char* const kVarOff[] = {"Off", "A", "B", "C", "D"};
 const char* const kStrokeNames[] = {"Rest", "Dum", "Tek", "Ke"};
 const char* const kSliceNames[] = {"Auto", "1", "2", "3", "4", "5", "6", "7", "8",
                                    "9", "10", "11", "12", "13", "14", "15", "16"};
-const char* const kBassModels[] = {"Reese", "Sub", "Growl"};
+const char* const kBassModelNames[makam::kBassModels] = {"Reese", "Sub", "Growl", "Talk", "FM", "Hoover"};
 const char* const kLeadModels[] = {"Ney", "Kanun", "Saz", "Zurna"};
 const char* const kStartNames[] = {"Seyir", "Karar", "Guclu", "Tiz durak"};
 const char* const kSongMode[] = {"Loop section", "Arrangement"};
 const char* const kResample[] = {"Cut only", "Follow tempo"};
 const char* const kMidiOut[] = {"Off", "Bass+Lead"};
+const char* const kIntonNames[] = {"Written", "Practice"};
+const char* const kFormNames[] = {"Seyir", "Call+Resp"};
+const char* const kSliceMode[] = {"Equal 16", "Onsets"};
+const char* const kDlyNames[kDlyTypes] = {"Clean", "Tape", "Lo-fi", "Ping-pong"};
+const char* const kRvbNames[kRvbTypes] = {"Plate", "Hall", "Gated"};
+const char* const kSceneNames[] = {"-", "1", "2", "3", "4", "5", "6", "7", "8"};
+const char* const kSecNums[] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"};
 
 // Performance pads (Break page, bottom row).
 enum Perf { kPfRoll2, kPfRoll3, kPfRoll4, kPfRoll6, kPfRev, kPfStut, kPfHalf, kPfMute, kPfChaos, kPfDum, kPfTek, kPfKe };
@@ -52,7 +59,8 @@ bool MakamWs::init(Context& c) {
     song_ = a.make<Song>();
     scratch_ = static_cast<float*>(a.alloc(kKitFrames * sizeof(float)));
     fileBuf_ = static_cast<uint8_t*>(a.alloc(kFileMax));
-    if (!song_ || !scratch_ || !fileBuf_) return false;
+    scene_ = static_cast<float*>(a.alloc(kScenes * kSceneParams * sizeof(float)));
+    if (!song_ || !scratch_ || !fileBuf_ || !scene_) return false;
     for (int k = 0; k <= kKits; ++k) {
         const uint32_t cap = k == kKits ? kWavFrames : kKitFrames;
         kits_[k].data = static_cast<int16_t*>(a.alloc(cap * sizeof(int16_t)));
@@ -64,6 +72,19 @@ bool MakamWs::init(Context& c) {
     songDefaults(*song_);
     eng_.song = song_;
     eng_.kits = kits_;
+    // LABKIT: the registry, the sources, the browser, first-boot macros.
+    // Registry::add(int*) writes the field through the default 0..1 range
+    // before range() runs (a negative int such as the bass octave becomes 0):
+    // keep the song and put it back after the registration.
+    {
+        Song* keep = a.make<Song>();
+        if (keep) *keep = *song_;
+        registerParams();
+        if (keep) *song_ = *keep;
+        pullFields();
+    }
+    c.browser().reserve(128, 4.0f);
+    defaultMacros();
 
     if (c.fs) {
         char p[96];
@@ -87,8 +108,10 @@ void MakamWs::slotPath(int slot, char* buf, int cap) const {
 
 bool MakamWs::saveProject(const char* path) {
     if (!ctx_ || !ctx_->fs) return false;
-    const size_t n = songSave(*song_, fileBuf_, kFileMax);
+    pullFields();   // fields written directly are the truth
+    size_t n = songSave(*song_, fileBuf_, kFileMax);
     if (!n) return false;
+    n += saveTrailers(fileBuf_ + n, kFileMax - n);
     const IStorage::Handle h = ctx_->fs->open(path, IStorage::kWrite);
     if (h < 0) return false;
     const bool ok = ctx_->fs->write(h, fileBuf_, uint32_t(n)) == int32_t(n);
@@ -110,6 +133,10 @@ bool MakamWs::loadProject(const char* path) {
     ctx_->fs->close(h);
     eng_.reset();
     if (!songLoad(*song_, fileBuf_, got)) return false;
+    pullFields();   // the registry follows the loaded fields
+    const size_t end = songPayloadEnd(fileBuf_, got);
+    if (end && end < got) loadTrailers(fileBuf_ + end, got - end);
+    else for (int i = 0; i < kScenes; ++i) sceneUsed_[i] = false;
     if (song_->kit == kKits) {
         if (!song_->wav[0] || !loadWav(song_->wav)) song_->kit = 0;
     }
@@ -118,14 +145,17 @@ bool MakamWs::loadProject(const char* path) {
     return true;
 }
 
-bool MakamWs::loadWav(const char* name) {
-    if (!ctx_ || !ctx_->fs || !name || !name[0]) return false;
+// `path`: from the card root ("Lab/MAKAM/Breaks/amen.wav"), or a bare name in /Lab/MAKAM/Breaks.
+bool MakamWs::loadWav(const char* path) {
+    if (!ctx_ || !ctx_->fs || !path || !path[0]) return false;
     char p[128];
-    std::snprintf(p, sizeof p, "%s/Breaks/%s", ctx_->home, name);
+    if (std::strchr(path, '/')) copyStr(p, sizeof p, path);
+    else std::snprintf(p, sizeof p, "%s/Breaks/%s", ctx_->home, path);
     eng_.wavReady = false;
-    const bool ok = loadWavKit(kits_[kKits], *ctx_->fs, p);
+    eng_.reset();
+    const bool ok = loadWavKit(kits_[kKits], *ctx_->fs, p, song_->autoSlice != 0, scratch_);
     if (ok) {
-        copyStr(song_->wav, sizeof song_->wav, name);
+        copyStr(song_->wav, sizeof song_->wav, p);
         eng_.wavReady = true;
     }
     return ok;
@@ -193,6 +223,8 @@ int MakamWs::settings(SettingRow* rows, int cap) {
     add("MAKAM MIDI notes out", &song_->midiOut, 0, 1, kMidiOut, "");
     add("MAKAM MIDI bend range", &song_->midiBend, 1, 24, nullptr, " st");
     add("MAKAM break tempo", &song_->breakResample, 0, 1, kResample, "");
+    add("MAKAM intonation", &song_->intonation, 0, 1, kIntonNames, "");
+    add("MAKAM card break slicing", &song_->autoSlice, 0, 1, kSliceMode, "");
     return n;
 }
 
@@ -218,6 +250,7 @@ int MakamWs::buildRows(int page, PRow* rows, int cap) {
             add("Makam", &s.makam, 0, kMakamCount - 1, gMakamNames, kRidMakam);
             add("Tuning", &s.tuning, 0, 1, kTuneNames, kRidTuning);
             add("Ahenk", &s.transpose, -12, 12, nullptr, kRidTuning);
+            add("Intonation", &s.intonation, 0, 1, kIntonNames, kRidTuning);
             break;
         case kPgBreak: {
             BreakStep& b = s.brk[s.editVar].s[clampi(stepSel_, 0, kSteps - 1)];
@@ -232,6 +265,9 @@ int MakamWs::buildRows(int page, PRow* rows, int cap) {
             add("Choke", &b.choke, 0, 1, kOffOn, kRidBreakEdit);
             add("Edit density", &s.editDensity, 0, 100, nullptr);
             add("Drive", &s.drive, 0, 100, nullptr);
+            add("Break pitch", &s.brkPitch, -12, 12, nullptr);
+            add("Cut offset", &s.brkStart, 0, 15, nullptr);
+            add("Card slicing", &s.autoSlice, 0, 1, kSliceMode, kRidAutoSlice);
             break;
         }
         case kPgMelody: {
@@ -242,12 +278,13 @@ int MakamWs::buildRows(int page, PRow* rows, int cap) {
             add("Range", &s.gen.range, 4, 14, nullptr, kRidGen);
             add("Ornament", &s.gen.ornament, 0, 100, nullptr, kRidGen);
             add("Start", &s.gen.start, 0, 3, kStartNames, kRidGen);
+            add("Form", &s.gen.form, 0, 1, kFormNames, kRidGen);
             add("Seed", &s.gen.seed, 1, 999, nullptr, kRidGen);
             add("Live", &s.gen.live, 0, 1, kOffOn);
             break;
         }
         case kPgSynth:
-            add("Bass", &s.bp.model, 0, 2, kBassModels);
+            add("Bass", &s.bp.model, 0, makam::kBassModels - 1, kBassModelNames);
             add("Octave", &s.bp.octave, -4, -1, nullptr);
             add("Detune", &s.bp.detune, 0, 100, nullptr);
             add("Cutoff", &s.bp.cutoff, 0, 100, nullptr);
@@ -256,6 +293,8 @@ int MakamWs::buildRows(int page, PRow* rows, int cap) {
             add("Decay", &s.bp.decay, 0, 100, nullptr);
             add("Drive", &s.bp.drive, 0, 100, nullptr);
             add("Glide", &s.bp.glide, 0, 100, nullptr);
+            add("Sub", &s.bp.sub, 0, 100, nullptr);
+            add("Motion", &s.bp.motion, 0, 100, nullptr);
             add("Lead", &s.lp.model, 0, 3, kLeadModels);
             add("Octave", &s.lp.octave, -2, 1, nullptr);
             add("Tone", &s.lp.tone, 0, 100, nullptr);
@@ -266,14 +305,17 @@ int MakamWs::buildRows(int page, PRow* rows, int cap) {
         case kPgArrange: {
             Section& x = s.sec[clampi(secSel_, 0, kSections - 1)];
             add("Play", &s.songMode, 0, 1, kSongMode, kRidSongMode);
-            add("Section", &secSel_, 0, s.sectionCount - 1, kSliceNames + 1, kRidSectionSel);
+            add("Section", &secSel_, 0, s.sectionCount - 1, kSecNums, kRidSectionSel);
             add("Type", &x.type, 0, kSecTypes - 1, kSectionNames);
             add("Cycles", &x.cycles, 1, 64, nullptr);
             add("Break", &x.brk, 0, 4, kVarOff);
             add("Bass", &x.bass, 0, 4, kVarOff);
             add("Lead", &x.lead, 0, 4, kVarOff);
+            add("Cut", &x.cut, 0, kCutModes - 1, kCutNames);
+            add("Fill", &x.fill, 0, 100, nullptr);
             add("Chaos", &x.chaos, 0, 100, nullptr);
             add("Filter", &x.filter, -100, 100, nullptr);
+            add("Scene", &x.scene, 0, 8, kSceneNames);
             break;
         }
         case kPgMixer:
@@ -285,12 +327,15 @@ int MakamWs::buildRows(int page, PRow* rows, int cap) {
                 add("Reverb", &c.rvb, 0, 100, nullptr);
                 add("Mute", &c.mute, 0, 1, kOffOn);
             } else {
+                add("Delay", &s.dlyType, 0, kDlyTypes - 1, kDlyNames);
                 add("Delay time", &s.dlyTime, 0, kDelaySyncCount - 1, kDelaySyncNames);
                 add("Feedback", &s.dlyFb, 0, 95, nullptr);
+                add("Reverb", &s.rvbType, 0, kRvbTypes - 1, kRvbNames);
                 add("Reverb size", &s.rvbSize, 0, 100, nullptr);
                 add("Damping", &s.rvbDamp, 0, 100, nullptr);
                 add("Dum duck", &s.duck, 0, 100, nullptr);
                 add("DJ filter", &s.djFilter, -100, 100, nullptr);
+                add("Scene morph", &s.morphCycles, 0, 16, nullptr);
             }
             break;
         default: break;
@@ -298,9 +343,11 @@ int MakamWs::buildRows(int page, PRow* rows, int cap) {
     return n;
 }
 
-void MakamWs::rowChanged(const PRow& r) {
+void MakamWs::rowChanged(const PRow& r) { applyRid(r.id); }
+
+void MakamWs::applyRid(uint8_t rid) {
     Song& s = *song_;
-    switch (r.id) {
+    switch (rid) {
         case kRidBpm: ctx_->setBpm(float(s.bpm)); lastBpm_ = s.bpm; break;
         case kRidUsul:
             songApplyUsul(s);
@@ -325,6 +372,9 @@ void MakamWs::rowChanged(const PRow& r) {
             if (!s.songMode) s.curSection = clampi(secSel_, 0, s.sectionCount - 1);
             eng_.reset();
             break;
+        case kRidAutoSlice:
+            if (s.kit == kKits && s.wav[0]) loadWav(s.wav);
+            break;
         default: break;
     }
 }
@@ -336,7 +386,7 @@ void MakamWs::setPage(int p) {
 
 void MakamWs::encoder(int delta, bool shift) {
     if (page_ == kPgFile) {
-        const int cnt = fileCol_ == 0 ? 8 : (wavCount_ ? wavCount_ : 1);
+        const int cnt = fileCol_ == 0 ? 8 : wavCount_ + 1;   // breaks: "Browse the card" + the list
         fileSel_[fileCol_] = clampi(fileSel_[fileCol_] + delta, 0, cnt - 1);
         return;
     }
@@ -346,6 +396,13 @@ void MakamWs::encoder(int delta, bool shift) {
     sel = clampi(sel, 0, rowCount_ - 1);
     PRow& r = rows_[sel];
     if (!r.v) return;
+    const kit::ParamId id = paramOf(r.v);
+    if (id != kit::kNoParam) {   // registered: through the registry (HUD, macros, MIDI learn, routes)
+        const int before = *r.v;
+        ctx_->params().nudge(id, delta, shift);
+        if (*r.v != before) rowChanged(r);
+        return;
+    }
     const int range = r.max - r.min;
     const int step = (shift && !r.names && range > 20) ? 10 : 1;
     const int v = clampi(*r.v + delta * step, r.min, r.max);
@@ -373,7 +430,10 @@ void MakamWs::action(bool shift) {
             ctx_->toast("Bass and phrases follow the makam");
             break;
         case kPgArrange:
-            if (!s.songMode) s.curSection = secSel_;
+            s.songMode = 0;
+            s.curSection = secSel_;
+            eng_.reset();
+            ctx_->toast("Looping the section");
             break;
         case kPgFile: {
             char p[96];
@@ -385,8 +445,10 @@ void MakamWs::action(bool shift) {
                 } else {
                     ctx_->toast(loadProject(p) ? "Song loaded" : "Empty slot or bad file");
                 }
+            } else if (fileSel_[1] == 0) {
+                openBreakBrowser();
             } else if (wavCount_ > 0) {
-                if (loadWav(wavs_[fileSel_[1]])) {
+                if (loadWav(wavs_[fileSel_[1] - 1])) {
                     s.kit = kKits;
                     ctx_->toast("Break loaded and sliced");
                 } else {
@@ -431,6 +493,17 @@ void MakamWs::melodyWrite(int deg) {
 void MakamWs::padDown(int pad, int vel, bool shift) {
     Song& s = *song_;
     const int r = padRow(pad), c = padCol(pad);
+    if (performHeld_ && r == 0 && c < kScenes) {   // Perform + pad: scenes
+        if (shift) {
+            storeScene(c);
+            ctx_->toast("Scene stored");
+        } else if (sceneUsed(c)) {
+            recallScene(c);
+        } else {
+            ctx_->toast("Empty scene: Perform + Shift + pad stores it");
+        }
+        return;   // never a note: the release is ignored (padHeld_ stays false)
+    }
     padHeld_[pad] = true;
     bool play = false;
     switch (page_) {
@@ -556,6 +629,9 @@ void MakamWs::onEvent(const Event& e) {
         case Event::kPadUp: padUp(e.id); return;
         case Event::kEncoder: encoder(e.delta, e.shift); return;
         case Event::kPress: break;
+        case Event::kRelease:
+            if (e.id == btn::Performance) performHeld_ = false;
+            return;
         default: return;
     }
     const uint8_t id = e.id;
@@ -600,8 +676,8 @@ void MakamWs::onEvent(const Event& e) {
             else encoder(d, e.shift);
             break;
         }
-        case btn::EncPush: action(e.shift); break;
-        case btn::Rec: if (page_ == kPgFile) action(true); break;
+        case btn::Performance: performHeld_ = true; break;
+        case btn::Rec: if (page_ == kPgFile && fileCol_ == 0) action(true); break;
         case btn::Song:
             s.songMode ^= 1;
             // loop mode keeps the selected section (Arrange page) or the one playing
@@ -610,11 +686,16 @@ void MakamWs::onEvent(const Event& e) {
             eng_.reset();
             ctx_->toast(s.songMode ? "Arrangement" : "Loop section");
             break;
-        case btn::Insert:
-            if (page_ == kPgArrange) sectionInsert();
-            else if (page_ == kPgMelody) {
+        case btn::Insert:   // the page action (the original Tracker has no encoder push)
+            if (!e.shift) {
+                action(false);
+            } else if (page_ == kPgArrange) {
+                sectionInsert();
+            } else if (page_ == kPgMelody) {
                 NoteStep& n = s.phr[s.editPhrase].s[clampi(phraseCur_, 0, kPhraseMax - 1)];
                 n.flags = (n.flags & kNoteOn) ? (n.flags ^ kNoteGlide) : kNoteTie;
+            } else if (page_ == kPgFile) {
+                action(true);   // Shift + Insert saves
             }
             break;
         case btn::Delete:
@@ -624,6 +705,7 @@ void MakamWs::onEvent(const Event& e) {
             else if (page_ == kPgFile && e.shift) {
                 eng_.reset();
                 songDefaults(s);
+                pullFields();
                 ctx_->setBpm(float(s.bpm));
                 ctx_->toast("New song");
             }
@@ -708,6 +790,30 @@ void MakamWs::update(uint32_t ms) {
             if (ph >= 0) genPhrase(kMakams[s.makam], s.gen, s.usul, s.phr[ph], uint32_t(s.gen.seed * 131 + w * 7919u));
         }
     }
+    // a break picked in the browser (loaded here, in the main loop)
+    if (pendingWavReady_) {
+        pendingWavReady_ = false;
+        if (loadWav(pendingWav_)) {
+            s.kit = kKits;
+            pullFields();
+            ctx_->toast("Break loaded and sliced");
+            scanFiles();
+        } else {
+            ctx_->toast("Cannot read that WAV");
+        }
+    }
+    // the arrangement recalls a section's scene at its start (song mode)
+    if (ctx_->playing() && s.songMode && eng_.st.unit >= 0) {
+        const int sec = eng_.st.section;
+        if (sec != lastSceneSection_) {
+            lastSceneSection_ = sec;
+            const int sc = s.sec[clampi(sec, 0, kSections - 1)].scene;
+            if (sc > 0) recallScene(sc - 1);
+        }
+    } else {
+        lastSceneSection_ = -1;
+    }
+    updateMorph(ms);
 }
 
 void MakamWs::onTransport(bool playing) {
@@ -803,19 +909,24 @@ void MakamWs::leds(Rgb* pads) {
                 break;
             default: break;
         }
+        if (performHeld_ && r == 0) {   // the scenes
+            out = c < kScenes ? (sceneUsed_[c] ? (c == morphTo_ ? col::kCream : scale(col::kSaffron, 0.7f)) : Rgb(0x101420))
+                              : Rgb();
+        }
         pads[p] = out;
     }
 }
 
 // ---- bench ------------------------------------------------------------------------------------
 const char* MakamWs::benchName(int i) const {
-    static const char* const kN[] = {"idle", "breaks", "bass-lead", "full", "full-kanun"};
-    return i >= 0 && i < 5 ? kN[i] : "?";
+    static const char* const kN[] = {"idle", "breaks", "bass-lead", "full", "full-kanun", "neuro-dub", "dna-lofi"};
+    return i >= 0 && i < 7 ? kN[i] : "?";
 }
 
 void MakamWs::benchSetup(int i) {
     benchMode_ = true;
     Song& s = *song_;
+    ctx_->mod().clearRoutes();
     songDefaults(s);
     s.songMode = 0;
     s.curSection = 0;
@@ -846,13 +957,13 @@ void MakamWs::benchSetup(int i) {
             s.ch[0].dly = 50;
             s.ch[0].rvb = 40;
             break;
-        default: {   // 2 bass + lead, 3 full, 4 full with the kanun
+        default: {   // 2 bass + lead, 3 full, 4 full with the kanun, 5 neuro-dub, 6 dna-lofi
             s.usul = 1;   // curcuna: densest strokes
             s.makam = 3;  // hicaz
             songApplyUsul(s);
             songApplyMakam(s);
-            s.bp.model = 2;      // growl: three oscillators + fold
-            s.lp.model = i == 4 ? 1 : 2;   // saz: two KS courses
+            s.bp.model = i == 5 ? kBassHoover : (i == 6 ? kBassTalk : kBassGrowl);
+            s.lp.model = (i == 4 || i == 6) ? 1 : 2;   // saz: two KS courses
             s.gen.density = 100;
             for (int k = 0; k < kPhraseMax; ++k) s.phr[2].s[k] = NoteStep{k % 9, kNoteOn | (k & 1 ? kNoteGlide : kNoteGrace)};
             if (i == 2) s.sec[0].brk = 0;
@@ -863,6 +974,21 @@ void MakamWs::benchSetup(int i) {
                 s.drive = 70;
                 for (auto& c : s.ch) { c.dly = 60; c.rvb = 60; }
                 s.dlyFb = 80;
+            }
+            if (i == 5) {   // tape delay at 90 %, gated reverb, warp cuts with full fills
+                s.dlyType = kDlyTape;
+                s.dlyFb = 90;
+                s.rvbType = kRvbGated;
+                s.sec[0].cut = kCutWarp;
+                s.sec[0].fill = 100;
+                s.intonation = 1;
+            }
+            if (i == 6) {   // lo-fi delay, hall, DNA cuts at chaos 100, call + response
+                s.dlyType = kDlyLofi;
+                s.rvbType = kRvbHall;
+                s.sec[0].cut = kCutDna;
+                s.sec[0].chaos = 100;
+                s.gen.form = 1;
             }
             // two pad voices held on top of the phrase
             LiveEv e;
@@ -876,6 +1002,21 @@ void MakamWs::benchSetup(int i) {
             eng_.live.push(e);
             break;
         }
+    }
+    pullFields();
+    if (i >= 3) {   // LABKIT routes on the busy scenarios: 4 LFOs, a random, the macros, the sources
+        kit::Mod& M = ctx_->mod();
+        M.route(kit::kSrcLfo + 0, paramOf(&s.bp.cutoff), 0.4f);
+        M.route(kit::kSrcLfo + 1, paramOf(&s.djFilter), 0.3f);
+        M.route(kit::kSrcLfo + 2, paramOf(&s.lp.tone), 0.3f);
+        M.route(kit::kSrcLfo + 3, paramOf(&s.ch[2].pan), 0.5f);
+        M.route(kit::kSrcRnd + 0, paramOf(&s.bp.motion), 0.4f);
+        M.route(kit::kSrcMacro + 0, paramOf(&s.dlyFb), 0.2f);
+        const int src = M.findSource("ENERGY");
+        if (src >= 0) M.route(src, paramOf(&s.ch[0].rvb), 0.3f);
+        const int dum = M.findSource("DUM");
+        if (dum >= 0) M.route(dum, paramOf(&s.bp.drive), 0.3f);
+        M.update(false);
     }
 }
 

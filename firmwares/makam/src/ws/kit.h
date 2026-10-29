@@ -38,7 +38,12 @@ void synthKit(Kit& kit, int k, float* scratch);
 // Load a WAV (mono or stereo, any rate / bit depth OpenTracker reads) and
 // slice it as a 1/2/4-bar break (the bar count that puts it nearest to
 // 170 BPM). Main loop only. False on any error (kit unchanged frames = 0).
-bool loadWavKit(Kit& kit, ot::IStorage& fs, const char* path);
+// autoSlice: cut at the 16 strongest onsets (spectral flux, the semi fork's
+// "Breaks" detector), else 16 equal parts. `scratch` = kKitFrames floats.
+bool loadWavKit(Kit& kit, ot::IStorage& fs, const char* path, bool autoSlice = true, float* scratch = nullptr);
+// The onset slicer on its own: fills kit.start[0..16] from kit.data/frames.
+// Returns the number of onsets found (before filling to 16).
+int onsetSlices(Kit& kit, float* scratch);
 // Classify the 16 slices of kit.data by band energies at each onset.
 void classifySlices(Kit& kit);
 

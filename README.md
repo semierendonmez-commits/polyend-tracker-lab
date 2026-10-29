@@ -40,7 +40,7 @@ Boot intro turns it off).
 
 ### Common navigation (LABKIT)
 
-The round-2 firmwares (KONSOL, BULUT, DATAMATICS and TILT so far) share one
+The round-2 firmwares (KONSOL, BULUT, DATAMATICS, MAKAM and TILT so far) share one
 navigation layer, [LABKIT](labkit/NAV.md):
 
 | Key | Action |
@@ -243,16 +243,33 @@ cycle) is a clock dial, the **makam** a ring of perdes at their comma positions.
 - **13 usuls** (Aksak 9/8, Curcuna 10/8, Devr-i Hindi 7/8, Sofyan, Düyek,
   Yürük Semai, Aksak Semai, Devr-i Turan, ...): dum strokes cut kick slices,
   tek snare slices, ke ghost notes.
-- **Breaks:** three built-in synthesised breaks (no card needed) or WAVs from
-  the card, with rolls, reverse, stutter and chaos edits.
-- **Bass** (Reese, Sub, Growl) and **lead** (Ney, Kanun, Saz, Zurna) at
-  microtonal pitch; MIDI out with pitch bend.
-- **Seyir generator:** phrases that start where the makam starts, rest on the
-  güçlü and cadence to the karar, live or written into an editable phrase.
+- **Breaks:**
+  - Three built-in synthesised breaks, or WAVs from the card (picked in the
+    browser with preview). Card WAVs are cut at their onsets.
+  - Rolls, reverse, stutter and chaos edits.
+  - Four cut modes per section: Usul, BBCut, Warp and DNA (GENOTYPE-style).
+  - Phrase-end fills (TURNAROUND-style) at 4, 8 and 16 cycles.
+- **Bass:**
+  - Reese, Sub and Growl, plus NEUROSTACK's Talk, FM and Hoover with a
+    Motion control and a sine sub.
+- **Lead:** Ney, Kanun, Saz and Zurna, at microtonal pitch.
+- **MIDI out:** with pitch bend.
+- **Seyir generator:**
+  - Phrases start where the makam starts, rest on the güçlü and cadence to
+    the karar, live or written into an editable phrase.
+  - A Call + Response form: the call ends on the güçlü, the answer on the
+    karar.
+  - Optional practice intonation (e.g. Saba's Hicaz +2 commas).
+- **Dub sends:**
+  - A delay: Clean, Tape (wow/flutter), Lo-fi or Ping-pong.
+  - A reverb: Plate, Hall or Gated.
+- **Scenes:** 8 scenes with morph time.
+- **LABKIT:** four ready macros on first boot (DUB, SWEEP, NEURO, SPACE). Usul
+  position, dum/tek hits, slice, energy and seyir are modulation sources.
 
-| Makam ring (Rast) | Seyir generator |
+| Makam ring (Rast, comma steps) | Break page |
 |---|---|
-| ![Makam](firmwares/makam/docs/screenshots/makam-ring.png) | ![Seyir](firmwares/makam/docs/screenshots/seyir.png) |
+| ![Makam](firmwares/makam/docs/screenshots/makam-ring.png) | ![Break](firmwares/makam/docs/screenshots/break-slicer.png) |
 
 [Manual](firmwares/makam/MANUAL.md) · [Image](firmwares/makam/release/PolyendTrackerMAKAMJ.ptf)
 
