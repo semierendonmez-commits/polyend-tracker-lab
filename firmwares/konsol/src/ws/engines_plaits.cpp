@@ -95,6 +95,10 @@ public:
         pa.timbre_modulation_amount = p[pTimEnv];
         pa.morph_modulation_amount = p[pMorEnv];
         pa.engine = int(p[pModel] + 0.5f);
+        // Speech: keep harmonics below the LPC word banks (formant, SAM and LPC
+        // phonemes stay). Choosing a word bank decodes it in one block, ~240k
+        // M4 instructions: more than the whole audio budget (measured in GRAF).
+        if (pa.engine == 15) pa.harmonics *= 0.38f;
         pa.decay = p[pDecay];
         pa.lpg_colour = p[pColour];
         plaits::Modulations m;

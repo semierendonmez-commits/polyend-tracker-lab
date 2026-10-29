@@ -1163,7 +1163,7 @@ void Konsol::benchSetupNew(int i) {
                                            kEngFloater, kEngTb303, kEngNeuro, kEngQuanta};
     static const uint8_t kKw[kTracks] = {kEngKit, kEngKit, kEngKit, kEngSampler,
                                          kEngSampler, kEngSampler, kEngGrain, kEngGrain};
-    static const uint8_t kModels[kTracks] = {20, 12, 18, 19, 6, 11, 10, 1};   // the costliest Plaits models
+    static const uint8_t kModels[kTracks] = {20, 12, 18, 2, 3, 4, 15, 19};   // the costliest Plaits models (modal, harmonic, string, the 6-op FM banks, speech)
     const bool solo = i >= 9;
     for (int t = 0; t < kTracks; ++t) {
         Clip& c = P_->clip[t][0];

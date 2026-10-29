@@ -83,8 +83,9 @@ OT_FASTRUN_FN void pPlts(Module& m, Proc& p) {
         pa.harmonics = clampf(m.v[3] + har[at], 0.0f, 1.0f);
         // Speech: formant, SAM and LPC phonemes only. Its upper half decodes an
         // LPC word bank whenever the bank changes, ~240k instructions in one
-        // block, more than the whole audio budget.
-        if (pa.engine == 15) pa.harmonics *= 0.333f;
+        // block, more than the whole audio budget. The first bank starts at
+        // harmonics 0.394 (group 2.364, quantiser step 0.1 with hysteresis).
+        if (pa.engine == 15) pa.harmonics *= 0.38f;
         pa.timbre = clampf(m.v[4] + tim[at], 0.0f, 1.0f);
         pa.morph = clampf(m.v[5] + mor[at], 0.0f, 1.0f);
         if (md.trigger_patched) {
