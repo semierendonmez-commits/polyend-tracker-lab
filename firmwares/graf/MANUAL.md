@@ -1,22 +1,34 @@
 # GRAF -- user manual
 
 GRAF turns the original Polyend Tracker into a **modular synthesizer**. You
-place modules (oscillators, filters, envelopes, sequencers, effects, a
-recurrent noise network, a pinball sequencer...) on a grid, patch them
-together with virtual cables and play the result from the pads, from MIDI or
-from its own sequencers. Patch states can be stored as **snapshots** and a
-**song** morphs from one snapshot to the next along a timeline.
+place modules on a grid, patch them together with virtual cables and play the
+result from the pads, from MIDI or from its own sequencers. There are 49
+module types: oscillators, filters, envelopes and sequencers; the real
+Mutable Instruments **Plaits**; a Rings-style resonator with an Elements-style
+exciter; a 303; the FLOATER drum voices; QUANTA's microsound particles;
+chaos, Bernoulli gates and random generators; two recurrent noise networks
+(GRAF's RETE and NET, the original forsitan rete circuit of the RETICULUM
+patch); a pinball sequencer; effects. Patch states can be stored as
+**snapshots**, crossfaded with an **A / B fader** or played as a **song** that
+morphs from one snapshot to the next.
 
 There are two ways to patch, and they always show the same patch:
 
+- the **graph**: modules are boxes on a 12 x 4 grid, one per pad. **Hold a
+  module's pad and tap another one** to draw a cable; the encoder sets its
+  amount while you hold.
 - the **pin matrix** on the pads, like the pin boards of the EMS VCS3 / Synthi:
-  rows are module outputs, columns are module inputs, a lit pad is a cable;
-- the **graph** on the screen: modules are boxes, cables are lines from output
-  jacks to input jacks, coloured by what they carry.
+  rows are module outputs, columns are module inputs, a lit pad is a cable.
+
+Every knob of every module is also a **LABKIT** parameter: the shared macros,
+LFOs, random sources and MIDI learn of the polyend-tracker-lab firmwares reach
+any knob in the patch, and module outputs you mark become modulation sources.
 
 GRAF is a firmware of the polyend-tracker-lab family, built on OpenTracker.
-The **Config** button (settings, firmware update, about), **Play** (transport)
-and **Shift + Rec** (recorder) work the same way in every lab firmware.
+**Config** (settings, firmware update, about), **Play** (transport),
+**Shift + Rec** (recorder) and the LABKIT keys (**I.Param**, **Master**,
+**Shift + Config** for help) work the same way in every lab firmware. GRAF
+uses only keys that exist on the original Tracker.
 
 ![Boot intro](docs/screenshots/intro.png)
 
@@ -26,11 +38,13 @@ and **Shift + Rec** (recorder) work the same way in every lab firmware.
 2. [Quick start: your first patch](#quick-start-your-first-patch)
 3. [Controls at a glance](#controls-at-a-glance)
 4. [The pages](#the-pages)
-5. [Settings](#settings)
-6. [Files on the card](#files-on-the-card)
-7. [Modules](#modules)
-8. [Tips](#tips)
-9. [Limits](#limits)
+5. [LABKIT: macros, LFOs and modulation](#labkit-macros-lfos-and-modulation)
+6. [Undo](#undo)
+7. [Settings](#settings)
+8. [Files on the card](#files-on-the-card)
+9. [Modules](#modules)
+10. [Tips](#tips)
+11. [Limits](#limits)
 
 ## Concepts
 
@@ -42,7 +56,7 @@ by type and number: `VCO1`, `VCO2`, `LADR1`...
 
 **Signals.** Everything is a stream of numbers at 44.1 kHz, so any output can
 go into any input. Jacks and cables are coloured by the kind of signal the
-module expects or makes:
+module expects or makes (the Matrix page shows this legend):
 
 | Colour | Kind | Range |
 | --- | --- | --- |
@@ -55,6 +69,12 @@ module expects or makes:
 **amount** (an attenuverter, -2..+2). Several cables into the same input are
 added. Feedback loops are allowed: a module that is part of a loop hears the
 other module's output from the previous block (2.9 ms later).
+
+**Following the signal.** *Upstream* of a module are the modules that patch
+into it, *downstream* the ones it patches into. **Note** selects the module
+upstream, **Instr** the one downstream (Shift: the next branch when there are
+several). On the Graph they are outlined blue (upstream) and orange
+(downstream), and the Module page shows them in its corners.
 
 **Patch models** (Settings > GRAF patch model):
 
@@ -69,16 +89,23 @@ other module's output from the previous block (2.9 ms later).
   inside their patch (switching from Rack removes cables that cross canvases).
 
 **DSP budget.** The audio processor has a fixed amount of time for every
-block of 128 samples. Each module type and each cable has a measured cost, and
-GRAF refuses to add a module or cable that would not fit -- it shows *CPU
-budget full* instead of letting the audio break up. The **DSP** bar at the top
-of every page shows how full it is.
+block of 128 samples. Each module type and each cable has a measured cost
+(Plaits per model, PART per particle type), and GRAF refuses a module, a
+cable, a Plaits model or a PART type that would not fit -- it shows *CPU
+budget full* instead of letting the audio break up. The **DSP** bar at the
+top of every page shows how full it is (amber above 85 %), and every tile of
+the Add page shows the module's share.
 
 **Snapshots** store the whole patch: which modules sit where, their knobs,
 their sequences and every cable. Recalling a snapshot **morphs** to it:
 knobs glide, cables fade in and out, modules that are only in the new
 snapshot appear at the start, modules that are not in it disappear at the end.
-Modules are matched by position (canvas and cell) and type.
+Modules are matched by position (canvas and cell) and type; moving a module
+keeps its place in every snapshot.
+
+**Crossfader.** Pick snapshot A and snapshot B, turn the crossfader on, and
+the **X-FADE** fader sets the patch anywhere between them -- by hand, from a
+LABKIT macro, an LFO or a MIDI CC.
 
 **Song.** A list of up to 32 steps: *snapshot n, morph over M bars, then hold
 H bars*. While the transport plays, the song follows the bar position and
@@ -88,36 +115,40 @@ loops at the end.
 
 This builds *sequencer -> oscillator -> VCA -> output* with an envelope, from
 an empty canvas. (GRAF starts with the "First light" demo the first time; the
-same patch with a filter and a delay.)
+same patch with a filter and a delay.) To skip the building, the Add page has
+ready-made blocks (**templates**) such as *East voice*.
 
 1. **Clear.** Press **F7** (File), then **Delete** twice: a new empty patch.
    Press **F1** (Graph).
 2. **Add a sequencer.** Tap **pad 1** (top left) twice: the first tap puts the
-   cursor there, the second opens the Add page for that cell. The Add page
-   lists every module on the pads and the screen in the same layout; tap the
-   **SEQ** pad (row 3, column 1) and press **F8** (Add). `SEQ1` appears in the
-   top-left cell.
+   cursor there, the second opens the Add page for that cell. The top row of
+   pads is the categories (SOURCE, SHAPE, MOD, SEQ, FX, I/O, MACRO, TEMPL);
+   tap **SEQ** (pad 4), then the **SEQ** tile (row 2, pad 3), then
+   **Insert** (or tap the tile again). `SEQ1` appears in the top-left cell.
 3. **Add an oscillator, an envelope, a VCA and an output** the same way:
-   pad 2 (top row) -> **VCO** (row 1, column 1); pad 14 (row 2, column 2) ->
-   **ADSR** (row 2, column 5); pad 3 -> **VCA** (row 1, column 11); pad 4 ->
-   **OUT** (row 3, column 11). Each time: tap the empty pad twice, tap the
-   module, **F8**.
+   pad 2 -> SOURCE, **VCO**; pad 14 (row 2, column 2) -> MOD, **ADSR**;
+   pad 3 -> SHAPE, **VCA**; pad 4 -> I/O, **OUT**. Each time: tap the empty
+   pad twice, pick the category and the module, **Insert**.
 4. **Patch.** Hold the **SEQ1** pad and tap the **VCO1** pad: GRAF connects
-   the first matching jacks, *SEQ1 Pitch > VCO1 Pitch*, and says so. Still
-   holding SEQ1, tap **ADSR1**: *SEQ1 Gate > ADSR1 Gate*. Then hold VCO1, tap
-   VCA1 (*Saw > In 1*); hold ADSR1, tap VCA1 (*Env > CV 1*); hold VCA1, tap
-   OUT1 (*Out 1 > L*).
+   the first matching jacks, *SEQ1 Pitch > VCO1 Pitch*, and shows the cable
+   with a scope of its signal at the bottom. Still holding SEQ1, tap
+   **ADSR1**: *SEQ1 Gate > ADSR1 Gate*. Then hold VCO1, tap VCA1 (*Saw > In
+   1*); hold ADSR1, tap VCA1 (*Env > CV 1*); hold VCA1, tap OUT1 (*Out 1 > L*).
+   While you hold the source, the encoder sets the new cable's amount and the
+   arrows pick other jacks.
 5. **Play.** Press **Play**. The sequencer runs with the transport and you
    hear the melody.
-6. **Tweak.** Select VCO1 (tap its pad) and press **F3** (Module): the top row
-   of pads picks a knob, the encoder turns it. Try *Octave* and *PW*. Press
-   **F2** (Matrix) to see every cable as a lit pin: tap an empty pin to add a
-   cable (try *SEQ1 CV > VCO1 PWM*), hold a pin and turn the encoder to set its
-   amount, tap a lit pin to remove it.
-7. **Snapshot.** Press **F5** (Snaps), hold **Shift** and tap pad 1: snapshot
+6. **Tweak.** Select VCO1 (tap its pad) and press **F3** (Module): the
+   module's knobs are big on the screen and on the top row of pads -- hold a
+   pad and turn the encoder. Try *Octave* and *PW*. Press **F2** (Matrix) to
+   see every cable as a lit pin: tap an empty pin to add a cable (try *SEQ1 CV
+   > VCO1 PWM*), hold a pin and turn the encoder to set its amount, tap a lit
+   pin to remove it.
+7. **Made a mistake?** **Pattern** undoes, **Shift + Pattern** redoes.
+8. **Snapshot.** Press **F5** (Snaps), hold **Shift** and tap pad 1: snapshot
    1 stored. Change some knobs, store snapshot 2 with Shift + pad 2. Tap pad 1
    and pad 2 to morph between them.
-8. **Save.** **F7** (File), pick a slot with the encoder, **F8** (Save).
+9. **Save.** **F7** (File), pick a slot (pads of rows 1-2), **F8** (Save).
 
 ## Controls at a glance
 
@@ -125,19 +156,28 @@ same patch with a filter and a delay.)
 | --- | --- |
 | **F1..F7** | Pages: Graph, Matrix, Module, Add, Snaps, Play, File |
 | **F8** | The page's action: Canvas+ / Patch+ (next canvas, Shift: previous), Add, Store, Save |
+| **Insert** | Confirm / add: open the selected module, add the picked module or template, load the picked file |
+| **Delete** | Remove: the selected module, the cable, a song step; a knob back to its default on the Module page |
+| **Pattern** | **Undo** (Shift + Pattern: **redo**) |
+| **Note / Instr** | Follow the signal: select the module upstream / downstream (Shift: the next branch) |
+| **Copy** | Duplicate the selected module, with the cables into its inputs |
+| **FX1** | Randomize the selected module's knobs (Shift + FX1: all knobs to their defaults) |
+| **FX2** | Scope the next output of the selected module (Shift + FX2: make that output a LABKIT source, TAP1..8) |
+| **Song** | Song on / off |
+| **Perform** | The manual gate: every MGAT module is high while you hold it |
+| **S.Load** | Sample browser for the selected SMPL module |
+| **Rec** | The selected module's "new" action (SEQ random pattern, PINB new table, MRKV new seed, RETE / NET re-roll, RVAL / MG new values) |
+| **Encoder** | Values; **Shift** = fine |
 | **Play** | Transport start / stop (the Shell) |
 | **Shift + Rec** | Record the master (and stems) to the card (the Shell) |
 | **Config** | Settings, firmware update, about (the Shell) |
-| **Insert** | Add page (on the File page: load the selected demo) |
-| **Copy** | Duplicate the selected module, with the cables into its inputs |
-| **FX1** | Randomize the selected module's knobs (levels, MIDI and sample choices stay) |
-| **FX2** | Scope the next output of the selected module |
-| **Delete** | Remove the selected module (Matrix page: the selected cable) |
-| **Encoder** | Values; **Shift** = fine |
+| **I.Param** | LABKIT PARAM pads (Shift + I.Param: MACRO page) |
+| **Master** | LABKIT MAP (Shift + Master: MOD page) |
+| **Shift + Config** | Help for the current page and the key card |
 
 The header shows the patch model and canvas (RACK canvas n / PATCH n ch n),
-the DSP budget bar, the module count, SONG or a morph in progress, the tempo,
-the transport and the master level.
+the DSP budget bar, the module count, the crossfader / SONG / a morph in
+progress, the tempo, the transport and the master level.
 
 ## The pages
 
@@ -148,21 +188,30 @@ the transport and the master level.
 The canvas: up to 48 modules, one per pad, with their cables. Each box has a
 coloured top edge for its category (orange sources, red shapers, blue
 modulation, yellow sequencers, violet effects, green input / output, teal
-macros) and a level bar showing its first patched output. Cables highlight
-when they belong to the selected module. On a crowded canvas the boxes turn
-flat and the cables straight so the frame stays fast.
+macros) and a level bar for its first patched output; a **T** marks a module with
+an output that is a LABKIT tap. Cables are coloured by signal and highlight when they
+belong to the selected module. The selected module is outlined amber, the
+modules upstream of it blue, downstream orange -- on the screen and on the
+pads. The strip at the bottom names the selection and its neighbours. On a
+crowded canvas the boxes turn flat and the cables straight so the frame stays
+fast.
 
-The pads light in the colours of the modules (the selected one bright).
+![Patching with the pads](docs/screenshots/graph-gesture.png)
 
 | Action | Does |
 | --- | --- |
-| tap a module pad | select it (the scope follows it) |
-| hold module A, tap module B | patch A into B: the first output of A into the first input of B that takes the same kind of signal. If A and B are already connected, the Matrix opens on them instead |
+| tap a module pad | select it (the scope follows its first patched output) |
+| **hold module A, tap module B** | a cable A > B: the first output of A into the first free input of B that takes the same kind of signal (CV into a pitch input when nothing else fits). The cable, its amount and a scope of its signal show at the bottom. If A already patches into B, the first tap shows that cable and a second tap removes it |
+| while holding A: encoder | the cable's amount (Shift: fine) |
+| while holding A: Left / Right, Up / Down | another output of A / another input of B |
+| while holding A: Delete | remove the cable |
+| hold a module, tap an empty pad | move the module there |
 | tap an empty pad twice | open the Add page for that cell |
 | Shift + tap a pad | move the selected module there (swaps with a module already there) |
 | arrows | move the cursor (selects what is under it); Shift + arrows move the selected module |
-| encoder | step through the modules of the canvas |
-| Push | Module page (on an empty cell: Add page) |
+| encoder | step through the canvas in signal order (sources first, outputs last) |
+| Insert | Module page (on an empty cell: the Add page for it) |
+| **Shift + Insert** | **tidy**: lay the canvas out by signal flow -- sources on the left, then each stage one or two columns further, OUT on the far right (an undo step) |
 | Delete | remove the selected module and its cables |
 | F8 | next canvas / patch (Shift + F8: previous) |
 
@@ -174,85 +223,128 @@ The pads light in the colours of the modules (the selected one bright).
 
 The pin matrix. Rows are outputs (sources), columns are inputs
 (destinations); the pads show a 4 x 12 window of it and the screen shows the
-same window with the names. A lit pin is a cable, its brightness and size its
-amount, coloured by signal. In Rack mode the rows include the outputs of every
-canvas (marked c2, c3...); the columns are always the inputs of the current
-canvas. A dim red pad marks a module's own output into its own input.
+same window. The headers name the module once and each jack in its signal
+colour; brighter lines separate the modules. A lit pin is a cable, its size
+and brightness its amount, a bar through it a negative amount. In Rack mode
+the rows include the outputs of every canvas (marked c2, c3...); the columns
+are always the inputs of the current canvas. A dim red pad marks a module's
+own output into its own input.
 
 | Action | Does |
 | --- | --- |
-| tap an empty pin | patch (amount 1.0, or 0.5 for a CV source) |
+| tap an empty pin | patch (amount 1.0, or 0.5 for a CV source into a non-pitch input) |
 | tap a lit pin | unpatch |
-| hold a pin + turn the encoder | set the amount (-2..+2), the cable stays |
-| encoder | the amount of the last touched cable (Shift: fine) |
-| Push | flip the last touched cable between +1 and -1 |
-| Delete | remove the last touched cable |
-| arrows | scroll the window by one row / column (Shift: by a page) |
+| hold a pin + turn the encoder | set the amount (-2..+2); the cable stays. The row and column are highlighted while you hold |
+| encoder | the amount of the selected cable (Shift: fine) |
+| Insert | flip the selected cable between + and - |
+| Delete | remove the selected cable |
+| arrows | scroll the window by one row / column (Shift: by a page); the scrollbars show where you are |
 
 The box at the bottom left is the whole matrix in miniature with the window
-outlined; the box on the right names the selected cable and its amount.
+outlined. The panel on the right names the selected cable, its amount and a
+scope of its signal; with no cable selected it shows the signal legend.
 
 ### Module (F3)
 
-![Module page of the step sequencer](docs/screenshots/module-seq.png)
+![Module page of the oscillator](docs/screenshots/module-vco.png)
 
-One module up close: its knobs (up to 10, five per row), a scope of one of its
-outputs (FX2 picks which), every jack with what it is connected to, and a live
-view for modules that have one (sequencer steps, Euclidean circle, Turing
-register, Markov states, Pinball table, RETICULUM nodes, sampler file).
+One module per screen: its knobs as big dials in two rows of five (the ring is
+the knob, a blue dot on the ring is where LABKIT modulation has moved it),
+the modules upstream (top left of the panel, pad 11) and downstream (top
+right, pad 12), a scope of one of its outputs (FX2 picks which), every jack
+with what it is connected to, and a live view for modules that have one
+(sequencer steps, Euclidean circle, Turing register, Markov states, Pinball
+table, RETE / NET nodes, Plaits model and its cost, sampler file, the manual
+gate button).
+
+The top row of pads **is the module's knobs**: pad 1 = knob 1 ... pad 10 =
+knob 10, lit by the knob's value.
 
 | Action | Does |
 | --- | --- |
-| pads 1..10 of the top row | pick a knob |
-| pads 11 / 12 of the top row | previous / next module on the canvas |
-| pad rows 2-4 | keyboard (except on SEQ and PINB, below) |
-| encoder | the knob's value (Shift: fine) |
-| Left / Right, Up / Down | previous / next knob, a row of knobs up / down |
-| Push | the knob back to its default |
-| Rec | the module's "new" action: SEQ random pattern, PINB new table, MRKV new seed, RETE re-roll the net |
-| Delete | remove the module |
+| hold a top-row pad + turn the encoder | turn that knob (Shift: fine) |
+| tap a top-row pad / Left / Right / Up / Down | select a knob (Up / Down: a row of knobs) |
+| encoder | the selected knob |
+| pads 11 / 12 of the top row | go upstream / downstream (like Note / Instr) |
+| pad rows 2-4 | keyboard (except on SEQ, PINB and MGAT, below) |
+| Delete | the selected knob back to its default |
+| Shift + Delete | remove the module |
+| Insert | the Add page |
+| Rec | the module's "new" action |
 
 **SEQ:** pad rows 3 and 4, columns 1..8, are steps 1..16. Tap a step to turn
 its gate on / off; hold a step and turn the encoder to set its note (it turns
 the gate on), Shift + encoder sets its CV.
 
+![The step sequencer on the Module page](docs/screenshots/module-seq.png)
+
 **PINB:** all 48 pads are the table. Tap a pad to make it a note cell (blue),
 Shift + tap to make it a bumper (pink); the balls are white.
 
+**MGAT:** pad rows 2-4 are one big button (as is the Perform key).
+
 ![RETICULUM on the Module page](docs/screenshots/module-rete.png)
+
+![Plaits on the Module page](docs/screenshots/module-plts.png)
+
+![The resonator](docs/screenshots/module-reso.png)
+
+![NET, the original rete circuit](docs/screenshots/module-net.png)
 
 ### Add (F4)
 
 ![Add page](docs/screenshots/add.png)
 
-Every module type, on the pads and on the screen in the same layout, grouped
-by category. The panel below describes the selected one, lists its jacks and
-shows its share of the DSP budget against what is used. Types that do not fit
-any more are dimmed.
+The module browser. The top row of pads is the categories -- SOURCE, SHAPE,
+MOD, SEQ, FX, I/O, MACRO -- then **TEMPL** (templates, pad 8) and the three
+most recently added modules (pads 10-12). Rows 2-4 are the modules of the
+category, each tile with its share of the DSP budget; types that would not
+fit any more are dimmed. The panel below describes the selection, lists its
+jacks and draws its cost on top of what the patch already uses.
 
 | Action | Does |
 | --- | --- |
-| tap a pad / encoder / arrows | pick a module |
-| F8, Push, or a second tap on the same pad | add it -- in the cell you came from, else the first free cell -- and go back to the Graph |
+| top-row pads / Up / Down | pick a category (pads 10-12: a recent module) |
+| tap a tile / encoder / Left / Right | pick a module (the encoder runs on into the next category) |
+| **Insert**, F8, or a second tap on the tile | add it -- in the cell you came from, else the first free cell -- and go back to the Graph |
+| **Shift + Insert / Shift + F8** | add it next to the selected module **and patch it from there** (the first matching jacks) |
+
+![Templates](docs/screenshots/add-templates.png)
+
+**Templates** add a small working patch in one go, placed as a block where it
+fits near the cursor; an OUT already on the canvas is reused. *East voice*
+(MIDI > VCO > ladder > VCA, ADSR on both), *West bongo* (a Euclidean pings a
+low-pass gate on a complex oscillator), *Reticulum noise* (the manual gate
+re-rolls the NET, MG-16 moves it, granular after), *Plaits voice* (MIDI plays
+Plaits, the gate pings its LPG), *Rings pluck* (a sequencer strums an exciter
+into the resonator), *Acid line* (a sequencer into the 303, Bernoulli
+accents, delay), *Drum kit* (three Euclideans on the FLOATER kick, snare and
+perc), *Particle cloud* (an LFO moves the density of a QUANTA cloud into
+reverb), *FX chain* (delay into reverb, fed from the selected module). Each
+template is one undo step.
 
 ### Snaps (F5)
 
 ![Snapshots and song](docs/screenshots/snapshots.png)
 
-Eight snapshot slots along the top, the song timeline below (each step drawn
-as its morph -- a blend from the previous snapshot's colour -- then its hold),
-and the selected step's fields.
+Eight snapshot slots along the top (A and B mark the crossfader's ends),
+then pad 9 XF on, pads 10 / 11 set A / B, pad 12 song. Below: the song
+timeline (each step drawn as its morph -- a blend from the previous snapshot's
+colour -- then its hold), the selected song step's fields on the left and the
+crossfader's on the right, with the fader itself.
 
 | Action | Does |
 | --- | --- |
-| pads 1..8, row 1 | recall a snapshot: morph to it over Settings > live morph time (turns the song off) |
+| pads 1..8, row 1 | recall a snapshot: morph to it over Settings > live morph time (turns the song and the crossfader off) |
 | Shift + pads 1..8 | store the current patch in that slot |
-| pad 12, row 1 | song on / off (Push too) |
+| pad 9, row 1 | crossfader on / off |
+| pads 10 / 11, row 1 | crossfader A / B = the selected snapshot |
+| pad 12, row 1 | song on / off (Insert and the Song key too) |
 | pads of rows 2-4 | song steps 1..32 (tapping past the end lengthens the song) |
 | Shift + a step pad | set that step to the selected snapshot |
-| Up / Down | field: Snapshot, Morph bars, Hold bars, Song length |
+| Up / Down | field: Snapshot, Morph bars, Hold bars, Song length, XF A, XF B, X-fade, XF on |
 | encoder | the field's value |
-| Left / Right | previous / next step |
+| Left / Right | previous / next song step |
 | Delete | remove the selected step |
 | F8 | store the current patch in the selected snapshot slot |
 
@@ -260,23 +352,33 @@ While the song plays, the step being played lights white on the pads and a
 line runs along the timeline. A step morphs **from the step before it** (step
 1 from the last step, as the song loops). Morph bars 0 = a cut.
 
+The crossfader's four fields are LABKIT parameters (the SNAPS page of the
+MAP): **X-FADE** can be modulated by a macro, an LFO or a CC, so a macro knob
+or a slow LFO sweeps the whole patch between two snapshots. Both snapshots
+must be stored. As in a morph, knobs and cable amounts glide; modules that are
+only in B appear as soon as the fader leaves A, and modules that are only in
+A leave when it reaches B.
+
 ### Play (F6)
 
-![Play page](docs/screenshots/play-8patches.png)
+![Play page in 8-patch mode](docs/screenshots/play-8patches.png)
 
-Playing and mixing. **8 patches:** one strip per patch (meter, level, pan,
-mute). **Rack:** one strip per OUT module (its Level and Pan knobs). A scope
-shows the master output.
+Playing and mixing: eight strips with a meter, a level fader and a pan.
+**8 patches:** strip *n* is patch *n*. **Rack:** strip *n* is the module
+OUT*n* (the strip's level multiplies that OUT's Level knob). A scope shows
+the master output. The strips are LABKIT parameters (the PLAY page of the
+MAP: LEVEL n, PAN n, MUTE n), so they can be modulated and MIDI-learned.
 
 | Action | Does |
 | --- | --- |
-| pads 1..8, row 1 | 8 patches: select the patch (the keyboard plays it); Shift: mute. Rack: select a strip |
+| pads 1..8, row 1 | select a strip (8 patches: also the patch the keyboard plays); Shift: mute |
 | pads 11 / 12, row 1 | keyboard octave down / up |
 | pad rows 2-4 | keyboard: chromatic, 12 notes per row, lower rows lower (C pads amber, white keys grey) |
 | encoder | the selected strip's level or pan |
 | Up / Down | switch between level and pan |
 | Left / Right | previous / next strip |
-| Push | mute (8 patches) |
+| Insert | mute / unmute the strip |
+| Delete | the level or pan back to its default |
 
 The keyboard plays the MIDI modules of the patch (velocity from the pads when
 Settings > GRAF pad velocity is on) and sends the notes to MIDI out too (on
@@ -288,29 +390,96 @@ the Shell's MIDI out channel, + the patch number in 8-patch mode).
 
 ![File page](docs/screenshots/file.png)
 
-24 patch slots (pad rows 1-2), the six demos (pad row 4), and the card.
+24 patch slots (pad rows 1-2), the eight demos (pad row 4), and the card.
 
 | Action | Does |
 | --- | --- |
 | pads of rows 1-2 / encoder / arrows | pick a slot P01..P24 (bright = saved) |
+| pads 1..8, row 4 | pick a demo |
+| Insert | load the selected slot or demo (an undo step) |
 | F8 | save the patch in the slot (press twice to overwrite) |
-| Push | load the slot |
-| pads 1..6, row 4 | pick a demo |
-| Insert | load the selected demo |
-| Delete, twice | a new empty patch (all snapshots cleared) |
+| Delete, twice | a new empty patch (all snapshots and LABKIT routes cleared) |
 | Rec | rescan /Lab/GRAF/Samples for WAV files |
 
 A patch file holds everything: model, modules, knobs, sequences, cables,
-mixer strips, the eight snapshots and the song.
+mixer strips, taps, the eight snapshots, the song, and the LABKIT state
+(macros, LFOs, routes, MIDI learn, crossfader).
 
 **Demos.** *First light* (sequenced subtractive voice with delay; the MIDI
-module lets keys transpose it), *Reticulum* (the RETICULUM patch: clock and
-Euclidean gates re-roll a rete net modulated by S&H and LFO, into granular and
-plate reverb), *West coast* (Pinball into the complex oscillator and a pinged
-low-pass gate), *Turing drums* (three Euclideans on drum voices, a Turing
-machine on a wavetable bass), *Poly keys* (four-voice polyphony from MIDI or
-the pads), *8 patches* (bass, pluck, rete and drums on separate patches).
-Each demo comes with three snapshots and a four-step song.
+module lets keys transpose it; macro 1 BRIGHT opens the filter, LFO1 wobbles
+it), *Reticulum* (clock and Euclidean gates re-roll a rete net modulated by
+S&H and LFO, into granular and plate reverb), *West coast* (Pinball into the
+complex oscillator and a pinged low-pass gate), *Turing drums* (three
+Euclideans on drum voices, a Turing machine on a wavetable bass), *Poly keys*
+(four-voice polyphony from MIDI or the pads), *8 patches* (bass, pluck, rete
+and drums on separate patches), *Resonators* (Euclidean strikes into the
+exciter and the Rings-style resonator, a Turing machine on its pitch, Plaits
+chiptune chords, reverb), *Acid net* (a 303 line with Bernoulli accents, the
+FLOATER kick, and the original rete circuit re-rolled by the **Perform**
+key through MGAT and MG-16). Each demo comes with three snapshots and a
+four-step song.
+
+![The Resonators demo](docs/screenshots/graph-resonators.png)
+
+![The Acid net demo](docs/screenshots/graph-acid.png)
+
+## LABKIT: macros, LFOs and modulation
+
+LABKIT is the parameter layer shared by the polyend-tracker-lab firmwares
+(see its own manual for every view). In GRAF:
+
+- **Every knob of every module is a parameter**, named like `VCO1 Tune`. The
+  **MAP** (**Master**; hold to look, tap to keep it open) groups them by page,
+  and on the pads:
+  - **GRAPH** has the *main knob* of every other module in the top three rows
+    of the canvas, on the pad of its cell (VCO Tune, filter cutoff, LFO rate,
+    OUT level...).
+  - **MODULE** has the selected module's knobs on row 1 of the PARAM pads,
+    the module upstream of it on row 2 and the one downstream on row 3 -- so
+    following the signal with Note / Instr moves the pads along with you.
+  - **SNAPS** has the crossfader (XF A, XF B, X-FADE, XF ON), **PLAY** the
+    eight mixer strips.
+  - The knobs of the other modules are not on pads, but they are still
+    parameters: every macro, LFO and MIDI CC can reach them.
+- **I.Param** puts the current page's parameters on the pads (PARAM pads);
+  hold a source pad in the bottom row (LFO1-4, RND1-2, the macros, Shift for
+  the second bank) and tap parameter pads to route it. **Shift + I.Param** is
+  the MACRO page, **Shift + Master** the MOD page (all LFOs and routes).
+- **Modulation does not move the knob.** The knob you set is the base value;
+  the module hears base + modulation. The Module page draws the modulated
+  value as a blue dot on the knob's ring. Snapshots and undo store the base
+  values.
+- **Sources from the patch.** GRAF adds its own modulation sources to the
+  LABKIT list:
+  - **TAP1..TAP8** -- module outputs you mark: select a module, scope the
+    output with **FX2**, then **Shift + FX2** makes it a tap (again: removes
+    it). Audio outputs give their envelope, others their value. A tapped
+    output shows a **T** on the Graph.
+  - **LANE1..LANE4** -- the sequencer lanes: the first four sequencing modules
+    of the patch (by canvas and cell; SEQ CV, Turing CV, Markov state, Pinball
+    X, the clock's beat, DIV /N, Euclidean gate, CHAO X, RVAL A, MG 1).
+  - **BAR**, **BEAT** -- ramps over each bar and beat while playing.
+  - **LEVEL** -- the master output's envelope.
+- Some knobs are never modulation targets because they change what a module
+  *is*: Plaits Model and PART Type (they set the CPU cost), Sample, Voice,
+  MIDI out, Stem, Seed.
+- Removing a module removes the routes to its knobs (undoing the removal
+  brings the module back, not its routes).
+
+![The MAP over the First light demo](docs/screenshots/map.png)
+
+![The MOD page](docs/screenshots/mod.png)
+
+## Undo
+
+**Pattern** undoes the last edit, **Shift + Pattern** redoes it, 24 steps
+deep. An edit is anything that changes the patch's structure or knobs: adding,
+removing, moving or duplicating modules, cables and their amounts, knob turns
+(one step per knob gesture), sequences, randomize, templates, tidy, loading a
+patch or a demo, recalling a snapshot. Undo keeps the sound running: modules
+that stay the same keep their state (a delay keeps its echoes, a sequencer
+its position). Snapshots themselves, the song and the LABKIT routes are not
+part of undo.
 
 ## Settings
 
@@ -342,19 +511,20 @@ Everything lives in `/Lab/GRAF/` on the SD card:
 | `autosave.grf` | the current patch: saved at power off, with Settings > Save and every 5 minutes; loaded at boot |
 | `graf.cfg` | the GRAF settings rows |
 | `Patches/P01.grf` .. `P24.grf` | the File page slots |
-| `Samples/*.wav` | sounds for the SMPL module: up to 32 files, names up to 39 characters, sorted by name |
+| `Samples/*.wav` | sounds for the SMPL module: up to 32 files, names up to 39 characters, sorted by name; **S.Load** browses them for the selected sampler |
 | `Rec/REC-nnnn.wav` | recordings (Shift + Rec), `-stem1..4` with stems on |
 | `settings.bin` | the Shell's settings |
 
-Patch files are a versioned binary format (`GRAF`, version 1) with a checksum:
-a damaged file is refused and the current patch stays. Samplers remember
-their file by name, so adding or removing files in `Samples` does not change
-which sound a saved patch plays. Without a card GRAF starts with the first
-demo and saving is off.
+Patch files are a versioned binary format (`GRAF`, version 2, followed by the
+LABKIT chunk) with a checksum: a damaged file is refused and the current patch
+stays. Round-1 files (version 1) still load. Samplers remember their file by
+name, so adding or removing files in `Samples` does not change which sound a
+saved patch plays. Without a card GRAF starts with the first demo and saving
+is off.
 
 ## Modules
 
-37 module types. In the tables, *Range* is what the knob covers and
+49 module types. In the tables, *Range* is what the knob covers and
 *exponential* means it moves in equal ratios (good for times and
 frequencies). The CPU figure is the module's measured worst case as a share of
 the DSP budget; each cable costs about 0.6 %.
@@ -455,6 +625,105 @@ A small drum voice with six models: Kick (pitch-swept sine with a click), Snare 
 | Tune | -12 .. 12 st | 0 |
 | Decay | 0.02 .. 2 s (exponential) | 0.3 |
 | Tone | 0 .. 1  | 0.5 |
+| Level | 0 .. 1  | 0.8 |
+
+#### PLTS - Plaits
+
+Mutable Instruments Plaits: 24 synthesis models in one voice. CPU: 22.5 to 55.7 % of the DSP budget, by model.
+
+Mutable Instruments Plaits (Emilie Gillet, MIT), the real code: 24 models (8 of the v1.2 engines, then the 16 originals): VA VCF, phase distortion, three 6-op FM banks, wave terrain, string machine, chiptune, virtual analog, waveshaper, 2-op FM, formant, harmonic, wavetable, chords, speech, swarm, noise, particle, string, modal, bass drum, snare, hi-hat. Harmonics, Timbre and Morph are the three Plaits knobs (their CV inputs add); Decay and LPG col shape the built-in low-pass gate, which plays when Trig is patched (unpatched, the voice drones). Out and Aux are Plaits' two outputs. Each model has its own measured cost, from 22 % (chiptune) to 56 % (modal) of the DSP budget; GRAF refuses a Model change that would not fit, and Model is never a modulation target. At most 4 Plaits. Speech uses its formant, SAM and LPC-phoneme range only: the word banks of the upper half would decode a bank in one block, longer than the whole audio budget.
+- **Inputs:** Pitch (pitch), Trig (gate), Timbre (CV), Morph (CV), Harm (CV), Level (CV)
+- **Outputs:** Out (audio), Aux (audio)
+
+| Knob | Range | Default |
+| --- | --- | --- |
+| Model | VA VCF, PhaseDist, 6op FM A, 6op FM B, 6op FM C, Terrain, StrMach, Chiptune, VirtAnlg, Wavshapr, 2op FM, Formant, Harmonic, Wavetabl, Chords, Speech | VirtAnlg |
+| Octave | -3, -2, -1, 0, +1, +2, +3 | 0 |
+| Tune | -12 .. 12 st | 0 |
+| Harmonics | 0 .. 1  | 0.5 |
+| Timbre | 0 .. 1  | 0.5 |
+| Morph | 0 .. 1  | 0.5 |
+| Decay | 0 .. 1  | 0.5 |
+| LPG col | 0 .. 1  | 0.5 |
+| Level | 0 .. 1  | 0.8 |
+
+#### EXCT - Exciter
+
+Elements-style exciter: bow, blow and strike for RESO. CPU: about 5.2 % of the DSP budget.
+
+An Elements-style exciter for RESO (GRAF's own code): Bow (stick-slip noise pulses, Bow tmbr = how rough), Blow (band-passed noise, Flow = its colour) and Strike (a mallet click, Mallet = soft to hard) mixed by their levels (the CV inputs add). The Gate input drives the envelope: Contour 0 = percussive, 1 = slow bowing that holds while the gate is high; Strike fires on each rising gate. Env outputs the envelope. Patch Out into RESO In.
+- **Inputs:** Gate (gate), Bow (CV), Blow (CV), Strike (CV)
+- **Outputs:** Out (audio), Env (CV)
+
+| Knob | Range | Default |
+| --- | --- | --- |
+| Bow | 0 .. 1  | 0 |
+| Bow tmbr | 0 .. 1  | 0.5 |
+| Blow | 0 .. 1  | 0.3 |
+| Flow | 0 .. 1  | 0.5 |
+| Strike | 0 .. 1  | 0.8 |
+| Mallet | 0 .. 1  | 0.5 |
+| Contour | 0 .. 1  | 0.2 |
+| Level | 0 .. 1  | 0.8 |
+
+#### ACID - 303
+
+Open303 voice: saw / square into the TB-303 filter (or In through it). CPU: about 12.3 % of the DSP budget.
+
+A 303 voice: Open303 by Robin Schmidt (MIT, with the TB-303 filter coefficients by mystran and kunn), as ported in KONSOL, at 44.1 kHz. A rising Gate starts a note at Pitch (+ Tune, default an octave down); Accent high = an accented note (louder, more filter envelope), Slide high = the note glides from the previous one over Slide ms. Wave morphs saw to square, Cutoff / Reso / Env mod / Decay are the 303 knobs (the Cutoff input adds), Drive saturates the output. With In patched the oscillator is replaced by the input: a 303 filter for anything.
+- **Inputs:** In (audio), Pitch (pitch), Gate (gate), Accent (gate), Slide (gate), Cutoff (CV)
+- **Outputs:** Out (audio)
+
+| Knob | Range | Default |
+| --- | --- | --- |
+| Wave | 0 .. 1  | 0 |
+| Cutoff | 0 .. 1  | 0.4 |
+| Reso | 0 .. 1  | 0.7 |
+| Env mod | 0 .. 1  | 0.5 |
+| Decay | 0 .. 1  | 0.3 |
+| Accent | 0 .. 1  | 0.6 |
+| Slide | 5 .. 300 ms (exponential) | 60 |
+| Drive | 0 .. 1  | 0.2 |
+| Level | 0 .. 1  | 0.8 |
+| Tune | -24 .. 24 st | -12 |
+
+#### FLTR - FLOATER drum
+
+Your FLOATER kick, snare and perc voices. CPU: about 17.7 % of the DSP budget.
+
+The user's FLOATER drum voices (as ported in KONSOL): Voice Kick (sine / triangle with a pitch envelope, click and overdrive), Snare (three modal sines, noise through a high-pass and a snap) or Perc (an impulse into two high-Q band-passes with bit / rate crush). Trig fires it, Pitch tunes it (1 V/oct), Accent adds velocity; Tune, Decay, Tone, Grit and Color shape the voice.
+- **Inputs:** Trig (gate), Pitch (pitch), Accent (CV)
+- **Outputs:** Out (audio)
+
+| Knob | Range | Default |
+| --- | --- | --- |
+| Voice | Kick, Snare, Perc | Kick |
+| Tune | 0 .. 1  | 0.3 |
+| Decay | 0 .. 1  | 0.25 |
+| Tone | 0 .. 1  | 0.5 |
+| Grit | 0 .. 1  | 0.3 |
+| Color | 0 .. 1  | 0.3 |
+| Level | 0 .. 1  | 0.8 |
+
+#### PART - Particles
+
+QUANTA microsound particles: grains, glissons, trainlets, pulsars. CPU: about 26.2 % of the DSP budget (Trainlet: 44.0 %).
+
+The user's QUANTA microsound particles (Curtis Roads' particle types, as ported in KONSOL): a cloud of up to 6 particles at Density per second (+ the Dens CV, +-3 octaves), each Duration long (Grainlet and Trainlet set their own lengths from the pitch), with Jitter on time and pitch, Spread across the stereo field. Type: Grain (a windowed waveform), Glisson (a grain that glides by Glide semitones), Grainlet (8 cycles), Trainlet (a short impulse train with decaying harmonics) or Pulsar (a pulse plus silence at the density rate). Wave and Window pick the waveform and the envelope. The cloud plays while Gate is high (always when unpatched). Trainlets cost more: 44 % of the DSP budget against 26 % for the other types, and GRAF refuses a Type change that would not fit.
+- **Inputs:** Gate (gate), Pitch (pitch), Dens (CV)
+- **Outputs:** L (audio), R (audio)
+
+| Knob | Range | Default |
+| --- | --- | --- |
+| Type | Grain, Glisson, Grainlt, Trainlt, Pulsar | Grain |
+| Wave | Sine, Saw, Square, Noise | Sine |
+| Window | Gauss, Hann, Expodec, Rexpdec, Trapez, Rect | Gauss |
+| Density | 0.5 .. 200 Hz (exponential) | 12 |
+| Duration | 2 .. 200 ms (exponential) | 40 |
+| Jitter | 0 .. 1  | 0.2 |
+| Spread | 0 .. 1  | 0.5 |
+| Glide | -24 .. 24 st | 0 |
+| Octave | -3, -2, -1, 0, +1, +2, +3 | 0 |
 | Level | 0 .. 1  | 0.8 |
 
 ### Shapers
@@ -560,6 +829,26 @@ Ring = X x (Y + Bias), mixed with dry X by Mix (Bias > 0 lets the carrier throug
 | --- | --- | --- |
 | Mix | 0 .. 1  | 1 |
 | Bias | 0 .. 1  | 0 |
+
+#### RESO - Resonator
+
+Rings-style modal resonator: 12 partials, excite with audio or Strum. CPU: about 18.5 % of the DSP budget.
+
+A Rings-style modal resonator, GRAF's own code after the idea of Mutable Instruments Rings: twelve two-pole resonators tuned to Pitch (+ Octave / Tune). Model Modal moves the partial ratios from harmonic (Structure 0) to a free bar (1); String is harmonic with stiffness growing with Structure; Bell stretches bell partials. Bright tilts the partials, Damping sets the decay (dark settings let the high partials die first), Position weights them like a pluck point. Excite it with audio on In (an EXCT, noise, a drum) or with a trigger on Strum (an internal click at Strum lvl). Odd and Even split the partials like Rings' two outputs; Out is their sum.
+- **Inputs:** In (audio), Strum (gate), Pitch (pitch), Bright (CV), Damp (CV), Pos (CV)
+- **Outputs:** Odd (audio), Even (audio), Out (audio)
+
+| Knob | Range | Default |
+| --- | --- | --- |
+| Model | Modal, String, Bell | Modal |
+| Octave | -3, -2, -1, 0, +1, +2, +3 | 0 |
+| Tune | -12 .. 12 st | 0 |
+| Structure | 0 .. 1  | 0.3 |
+| Bright | 0 .. 1  | 0.5 |
+| Damping | 0 .. 1  | 0.55 |
+| Position | 0 .. 1  | 0.3 |
+| Strum lvl | 0 .. 1  | 0.6 |
+| Level | 0 .. 1  | 0.7 |
 
 ### Modulation
 
@@ -691,6 +980,64 @@ Three attenuverters (-2..+2) and an Offset. Sum = A + B + C + Offset; Inv = -Sum
 | B | -2 .. 2  | 1 |
 | C | -2 .. 2  | 1 |
 | Offset | -2 .. 2  | 0 |
+
+#### RVAL - Random values
+
+Four new random values on every trigger (or Rec). CPU: about 4.6 % of the DSP budget.
+
+Random Values (after VCV Fundamental, GPL-3): four new random values on each rising Trig (or Rec on its Module page), 0..1 or -1..1, scaled by Scale and glided by Slew.
+- **Inputs:** Trig (gate)
+- **Outputs:** A (CV), B (CV), C (CV), D (CV)
+
+| Knob | Range | Default |
+| --- | --- | --- |
+| Range | 0..1, -1..1 | 0..1 |
+| Slew | 0.0005 .. 2 s (exponential) | 0.0005 |
+| Scale | 0 .. 1  | 1 |
+
+#### MG - Mod generator
+
+MG-16: each trigger makes every output a random LFO or a held value. CPU: about 9.2 % of the DSP budget.
+
+The TinyTricks MG-16 modulation generator (GPL-3, via the user's RETICULUM port), four outputs: each trigger turns every output into either a random LFO (random shape between sine, triangle, saw and square, random rate in an 8-octave window set by Range and Bias) or, with S&H on, a held random value (half the time). Polarity Uni = 0..1. The Range input adds to Range.
+- **Inputs:** Trig (gate), Range (CV)
+- **Outputs:** 1 (CV), 2 (CV), 3 (CV), 4 (CV)
+
+| Knob | Range | Default |
+| --- | --- | --- |
+| Range | 0 .. 1  | 0.5 |
+| Bias | -1 .. 1  | -0.3 |
+| S&H | Off, On | On |
+| Polarity | Bi, Uni | Bi |
+| Level | 0 .. 1  | 1 |
+
+#### CHAO - Chaos
+
+Lorenz attractor (X, Y, Z) and a clocked logistic map. CPU: about 5.5 % of the DSP budget.
+
+Two chaotic sources. X, Y and Z are the Lorenz attractor (sigma 10, beta 8/3, Rho = the third parameter: 28 is the classic butterfly, lower values settle, higher ones get wilder), integrated at Rate (+ the Rate CV, +-4 octaves) and scaled to about -1..1. Logist is the logistic map x -> r x (1 - x), stepped by Clock (or every 1/16 note while playing): r near 3.5 cycles, near 4 it is chaotic.
+- **Inputs:** Clock (gate), Rate (CV)
+- **Outputs:** X (CV), Y (CV), Z (CV), Logist (CV)
+
+| Knob | Range | Default |
+| --- | --- | --- |
+| Rate | 0.05 .. 50 x (exponential) | 1 |
+| Rho | 10 .. 60  | 28 |
+| Logist r | 3.4 .. 4  | 3.9 |
+| Level | 0 .. 1  | 1 |
+
+#### BERN - Bernoulli gate
+
+Each trigger goes to A or B, by probability. CPU: about 1.5 % of the DSP budget.
+
+A Bernoulli gate (after Mutable Instruments Branches): each rising Gate goes to A with probability Prob (+ the Prob CV), else to B. Mode Trig = 5 ms pulses, Gate = the chosen side follows the input gate, Latch = the chosen side stays high until the other one is chosen.
+- **Inputs:** Gate (gate), Prob (CV)
+- **Outputs:** A (gate), B (gate)
+
+| Knob | Range | Default |
+| --- | --- | --- |
+| Prob | 0 .. 1  | 0.5 |
+| Mode | Trig, Gate, Latch | Trig |
 
 ### Sequencing and clocks
 
@@ -912,6 +1259,18 @@ Sends L and R (R unpatched = L, mono) to its mixer strip, the master output and 
 | Pan | -1 .. 1  | 0 |
 | Stem | Auto, Off, 1, 2, 3, 4 | Auto |
 
+#### MGAT - Manual gate
+
+The Perform key (or its page's pads) as gate, trigger, latch, extended. CPU: about 2.9 % of the DSP budget.
+
+Count Modula's Manual Gate (GPL-3) on the Tracker's **Perform** key: hold Perform (or, on this module's page, any pad of rows 2-4) and Gate is high. Trig is a 1 ms pulse on each press, Latch toggles on each press, Ext stays high for Length after the release. A gate on Ext acts as a second button. Every MGAT hears the Perform key, so one key can fire several patches.
+- **Inputs:** Ext (gate)
+- **Outputs:** Gate (gate), Trig (gate), Latch (gate), Ext (gate)
+
+| Knob | Range | Default |
+| --- | --- | --- |
+| Length | 0.01 .. 10 s (exponential) | 0.5 |
+
 ### Macro modules
 
 #### RETE - Reticulum
@@ -953,6 +1312,24 @@ A Pinball-style ball sequencer on the same 12 x 4 grid as the pads. On every clo
 | Balls | 1 .. 3 | 1 |
 | MIDI out | Off, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 | Off |
 
+#### NET - Rete net
+
+Your forsitan rete patch: 8 integrators, random matrix, Random Values gains. CPU: about 31.7 % of the DSP budget.
+
+The forsitan rete module of the user's RETICULUM patch, ported from its VCV source (GPL-3): eight leaky integrators fed back through a random 8 x 8 matrix (from Seed), each through a DC-blocking high-pass and a hard clip. The node gains are Gain plus eight Random Values spread by Spread; a trigger on Roll (or Rec on its Module page) draws new Random Values -- in the patch, the Manual Gate hits them -- and a trigger on Rnd draws a new matrix (rete's RND button). Leak sets how long the integrators remember, Scale the overall gain into the matrix, Excite how much of the Excite input goes in (alternating polarity per node). L / R / Mono are the stereo mix of the nodes, Env an envelope of the output. Unlike RETE (GRAF's own resonant-node net), NET is the original circuit: it hisses, sputters, locks into tones and falls apart.
+- **Inputs:** Roll (gate), Rnd (gate), Excite (audio), Gain (CV), Leak (CV), Scale (CV)
+- **Outputs:** L (audio), R (audio), Mono (audio), Env (CV)
+
+| Knob | Range | Default |
+| --- | --- | --- |
+| Gain | 0 .. 1  | 0.55 |
+| Spread | 0 .. 1  | 0.6 |
+| Leak | 0 .. 1  | 0.55 |
+| Scale | 0 .. 1  | 0.45 |
+| Excite | 0 .. 1  | 0.5 |
+| Seed | 0 .. 99 | 1 |
+| Level | 0 .. 1  | 0.6 |
+
 ## Tips
 
 - **Unpatched clock inputs follow the transport.** Every sequencer (SEQ, EUCL,
@@ -982,19 +1359,45 @@ A Pinball-style ball sequencer on the same 12 x 4 grid as the pads. On every clo
   the most; utilities, envelopes and sequencers are cheap. A VCO with only
   one output patched costs about a third of one with all four.
 - **Scope.** FX2 cycles the scope through the selected module's outputs: the
-  fastest way to see what an LFO or envelope is doing.
+  fastest way to see what an LFO or envelope is doing. Holding a module on
+  the Graph, or a pin on the Matrix, scopes that cable.
+- **Modulate from the patch.** Shift + FX2 turns the scoped output into a
+  LABKIT tap: a Lorenz attractor (CHAO), a Turing machine or a RETE envelope
+  can then move any knob of the patch from the PARAM pads, without a cable
+  and without a free input.
+- **One macro, many knobs.** On the MACRO page give a macro window targets on
+  a filter cutoff, a reverb mix and a NET gain: one fader opens the whole
+  patch. The *First light* demo's BRIGHT macro is an example.
+- **Crossfade two worlds.** Store a calm snapshot as A and a wild one as B,
+  turn the crossfader on and route LFO1 (slow, synced to 4 bars) to X-FADE.
+- **Rings and Elements.** EXCT into RESO In, a gate into both: Contour low
+  for plucks, high with Bow for bowed strings; RESO Model Bell with a high
+  Structure for gongs.
+- **Plaits cost.** The models differ a lot (chiptune and the FM banks are
+  the cheapest, modal and harmonic the dearest); the Module page shows the
+  current model's share.
+- **The RETICULUM patch, original.** NET is the real forsitan rete; MGAT on
+  the Perform key into Roll, MG-16 into Gain and Excite, then GRN and VERB:
+  the *Reticulum noise* template and the *Acid net* demo build it.
+- **Tidy before you get lost.** Shift + Insert on the Graph lays the canvas
+  out by signal flow; Pattern puts it back if you preferred your own layout.
 - **Recording stems.** In 8-patch mode each patch goes to its own stem
   (patches 5-8 share stems 1-4); in Rack mode set each OUT's Stem knob.
 
 ## Limits
 
 - 64 modules, 160 cables in total; 48 modules per canvas.
+- 4 Plaits voices; 8 taps; 64 LABKIT routes; 24 undo steps.
 - The DSP budget, not the module count, is the usual limit: roughly 12-20
   modules in a busy patch.
 - 6 big effect memories shared by DLY, VERB and GRN (any mix, 6 at most).
 - 8 samplers, each up to 262,144 samples (5.9 s mono, 2.9 s stereo); longer
   files are cut. 32 sample files listed.
 - 8 voices per patch (MIDI modules Voice 1..8).
+- RESO, EXCT and the round-2 modules are GRAF's own code or ports of open
+  code; RESO / EXCT follow the ideas of Rings / Elements, they are not the
+  Mutable Instruments code (Plaits is). The Speech model of Plaits leaves out
+  its word banks (see PLTS).
 - A feedback loop adds one block (2.9 ms) of delay at the point where it
   closes; through-zero FM inside a loop sounds rougher than outside one.
 - Snapshot morphs run at about 100 steps a second; very fast morphs (a quarter

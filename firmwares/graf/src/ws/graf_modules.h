@@ -114,6 +114,31 @@ void pDelay(Module&, Proc&);
 void pVerb(Module&, Proc&);
 void pGrain(Module&, Proc&);
 void pOut(Module&, Proc&);
+// round 2
+void pPlts(Module&, Proc&);
+void pReso(Module&, Proc&);
+void pExct(Module&, Proc&);
+void pNet(Module&, Proc&);
+void rNet(Module&);
+void pRval(Module&, Proc&);
+void pMg(Module&, Proc&);
+void pMgate(Module&, Proc&);
+void pChaos(Module&, Proc&);
+void pBern(Module&, Proc&);
+void pAcid(Module&, Proc&);
+void pFltr(Module&, Proc&);
+void pPart(Module&, Proc&);
+float netNode(const Module& m, int i);   // 0..1 activity of rete node i
+
+// Shared tables of the round-2 modules (particle windows...), from the arena.
+bool initModuleTables(lab::Arena& a);
+// Plaits voices (graf_mod_plaits.cpp): one pooled voice per PLTS module.
+void* plaitsAlloc(lab::Arena& a);
+void plaitsReset(void* voice);
+int32_t plaitsCost(int model);   // M4 instructions per block of one Plaits model
+extern const char* const kPlaitsModels[24];
+// Which output of a sequencing module is its LABKIT lane.
+int laneOutput(int type);
 
 // Markov matrix from a seed (MARKOV ext bytes).
 void markovSeed(Module& m, int seed);

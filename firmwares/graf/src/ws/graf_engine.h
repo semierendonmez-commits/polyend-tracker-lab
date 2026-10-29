@@ -34,7 +34,11 @@ constexpr int kMaxSampleFiles = 32;
 constexpr int kExtBytes = 64;              // per-module extra data (sequencer steps)
 // CPU budget in M4 instructions per block (the gate limit is 180,000; the
 // rest covers the engine itself, cable sums and the shell's work).
+#ifdef GRAF_CAL
+constexpr int32_t kCpuBudget = 100000000;   // calibration builds: no guard
+#else
 constexpr int32_t kCpuBudget = 168000;
+#endif
 constexpr int32_t kCableCost = 950;         // a cable summed into an input that already has one
 constexpr int32_t kEngineCost = 6000;      // fixed per block
 
@@ -82,14 +86,16 @@ struct ModDef {
 enum ModType : uint8_t {
     kVco, kCplx, kWtbl, kNoise, kSmpl, kAudIn, kMidi, kRete, kPinb, kClk, kDiv, kSeq, kEucl, kTuring, kMarkov,
     kSnh, kQuant, kLfo, kAdsr, kAd, kFunc, kSlew, kLogic, kCvmx, kLadder, kSvf, kLpg, kFold, kVca, kMix, kRing,
-    kCrush, kDelay, kVerb, kGrain, kOut, kPerc, kTypeCount
+    kCrush, kDelay, kVerb, kGrain, kOut, kPerc,
+    // round 2
+    kPlts, kReso, kExct, kNet, kRval, kMg, kMgate, kChaos, kBern, kAcid, kFltr, kPart, kTypeCount
 };
 extern const ModDef kDefs[kTypeCount];
 const ModDef& def(int type);
 
 // Per-module DSP state: one union, sized for the biggest module.
 struct StateMem {
-    alignas(8) uint8_t bytes[1024];
+    alignas(8) uint8_t bytes[1536];
 };
 
 struct Module {
@@ -98,8 +104,12 @@ struct Module {
     uint8_t patch = 0;     // 0..7
     uint8_t cell = 0;      // canvas cell 0..47 (= pad)
     uint8_t number = 1;    // display number: VCO 1, VCO 2...
-    float k[kMaxParam] = {};   // knob positions 0..1 (UI, snapshots)
+    float k[kMaxParam] = {};   // knob positions 0..1: the user's (base) value (UI, snapshots, files)
+    float ke[kMaxParam] = {};  // effective knob 0..1 (base + LABKIT modulation; the registry writes it)
+    float kv[kMaxParam] = {};  // the ke that v[] was last mapped from (audio)
     float v[kMaxParam] = {};   // mapped values (audio reads)
+    void* big = nullptr;       // pooled engine memory (PLTS)
+    int8_t bigIdx = -1;
     float* out[kMaxOut] = {};
     float* slab = nullptr;
     int8_t slabIdx = -1;
@@ -170,11 +180,16 @@ struct PatchVoices {
     float cc[128];
 };
 
+// A mixer strip: patch n (8 patches) or OUT n (Rack).
 struct MixStrip {
-    float level = 0.8f;
+    float level = 1.0f;
     float pan = 0.0f;
-    bool mute = false;
+    int mute = 0;
 };
+
+constexpr int kTaps = 8, kLanes = 4;
+constexpr int kPlaitsPool = 4;
+constexpr int32_t kPartTrainCost = 74000;   // PART with Type = trainlet (measured, GRAF_CAL)
 
 // A snapshot holds a whole patch state. Modules are keyed by where they sit
 // (patch * 48 + cell), so morphing matches modules by position.
@@ -231,7 +246,21 @@ public:
     int cableFind(int src, int srcOut, int dst, int dstIn) const;
     int connect(int src, int srcOut, int dst, int dstIn, float amount);   // cable index or -1
     bool disconnect(int cable);
-    void setParamK(int slot, int p, float k);       // knob 0..1, clamped; updates v
+    void setParamK(int slot, int p, float k);       // knob 0..1, clamped; updates v (and tells onKnob)
+    // Main loop: called after a knob's base value changed (LABKIT registry follows it).
+    void (*onKnob)(void* ctx, int slot, int p) = nullptr;
+    void* onKnobCtx = nullptr;
+    // Main loop: a module was added / removed / moved / renumbered (names, pages).
+    void (*onModules)(void* ctx) = nullptr;
+    // Cell remap for snapshots when modules move: every key `from` becomes `to`.
+    void remapSnapKeys(const uint16_t* from, const uint16_t* to, int n);
+    // Places a module in a cell without swapping (the cell must be free); snapshots follow.
+    bool place(int slot, int cell);
+    // Upstream / downstream modules of a slot (in cable order); returns the count.
+    int upstream(int slot, int* out, int cap) const;
+    int downstream(int slot, int* out, int cap) const;
+    // Modules in signal order (the plan's order) of one canvas; returns the count.
+    int signalOrder(int patch, int* out, int cap) const;
     void refresh(int slot);                         // k -> v for all params
     void resetParams(int slot);
     void randomize(int slot, Rand& r);
@@ -276,6 +305,7 @@ public:
     // Morph from the current state to snapshot i over `ms` (0 = now).
     void recallSnap(int i, uint32_t ms, uint32_t nowMs);
     void morphStep(uint32_t nowMs);              // live recall progress
+    void crossfade(int snapA, int snapB, float t); // the X-FADE parameter
     bool morphing() const { return morphTo_ >= 0; }
     int morphTarget() const { return morphTo_; }
     float morphPos() const { return morphPos_; }
@@ -285,8 +315,11 @@ public:
     int songBars() const;
 
     // ---- files ----
-    uint32_t serialize(uint8_t* buf, uint32_t cap) const;
-    bool deserialize(const uint8_t* buf, uint32_t len);
+    // withSnaps = false: the structure only (modules, cables, strips) -- undo states.
+    uint32_t serialize(uint8_t* buf, uint32_t cap, bool withSnaps = true) const;
+    // keepState: modules already in place (same slot, type) keep their DSP state
+    // (undo / redo); otherwise the patch is rebuilt from scratch.
+    bool deserialize(const uint8_t* buf, uint32_t len, bool keepState = false);
 
     // ---- samples ----
     void setSampleFiles(const SampleFile* files, int n);
@@ -325,6 +358,17 @@ public:
     float* mixL = nullptr;
     float* mixR = nullptr;
 
+    // LABKIT sources: user-marked outputs (taps) and the sequencer lanes.
+    int8_t tapSlot[kTaps] = {-1, -1, -1, -1, -1, -1, -1, -1};
+    uint8_t tapOut[kTaps] = {};
+    float tapVal[kTaps] = {};
+    int8_t laneSlot[kLanes] = {-1, -1, -1, -1};
+    float laneVal[kLanes] = {};
+    float masterEnv = 0.0f, barPhase = 0.0f, beatPhase = 0.0f;
+    int tapOf(int slot, int out) const;            // tap index or -1
+    int toggleTap(int slot, int out);              // new tap index, -1 = removed (or full: -2)
+    void refreshLanes();                           // main loop: pick the lane modules
+    volatile bool manualGate = false;              // the Perform key (MGATE modules)
     float tempoBpm = 120.0f;   // last transport tempo seen by render
     volatile uint32_t beatQ8 = 0;   // transport beat x 256 at the last block (atomic for the main loop)
     double beat() const { return double(beatQ8) * (1.0 / 256.0); }
@@ -359,6 +403,8 @@ private:
     bool slabUsed_[kSlabs] = {};
     int16_t* banks_[kSampleBanks] = {};
     bool bankUsed_[kSampleBanks] = {};
+    void* plaits_[kPlaitsPool] = {};
+    bool plaitsUsed_[kPlaitsPool] = {};
     bool concurrent_ = false;
     struct Pending {
         uint8_t slot;

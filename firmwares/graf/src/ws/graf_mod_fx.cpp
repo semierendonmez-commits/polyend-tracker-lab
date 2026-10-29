@@ -526,16 +526,13 @@ OT_FASTRUN_FN void pOut(Module& m, Proc& p) {
     Engine& e = *p.eng;
     const int slot = int(&m - &e.mod(0));
     const int patch = e.voicePatch(slot);
-    const MixStrip& ms = e.mix[e.rack ? 0 : patch];
-    const float pan = clampf(m.v[1], -1.0f, 1.0f);
-    float gl = m.v[0] * (pan > 0.0f ? 1.0f - pan : 1.0f);
-    float gr = m.v[0] * (pan < 0.0f ? 1.0f + pan : 1.0f);
-    if (!e.rack) {
-        const float sp = ms.pan;
-        gl *= ms.level * (sp > 0.0f ? 1.0f - sp : 1.0f);
-        gr *= ms.level * (sp < 0.0f ? 1.0f + sp : 1.0f);
-        if (ms.mute) gl = gr = 0.0f;
-    }
+    // the mixer strip: patch n (8 patches) or OUT n (Rack)
+    const int strip = e.rack ? (m.number - 1) & 7 : patch;
+    const MixStrip& ms = e.mix[strip];
+    const float pan = clampf(m.v[1] + ms.pan, -1.0f, 1.0f);
+    float gl = m.v[0] * ms.level * (pan > 0.0f ? 1.0f - pan : 1.0f);
+    float gr = m.v[0] * ms.level * (pan < 0.0f ? 1.0f + pan : 1.0f);
+    if (ms.mute) gl = gr = 0.0f;
     int stem = int(m.v[2]);   // 0 auto, 1 off, 2..5 = stems 1..4
     stem = stem == 0 ? (e.rack ? (m.number - 1) & 3 : patch & 3) : (stem == 1 ? -1 : stem - 2);
     const bool st = p.has(1), lv = p.has(2);
@@ -556,7 +553,7 @@ OT_FASTRUN_FN void pOut(Module& m, Proc& p) {
         const float a = fabsf(l) > fabsf(r) ? fabsf(l) : fabsf(r);
         if (a > pk) pk = a;
     }
-    float& mt = e.meter[e.rack ? (m.number - 1) & 7 : patch];
+    float& mt = e.meter[strip];
     mt = pk > mt ? pk : mt;
 }
 

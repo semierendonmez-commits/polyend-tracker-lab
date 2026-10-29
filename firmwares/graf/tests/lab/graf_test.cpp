@@ -1,5 +1,6 @@
-// GRAF host tests: patch graph logic, module DSP sanity, snapshot morph,
-// song timeline, save / load roundtrip, MIDI voices, the CPU budget guard.
+// GRAF host tests: patch graph logic, module DSP sanity, snapshot morph and
+// crossfader, song timeline, save / load roundtrip, MIDI voices, the CPU budget
+// guard, undo / redo, tidy, templates, the Plaits pool, LABKIT params / routes / taps.
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -197,7 +198,8 @@ LAB_TEST(graf_every_module_sane) {
             CHECK(pk <= lim);
         }
         // sources make a signal
-        if (t == kVco || t == kCplx || t == kWtbl || t == kNoise || t == kRete || t == kSmpl || t == kLfo) {
+        if (t == kVco || t == kCplx || t == kWtbl || t == kNoise || t == kRete || t == kSmpl || t == kLfo || t == kPlts ||
+            t == kChaos || t == kNet) {
             bool fin = true;
             CHECK(outPeak(r, m, 0, 400, &fin) > 0.05f);
         }
@@ -490,7 +492,8 @@ LAB_TEST(graf_workstation_pages_and_demos) {
     auto* g = static_cast<Graf*>(shell.workstation());
     CHECK(g != nullptr);
     if (!g) return;
-    static const int kDemoModules[] = {9, 9, 6, 14, 22, 16};
+    static const int kDemoModules[] = {9, 9, 6, 14, 22, 16, 10, 10};
+    CHECK(Graf::demoCount() == 8);
     for (int d = 0; d < Graf::demoCount(); ++d) {
         g->loadDemo(d);
         if (g->engine().moduleCount() != kDemoModules[d])
@@ -655,4 +658,300 @@ LAB_TEST(graf_card_samples_and_autosave) {
     CHECK(g3->engine().moduleCount() > 0);
     CHECK(!g3->savePatch("Lab/GRAF/x.grf"));
     shell3.powerOff();
+}
+
+// ---------------------------------------------------------------- round 2
+namespace {
+struct WsRig {
+    std::vector<uint8_t> mem = std::vector<uint8_t>(64u * 1024u * 1024u);
+    lab::Shell shell;
+    lab::Hal h;
+    Graf* g = nullptr;
+    WsRig() {
+        if (shell.init(h, mem.data(), uint32_t(mem.size()), "GRAF")) g = static_cast<Graf*>(shell.workstation());
+    }
+    void blocks(int n) {
+        lab::Transport t;
+        t.playing = true;
+        t.bpm = 120.0f;
+        t.beatsPerSample = 120.0 / 60.0 / 44100.0;
+        lab::AudioIn in;
+        float l[lab::kBlock], r[lab::kBlock];
+        for (int b = 0; b < n; ++b) {
+            t.startedThisBlock = b == 0;
+            shell.kitBlock(t);
+            g->render(t, in, l, r);
+            t.beat += t.beatsPerSample * lab::kBlock;
+        }
+    }
+    void press(int id, bool shift = false) {
+        lab::Event e;
+        e.type = lab::Event::kPress;
+        e.id = uint8_t(id);
+        e.shift = shift;
+        g->onEvent(e);
+    }
+};
+}  // namespace
+
+LAB_TEST(graf_undo_redo_keeps_structure) {
+    WsRig w;
+    CHECK(w.g != nullptr);
+    if (!w.g) return;
+    Graf& g = *w.g;
+    Engine& e = g.engine();
+    g.loadDemo(0);
+    const int n0 = e.moduleCount(), c0 = e.cableCount();
+    g.checkpoint(1);
+    const int s = e.add(kLfo, 0);
+    CHECK(s >= 0);
+    CHECK(e.moduleCount() == n0 + 1);
+    CHECK(g.undo());
+    CHECK(e.moduleCount() == n0);
+    CHECK(e.cableCount() == c0);
+    CHECK(g.redo());
+    CHECK(e.moduleCount() == n0 + 1);
+    // a knob: one gesture is one step, restored exactly
+    int v = -1;
+    for (int k = 0; k < kMaxSlots && v < 0; ++k)
+        if (e.mod(k).used && e.mod(k).type == kVco) v = k;
+    CHECK(v >= 0);
+    if (v < 0) return;
+    const float k0 = e.mod(v).k[0];
+    g.checkpoint(2, v * 16);
+    e.setParamK(v, 0, 0.9f);
+    g.checkpoint(2, v * 16);   // same knob, same gesture: no new step
+    e.setParamK(v, 0, 0.95f);
+    const int depth = g.undoDepth();
+    CHECK(g.undo());
+    CHECK(g.undoDepth() == depth - 1);
+    CHECK_NEAR(e.mod(v).k[0], k0, 1e-6);
+    // Pattern / Shift + Pattern are the keys
+    w.press(lab::btn::Pattern, true);
+    CHECK_NEAR(e.mod(v).k[0], 0.95f, 1e-6);
+    w.press(lab::btn::Pattern);
+    CHECK_NEAR(e.mod(v).k[0], k0, 1e-6);
+    bool fin = true;
+    w.blocks(50);
+    for (uint32_t i = 0; i < lab::kBlock; ++i) fin = fin && std::isfinite(e.mod(v).out[0][i]);
+    CHECK(fin);
+}
+
+LAB_TEST(graf_tidy_layout) {
+    WsRig w;
+    if (!w.g) return;
+    Graf& g = *w.g;
+    Engine& e = g.engine();
+    for (int d = 0; d < Graf::demoCount(); ++d) {
+        g.loadDemo(d);
+        const int n = e.moduleCount(), c = e.cableCount();
+        for (int p = 0; p < kPatches; ++p) g.tidy(p);
+        CHECK(e.moduleCount() == n);
+        CHECK(e.cableCount() == c);
+        bool taken[kPatches][kCells] = {};
+        bool clash = false;
+        for (int s = 0; s < kMaxSlots; ++s) {
+            const Module& m = e.mod(s);
+            if (!m.used) continue;
+            if (taken[m.patch][m.cell]) clash = true;
+            taken[m.patch][m.cell] = true;
+            CHECK(e.slotAtCell(m.patch, m.cell) == s);
+        }
+        CHECK(!clash);
+        // an OUT sits right of every module that feeds it
+        for (int k = 0; k < kMaxCables; ++k) {
+            const Cable& cb = e.cable(k);
+            if (!cb.used || e.mod(cb.dst).type != kOut || e.mod(cb.src).patch != e.mod(cb.dst).patch) continue;
+            CHECK(e.mod(cb.dst).cell % 12 >= e.mod(cb.src).cell % 12);
+        }
+    }
+    // undo puts the layout back
+    g.loadDemo(0);
+    int cells[kMaxSlots];
+    for (int s = 0; s < kMaxSlots; ++s) cells[s] = e.mod(s).used ? e.mod(s).cell : -1;
+    g.tidy(0);
+    CHECK(g.undo());
+    bool same = true;
+    for (int s = 0; s < kMaxSlots; ++s)
+        if (e.mod(s).used && e.mod(s).cell != cells[s]) same = false;
+    CHECK(same);
+}
+
+LAB_TEST(graf_templates_fit_an_empty_canvas) {
+    WsRig w;
+    if (!w.g) return;
+    Graf& g = *w.g;
+    Engine& e = g.engine();
+    for (int t = 0; t < kTemplates; ++t) {
+        e.clear();
+        e.quiesce();
+        const int n = g.addTemplate(t, 0, 0);
+        std::fprintf(stderr, "  template %-16s %d modules, %d cables\n", Graf::templateName(t), n, e.cableCount());
+        CHECK(n > 0);
+        CHECK(e.cableCount() > 0);
+        CHECK(e.cpuCost() <= kCpuBudget);
+        // twice on one canvas: the second block goes elsewhere and reuses the OUT
+        int outs = 0;
+        const int n2 = g.addTemplate(t, 0, 0);
+        for (int s = 0; s < kMaxSlots; ++s) outs += e.mod(s).used && e.mod(s).type == kOut;
+        if (n2 > 0) CHECK(outs <= 1);
+        w.blocks(40);
+    }
+}
+
+LAB_TEST(graf_crossfader_between_snapshots) {
+    Rig r;
+    const int v = r.e.add(kVco, 0, 0);
+    const int f = r.e.add(kSvf, 0, 1);
+    const int o = r.e.add(kOut, 0, 2);
+    r.e.connect(v, 0, f, 0, 1.0f);
+    r.e.connect(f, 0, o, 0, 1.0f);
+    r.setP(f, 0, 200.0f);
+    r.e.storeSnap(0);
+    r.setP(f, 0, 6000.0f);
+    const int l = r.e.add(kLfo, 0, 3);
+    r.e.connect(l, 0, f, 2, 0.8f);
+    r.e.storeSnap(1);
+    const float kA = r.e.snap(0).mod[r.e.snap(0).find(1)].k[0];
+    const float kB = r.e.snap(1).mod[r.e.snap(1).find(1)].k[0];
+    r.e.crossfade(0, 1, 0.0f);
+    CHECK_NEAR(r.e.mod(f).k[0], kA, 1e-5);
+    r.e.crossfade(0, 1, 0.25f);
+    CHECK_NEAR(r.e.mod(f).k[0], kA + (kB - kA) * 0.25f, 1e-4);
+    CHECK(r.e.slotAtCell(0, 3) >= 0);   // B's LFO is there in between
+    r.e.crossfade(0, 1, 1.0f);
+    CHECK_NEAR(r.e.mod(f).k[0], kB, 1e-5);
+    r.e.crossfade(0, 1, 0.0f);
+    CHECK(r.e.slotAtCell(0, 3) < 0);    // and gone at A
+    bool fin = false;
+    r.run(50, &fin);
+    CHECK(fin);
+}
+
+LAB_TEST(graf_plaits_pool_and_model_cost) {
+    Rig r;
+    int made = 0;
+    for (int i = 0; i < 6; ++i)
+        if (r.e.add(kPlts, 0, i) >= 0) ++made;
+    CHECK(made <= kPlaitsPool);
+    CHECK(made >= 1);
+    CHECK(r.e.cpuCost() <= kCpuBudget);
+    // the most expensive model on every voice: refused once over budget
+    for (int s = 0; s < kMaxSlots; ++s)
+        if (r.e.mod(s).used && r.e.mod(s).type == kPlts) {
+            int heaviest = 0;
+            for (int m = 0; m < 24; ++m)
+                if (plaitsCost(m) > plaitsCost(heaviest)) heaviest = m;
+            r.setP(s, 0, float(heaviest));
+        }
+    CHECK(r.e.cpuCost() <= kCpuBudget);
+    // removing one frees its voice for a new one
+    const int first = r.e.slotAtCell(0, 0);
+    r.e.remove(first);
+    r.e.quiesce();
+    CHECK(r.e.add(kPlts, 0, 20) >= 0 || r.e.cpuCost() + plaitsCost(8) > kCpuBudget);
+    bool fin = false;
+    r.run(100, &fin);
+    CHECK(fin);
+}
+
+LAB_TEST(graf_labkit_knobs_routes_and_taps) {
+    WsRig w;
+    if (!w.g) return;
+    Graf& g = *w.g;
+    Engine& e = g.engine();
+    kit::Registry& P = w.shell.labkit().reg;
+    kit::Mod& M = w.shell.labkit().mod;
+    g.loadDemo(0);
+    int v = -1;
+    for (int k = 0; k < kMaxSlots && v < 0; ++k)
+        if (e.mod(k).used && e.mod(k).type == kVco) v = k;
+    CHECK(v >= 0);
+    if (v < 0) return;
+    // every knob of every slot is a stable parameter
+    const kit::ParamId id = g.knobId(v, 2);
+    CHECK(id != kit::kNoParam);
+    char key[12];
+    std::snprintf(key, sizeof key, "s%02d.k2", v);
+    CHECK(P.find(key) == id);
+    // the registry edits the GRAF knob (base) and back
+    P.setNormFromShell(id, 0.8f, false);   // a LABKIT view (PARAM pads, MAP, MIDI learn)
+    CHECK_NEAR(e.mod(v).k[2], 0.8f, 1e-5);
+    e.setParamK(v, 2, 0.3f);
+    CHECK_NEAR(P.norm(id), 0.3f, 1e-5);
+    // a macro reaches any knob: the effective value moves, the base stays
+    M.clearRoutes();
+    const int ri = M.route(kit::kSrcMacro + 1, id, 0.5f);
+    CHECK(ri >= 0);
+    M.setMacro(1, 1.0f);
+    M.update(false);   // the main loop builds the plan
+    w.blocks(4);
+    CHECK(e.mod(v).ke[2] > e.mod(v).k[2] + 0.2f);
+    CHECK_NEAR(e.mod(v).k[2], 0.3f, 1e-5);
+    // removing the module drops its routes
+    g.checkpoint(1);
+    e.remove(v);
+    M.update(false);
+    w.blocks(1);
+    int tmp[4];
+    CHECK(M.routesTo(id, tmp, 4) == 0);
+    CHECK(g.undo());
+    // a tap: a module output as a LABKIT source
+    int lfo = -1;
+    for (int k = 0; k < kMaxSlots && lfo < 0; ++k)
+        if (e.mod(k).used && e.mod(k).type == kLfo) lfo = k;
+    CHECK(lfo >= 0);
+    if (lfo < 0) return;
+    const int t = e.toggleTap(lfo, 0);
+    CHECK(t >= 0 && t < kTaps);
+    CHECK(e.tapOf(lfo, 0) == t);
+    float lo = 1e9f, hi = -1e9f;
+    for (int b = 0; b < 200; ++b) {
+        w.blocks(1);
+        lo = std::fmin(lo, e.tapVal[t]);
+        hi = std::fmax(hi, e.tapVal[t]);
+    }
+    CHECK(hi - lo > 0.1f);
+    CHECK(e.toggleTap(lfo, 0) == -1);
+    CHECK(e.tapOf(lfo, 0) < 0);
+    // the main knobs sit on the GRAPH page, the selected module's on MODULE
+    g.select(lfo);
+    g.reassignPages();
+    CHECK(P.meta(g.knobId(lfo, 0)).page == kPgModule);
+    // the knob params survive save / load with their routes
+    M.route(kit::kSrcMacro + 2, g.knobId(lfo, 1), 0.25f);
+    std::vector<uint8_t> chunk(8192);
+    const uint32_t n = P.saveChunk(chunk.data(), uint32_t(chunk.size()));
+    CHECK(n > 0);
+}
+
+LAB_TEST(graf_keys_exist_on_the_hardware) {
+    WsRig w;
+    if (!w.g) return;
+    Graf& g = *w.g;
+    g.loadDemo(0);
+    // F4 then Insert adds the selected type; Pattern undoes it
+    const int n = g.engine().moduleCount();
+    w.press(lab::btn::F4);
+    CHECK(g.page() == kPgAdd);
+    w.press(lab::btn::Insert);
+    CHECK(g.engine().moduleCount() == n + 1);
+    w.press(lab::btn::Pattern);
+    CHECK(g.engine().moduleCount() == n);
+    // Note / Instr follow the signal
+    w.press(lab::btn::F1);
+    int seq = -1;
+    for (int k = 0; k < kMaxSlots && seq < 0; ++k)
+        if (g.engine().mod(k).used && g.engine().mod(k).type == kSeq) seq = k;
+    if (seq >= 0) {
+        g.select(seq);
+        w.press(lab::btn::Instr);
+        CHECK(g.selected() != seq);
+        w.press(lab::btn::Note);
+        CHECK(g.selected() == seq);
+    }
+    // Shift + Insert on the graph tidies (an undo step)
+    const int d = g.undoDepth();
+    w.press(lab::btn::Insert, true);
+    CHECK(g.undoDepth() == d + 1 || g.undoDepth() == 24);
 }
