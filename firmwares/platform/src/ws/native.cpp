@@ -168,7 +168,6 @@ int hParamAdd(void* c, const char* key, const char* name, float* value, float lo
     if (!ctx->shell || !key || !key[0] || !value) return -1;
     lab::kit::Kit& k = ctx->shell->labkit();
     lab::kit::Registry& R = k.reg;
-    if (R.count() >= lab::kit::kMaxParams) return -1;
     if (!(hi > lo)) hi = lo + 1.0f;
     if ((flags & PLAT_PARAM_EXP) && lo <= 0.0f) flags &= ~uint32_t(PLAT_PARAM_EXP);
     def = def < lo ? lo : (def > hi ? hi : def);

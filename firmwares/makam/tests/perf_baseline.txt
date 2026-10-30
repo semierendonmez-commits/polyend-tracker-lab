@@ -50,26 +50,32 @@
 # instruments streamed (resident head, the rest through the track rings; the refill is the
 # main loop's work and not timed). Gated absolutely by the stream.lim line: <= stereo8 + 5 %
 # (recorded +4.3 %, 0 underruns).
-# polyend-tracker-lab: re-recorded with Ubuntu arm-none-eabi-gcc 13.2.1 on unchanged
-# upstream v2 (4505834), the lab toolchain. Upstream numbers (Arm GNU 14.2) are 1-4 % lower.
-idle     11403
-idle2    11765
-play8    148027
-worst    253815
-stereo8  176333
-stream8  183719
-synth4   67777
-vapinit  9043
-vapworst 17474
-fatinit  9238
-fatworst 18814
-mix      263685
-mix5     279963
-mix6     279965
-mixfat   263598
-pswitch  147705
-peakavg  149901
-peak     234080
-wtfminit 9817
-wtfmworst 30644
-mixwtfm  306566
+# synth4w (stereo S2, Width): synth4 with the slot's Width at 1 -- the widener's four
+# allpasses on the slot bus, ~4k insn per slot and block; 0 with Width 0 (synth4 unchanged).
+# fatstereo (stereo S4, FAT Stereo): fatworst with Stereo 1 -- the pair-difference stack
+# (flash, not SRAM_L) and a second filter chain for the R side (+12.4k insn per voice; limit
+# 34k). Opt-in: Stereo 0 runs the mono kernels (fatinit / fatworst unchanged); four such
+# voices land near mixwtfm (above the 70 % alarm; the governor may take a voice).
+idle     11112
+idle2    11470
+play8    145418
+worst    244349
+stereo8  174615
+stream8  182222
+synth4   66860
+synth4w  71209
+vapinit  9027
+vapworst 17150
+fatinit  9224
+fatworst 18679
+fatstereo 31078
+mix      257071
+mix5     273064
+mix6     273069
+mixfat   257346
+pswitch  145180
+peakavg  147318
+peak     228560
+wtfminit 9626
+wtfmworst 30214
+mixwtfm  299814

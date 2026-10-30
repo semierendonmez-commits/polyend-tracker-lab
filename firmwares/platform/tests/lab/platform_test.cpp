@@ -734,6 +734,18 @@ LAB_TEST(platform_crash_safe_runner) {
     r.ws->onEvent(press(lab::btn::F8));
     r.run(2);
     CHECK(r.ws->mode() == plat::Platform::kLauncher);
+    // an endless loop in a callback is never "keep going": stopped at once
+    r.addScript("hang.lua", "function pad(n, v, z) if z == 1 then while true do end end end\n");
+    r.ws->rescan();
+    CHECK(r.ws->openByName("hang.lua"));
+    lab::Event pd;
+    pd.type = lab::Event::kPadDown;
+    pd.id = 0;
+    pd.velocity = 100;
+    r.ws->onEvent(pd);
+    r.run(2);
+    CHECK(r.ws->mode() == plat::Platform::kError);
+    CHECK(std::strstr(r.ws->lua().error(), "too long") != nullptr);
 }
 
 // ---- apps shipped next to the image: /Firmware/Apps -> /Lab/PLATFORM/Apps at boot ----

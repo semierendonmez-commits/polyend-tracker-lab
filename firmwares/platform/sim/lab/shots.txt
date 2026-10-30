@@ -7,6 +7,11 @@ wait 1500
 panelshot docs/screenshots/intro.png
 wait 2000
 panelshot docs/screenshots/launcher.png
+# the preview of a script's source: select Hello (entry 14)
+tap Right
+tap Right
+tap Down
+tap Down
 tap F3
 wait 300
 panelshot docs/screenshots/launcher-preview.png

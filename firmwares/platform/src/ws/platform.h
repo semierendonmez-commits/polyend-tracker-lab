@@ -30,6 +30,9 @@ public:
     static constexpr uint32_t kMinPool = 4u * 1024u * 1024u;        // smallest usable session pool
     static constexpr uint32_t kCrashGuardMs = 4000;              // "opened" flag cleared after this
     static constexpr uint32_t kAppWords = 1680;                  // display words an app may use
+    // LABKIT registry capacity: the Shell's MACRO / MOD params + the biggest
+    // station (GRAF registers ~690) -- reserved in init(), before the pool.
+    static constexpr int kKitParams = 1024;
 
     const char* name() const override { return "PLATFORM"; }
     const char* tagline() const override { return "Lua scripts and native apps from the card"; }

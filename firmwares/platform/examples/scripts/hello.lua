@@ -27,7 +27,7 @@ function init()
   -- Shift + Master (MOD page) routes an LFO to it -- the colours then drift
   params:add{id = "hue", name = "Hue", min = 0, max = 1, default = 0.55, page = "HELLO"}
   params:add{id = "glow", name = "Glow", min = 0.2, max = 1, default = 0.7, page = "HELLO"}
-  print("hello from Lua " .. _VERSION)
+  print("hello from " .. _VERSION)
 end
 
 function enc(d)

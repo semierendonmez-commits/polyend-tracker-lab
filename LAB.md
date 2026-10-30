@@ -32,10 +32,27 @@ change in one never breaks another.
 
 ## Base
 
-- Upstream `v2` at `4505834` (UI screens in SDRAM, #66).
+- Upstream `v2` at `1c8a529` (2026-10-30, after 2.2.3: stack guard, SD
+  streaming, stereo synths, no-card boot fix, DIN clock timing). The trees
+  were first built on `4505834` (UI screens in SDRAM, #66).
 - Built with Ubuntu `arm-none-eabi-gcc` 13.2.1; GitHub CI builds with Arm GNU
   14.2.Rel1 like upstream.
-- Upstream has no LICENSE file; ask the author before sharing built images.
+- Upstream is licensed under **Apache-2.0** (its `LICENSE`, added in
+  `f977f2f`); every firmware tree carries that file. Lab code that borrows GPL-3.0
+  sources (see each firmware's THIRD_PARTY.md) makes that image GPL-3.0.
+
+## Updating to a newer upstream
+
+```
+git clone https://github.com/sandlbn/polyend-tracker-re /path/to/upstream
+tools/upstream_merge.py /path/to/upstream <current base> origin/v2
+```
+
+It applies the upstream diff to every firmware tree with a three-way merge and
+resolves the conflicts all lab trees share (Makefile, `src/app_main.cpp`,
+`tests/perf_baseline.txt`). Then, per firmware: delete `build/sim`, run
+`make lab-gate`, copy the image to `release/`; rebuild PLATFORM's stations
+(`make stations` in firmwares/platform). Update the base commit above.
 
 ## Back to a known-good firmware
 

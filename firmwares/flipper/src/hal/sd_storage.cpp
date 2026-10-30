@@ -311,6 +311,40 @@ int32_t SdStorage::write(Handle h, const void* src, uint32_t len) {
     return f_write(f, src, len, &bw) == FR_OK ? int32_t(bw) : -1;
 }
 
+bool SdStorage::reserve(Handle h, uint32_t bytes) {
+    FIL* f = fileFor(h);
+    if (!f || !mounted_ || storageMode_) return false;
+    if (bytes == 0) return true;
+    // opt 1: the contiguous run is allocated now and the file is `bytes`
+    // long (the writes overwrite it from the start; truncate() cuts what
+    // they leave); f_sync puts the chain in the directory entry so the
+    // stream pre-check (fileExtents, its own FIL) maps it before the
+    // conversion. A cancelled import just removes the file. FR_DENIED: no
+    // contiguous run of that size, or the card is full.
+    const uint32_t t0 = micros();
+    const bool ok = f_expand(f, FSIZE_t(bytes), 1) == FR_OK && f_sync(f) == FR_OK;
+    diagLogf("sd: reserve %lu B %s in %lu us", static_cast<unsigned long>(bytes), ok ? "ok" : "refused",
+             static_cast<unsigned long>(micros() - t0));
+    return ok;
+}
+
+bool SdStorage::truncate(Handle h) {
+    FIL* f = fileFor(h);
+    return f && f_truncate(f) == FR_OK;
+}
+
+uint64_t SdStorage::freeBytes() {
+    if (!mounted_ || storageMode_) return 0;
+    DWORD clusters = 0;
+    FATFS* fs = nullptr;
+    // FF_FS_NOFSINFO: the first call after a mount scans the whole FAT.
+    const uint32_t t0 = micros();
+    if (f_getfree("", &clusters, &fs) != FR_OK || !fs) return UINT64_MAX;
+    const uint32_t us = micros() - t0;
+    if (us >= 10000) diagLogf("sd: free space scan in %lu us", static_cast<unsigned long>(us));
+    return uint64_t(clusters) * uint64_t(fs->csize) * 512u;
+}
+
 bool SdStorage::seek(Handle h, uint32_t pos) {
     FIL* f = fileFor(h);
     return f && f_lseek(f, pos) == FR_OK;
@@ -549,6 +583,44 @@ int32_t SdStorage::listDir(const char* path, DirFn fn, void* ctx) {
     }
     f_closedir(&d);
     return n;
+}
+
+bool SdStorage::fileExtents(const char* path, audio::StreamExtent* out, int cap, int* count, uint32_t* fileSize) {
+    if (!mounted_ || storageMode_ || !gFs.fs_type || cap <= 0) return false;
+    FIL f;
+    if (f_open(&f, path, FA_READ | FA_OPEN_EXISTING) != FR_OK) return false;
+    // CLMT: size, then (clusters, start) pairs; room for cap extents (FatFs
+    // pairs before merging can exceed the merged count: give it 2 x cap).
+    DWORD clmt[2 + 4 * audio::kStreamMaxExtents];
+    clmt[0] = DWORD(sizeof clmt / sizeof clmt[0]);
+    f.cltbl = clmt;
+    const bool mapped = f_lseek(&f, CREATE_LINKMAP) == FR_OK;
+    const uint32_t size = uint32_t(f_size(&f));
+    f.cltbl = nullptr;
+    f_close(&f);
+    if (!mapped) return false;
+    uint32_t c32[sizeof clmt / sizeof clmt[0]];
+    for (size_t i = 0; i < sizeof clmt / sizeof clmt[0]; ++i) c32[i] = uint32_t(clmt[i]);
+    const int n = audio::clmtToExtents(c32, uint32_t(gFs.database), uint32_t(gFs.csize), out, cap);
+    if (n <= 0) return false;
+    *count = n;
+    if (fileSize) *fileSize = size;
+    return true;
+}
+
+bool SdStorage::readSectors(uint32_t lba, uint8_t* dst, uint32_t count) {
+    if (!mounted_ || storageMode_) return false;
+    return sdhc::readBlocks(lba, dst, count);
+}
+
+bool SdStorage::readBytesAt(const char* path, uint32_t off, uint8_t* dst512) {
+    if (!mounted_ || storageMode_) return false;
+    FIL f;
+    if (f_open(&f, path, FA_READ | FA_OPEN_EXISTING) != FR_OK) return false;
+    UINT br = 0;
+    const bool ok = f_lseek(&f, off) == FR_OK && f_read(&f, dst512, 512, &br) == FR_OK && br == 512;
+    f_close(&f);
+    return ok;
 }
 
 }  // namespace hal

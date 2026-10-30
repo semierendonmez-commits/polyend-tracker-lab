@@ -16,11 +16,11 @@ ARGS="$*"
 # what its init() takes from the station arena ("station: arena N KB" in the
 # hosted bench, make lab-gate) + ~2 %. LABKIT's own tables live in PLATFORM.
 # GRAF last (its tree was the last to settle).
-want konsol     && build konsol     KONSOL     12800 "$ENG core/audio/synth_params.cpp core/audio/audio_tables.cpp core/audio/effects.cpp core/formats/patch_pb.cpp core/ui/screen_synth_tables.cpp core/ui/notes.cpp core/model/fx.cpp" "core/gen/*.cpp"
-want bulut      && build bulut      BULUT      10000 "core/audio/effects.cpp core/audio/audio_tables.cpp"
-want datamatics && build datamatics DATAMATICS 7300  ""
-want makam      && build makam      MAKAM      3950  "core/audio/effects.cpp core/audio/audio_tables.cpp core/formats/crc32.cpp"
-want tilt       && build tilt       TILT       8700  ""
-want flipper    && build flipper    FLIPPER    6100  ""
-want graf       && build graf       GRAF       10400 ""
+want konsol     && build konsol     KONSOL     12700 "$ENG core/audio/synth_params.cpp core/audio/audio_tables.cpp core/audio/effects.cpp core/formats/patch_pb.cpp core/ui/screen_synth_tables.cpp core/ui/notes.cpp core/model/fx.cpp" "core/gen/*.cpp"
+want bulut      && build bulut      BULUT      9760  "core/audio/effects.cpp core/audio/audio_tables.cpp"
+want datamatics && build datamatics DATAMATICS 6970  ""
+want makam      && build makam      MAKAM      3550  "core/audio/effects.cpp core/audio/audio_tables.cpp core/formats/crc32.cpp"
+want tilt       && build tilt       TILT       8420  ""
+want flipper    && build flipper    FLIPPER    6470  ""
+want graf       && build graf       GRAF       11730 ""
 ls -l build/stations/*.papp

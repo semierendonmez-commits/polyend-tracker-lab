@@ -73,6 +73,8 @@ end
 // The LABKIT objects as they were outside any session (after the Shell's init:
 // its MACRO / MOD params, no routes): sessions register on top, and closing
 // one puts this back (MANUAL.md "LABKIT").
+static_assert(Platform::kKitParams == LuaSession::kRegCap, "one registry size");
+
 struct Platform::KitSnap {
     alignas(8) unsigned char reg[sizeof(lab::kit::Registry)];
     alignas(8) unsigned char mod[sizeof(lab::kit::Mod)];
@@ -93,6 +95,7 @@ bool Platform::init(lab::Context& c) {
     native_ = c.arena->make<NativeSession>();
     snap_ = c.arena->make<KitSnap>();
     if (!engine_ || !lua_ || !native_ || !snap_ || !engine_->init(*c.arena)) return false;
+    if (c.shell) c.params().reserve(kKitParams);   // sessions register into it (stations up to ~700 params)
     // The session pool takes the rest of the SDRAM arena (scripts, samples, native apps).
     uint32_t poolBytes = c.arena->free() > kArenaReserve + kMinPool ? c.arena->free() - kArenaReserve : 0;
     poolMem_ = static_cast<uint8_t*>(c.arena->alloc(poolBytes, 64));
@@ -381,8 +384,10 @@ void Platform::waitBlock() {
     // ended (device: the main loop never sees half an interrupt; simulator:
     // the audio thread). Bounded -- without audio nothing waits.
     if (!audioRunning()) return;
+    // Bounded twice: by time, and by spins -- the scripted simulator's clock
+    // and audio only advance between main-loop passes.
     const uint32_t b0 = blocks_, t0 = ctx_->millis();
-    while (blocks_ == b0 && ctx_->millis() - t0 < 20u) {
+    for (uint32_t spins = 0; blocks_ == b0 && ctx_->millis() - t0 < 20u && spins < 400000u; ++spins) {
     }
 }
 
@@ -392,7 +397,7 @@ void Platform::ensureSnapshot() {
     std::memcpy(static_cast<void*>(snap_->reg), static_cast<const void*>(&k.reg), sizeof snap_->reg);
     std::memcpy(static_cast<void*>(snap_->mod), static_cast<const void*>(&k.mod), sizeof snap_->mod);
     std::memcpy(static_cast<void*>(snap_->nav), static_cast<const void*>(&k.nav), sizeof snap_->nav);
-    snap_->count = k.reg.count();
+    snap_->count = k.reg.count() < lab::kit::kMaxParams ? k.reg.count() : lab::kit::kMaxParams;   // the Shell's ~34
     if (k.reg.baseArray() && snap_->count > 0) {
         std::memcpy(snap_->base, k.reg.baseArray(), sizeof(float) * uint32_t(snap_->count));
         std::memcpy(snap_->eff, k.reg.effArray(), sizeof(float) * uint32_t(snap_->count));
@@ -1020,16 +1025,16 @@ void Platform::drawSessionBar(lab::Canvas& g) {
         std::snprintf(buf, sizeof buf, "lua %luK/%luK%s   %.0f bpm   CPU %lu%%", static_cast<unsigned long>(lua_->heapUsed() / 1024),
                       static_cast<unsigned long>(lua_->heapCap() / 1024), lua_->screenDropped() ? "  SCREEN FULL" : "",
                       double(ctx_->bpm()), static_cast<unsigned long>(ctx_->shell->cpuPermille() / 10));
-    if (mode_ == kScriptRun && lua_->errorsTotal() > 0) {
-        // the crash-safe runner kept the script going: a red count, details in the LOG
-        g.color(theme_.warn);
-        g.textf(300, 11, font::kTiny, Canvas::kCenterY, "%d ERR (Shift+F7)", lua_->errorsTotal());
-        g.color(theme_.dim);
-    }
     else
         std::snprintf(buf, sizeof buf, "native %luK%s   %.0f bpm   CPU %lu%%",
                       static_cast<unsigned long>(native_->imageBytes() / 1024), native_->fastInSram() ? " +fast" : "",
                       double(ctx_->bpm()), static_cast<unsigned long>(ctx_->shell->cpuPermille() / 10));
+    if (mode_ == kScriptRun && lua_->errorsTotal() > 0) {
+        // the crash-safe runner kept the script going: a red count, details in the LOG
+        g.color(theme_.warn);
+        g.textf(190, 11, font::kTiny, Canvas::kCenterY, "%d ERR (Shift+F7)", lua_->errorsTotal());
+        g.color(theme_.dim);
+    }
     g.text(560, 11, font::kTiny, buf, Canvas::kCenterY | Canvas::kRight);
     g.text(792, 11, font::kTiny, "hold Shift+F8: launcher", Canvas::kCenterY | Canvas::kRight);
 }
@@ -1193,7 +1198,7 @@ void Platform::loadPreview(int i) {
     if (i < 0 || i >= nEntries_) return;
     const Entry& en = entries_[i];
     if (en.kind != Entry::kScript || !ctx_->fs) {
-        static const char* const kKinds[] = {"Lua script", "native app", "station (a lab workstation as an app)"};
+        static const char* const kKinds[] = {"Lua script", "native app", "station"};
         std::snprintf(previewText_, sizeof previewText_, "%s\n%s\n\nfile  Apps/%s\nby    %s\n\n%s\n\nInsert / F1 opens it.",
                       en.name, kKinds[en.kind], en.file, en.author[0] ? en.author : "-", en.desc);
         return;
@@ -1222,6 +1227,12 @@ void Platform::drawPreview(lab::Canvas& g, int x, int y, int w, int h) {
         char line[48];
         int n = 0;
         while (p[n] && p[n] != '\n' && n < cols && n < int(sizeof line) - 1) ++n;
+        const bool wrap = en.kind != Entry::kScript && p[n] && p[n] != '\n';   // info: wrap words
+        if (wrap) {
+            int b = n;
+            while (b > 8 && p[b] != ' ') --b;
+            if (b > 8) n = b;
+        }
         for (int k = 0; k < n; ++k) {
             const unsigned char c = static_cast<unsigned char>(p[k]);
             line[k] = (c == '\t') ? ' ' : (c < 32 || c > 126 ? '?' : char(c));
@@ -1232,7 +1243,11 @@ void Platform::drawPreview(lab::Canvas& g, int x, int y, int w, int h) {
         g.color(comment ? t.dim : t.fg);
         if (n) g.text(x + 10, y + 34 + r * 16, font::kTiny, line, Canvas::kCenterY);
         p += n;
-        while (*p && *p != '\n') ++p;   // cut long lines
+        if (wrap) {
+            while (*p == ' ') ++p;
+            continue;
+        }
+        while (*p && *p != '\n') ++p;   // source: cut long lines
         if (*p == '\n') ++p;
     }
 }

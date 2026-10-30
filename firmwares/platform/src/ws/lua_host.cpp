@@ -75,8 +75,10 @@ void hook(lua_State* L, lua_Debug* ar) {
     (void)ar;
     LuaSession* s = S(L);
     s->insn += 1000;
-    if (s->insnLimit && s->insn > s->insnLimit)
+    if (s->insnLimit && s->insn > s->insnLimit) {
+        s->timedOut = true;   // a hang is never "keep going": the runner stops the script
         luaL_error(L, "script ran too long (over %d VM instructions in one call) - endless loop?", int(s->insnLimit));
+    }
 }
 
 int traceback(lua_State* L) {
@@ -890,7 +892,7 @@ int k_paramAdd(lua_State* L) {
         }
         kitResume(s, was);
     }
-    if (rid == lab::kit::kNoParam) return luaL_error(L, "params: the registry is full (512 params)");
+    if (rid == lab::kit::kNoParam) return luaL_error(L, "params: the registry is full (1024 params)");
     lua_pushinteger(L, rid);
     return 1;
 }
@@ -1258,6 +1260,7 @@ bool LuaSession::call(int nargs, uint32_t limit, bool fatal) {
     lua_insert(L_, base);
     insn = 0;
     insnLimit = limit;
+    timedOut = false;
     LuaSession* prev = gPrint;
     gPrint = this;
     const int r = lua_pcall(L_, nargs, 0, base);
@@ -1268,9 +1271,10 @@ bool LuaSession::call(int nargs, uint32_t limit, bool fatal) {
         const char* m = lua_tostring(L_, -1);
         const char* msg = m ? m : (r == LUA_ERRMEM ? "out of memory (script heap is full)" : "error");
         // Crash-safe runner: an error in a callback is logged and the script keeps
-        // running (like norns); loading / init errors, out of memory, or more than
-        // kMaxErrors errors in kErrorWindowMs stop it with the error page.
-        if (fatal || r == LUA_ERRMEM) {
+        // running (like norns); loading / init errors, out of memory, an endless
+        // loop, or more than kMaxErrors errors in kErrorWindowMs stop it with the
+        // error page.
+        if (fatal || r == LUA_ERRMEM || timedOut) {
             fail(msg);
         } else {
             const uint32_t now = ctx_ ? ctx_->millis() : 0;

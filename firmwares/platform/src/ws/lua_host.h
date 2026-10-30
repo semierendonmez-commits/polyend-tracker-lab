@@ -55,6 +55,7 @@ public:
     static constexpr int kMaxErrors = 5;              // errors in a window before the script stops
     static constexpr uint32_t kErrorWindowMs = 3000;
     static constexpr int kMaxPages = 12, kMaxSources = 8;
+    static constexpr int kRegCap = 1024;   // = Platform::kKitParams
 
     // Creates the state in `pool` (the session's memory), runs the script and
     // its init(). Returns false when anything failed; failed() / error() tell.
@@ -96,9 +97,9 @@ public:
     const char* keep(const char* s);
     float* modSlot(int i) { return (modSlots_ && i >= 0 && i < kMaxSources) ? &modSlots_[i] : nullptr; }
     int addModSlot() { return nModSlots_ < kMaxSources ? nModSlots_++ : -1; }
-    bool isEnumParam(int rid) const { return rid >= 0 && rid < 512 && (enumBits_[rid >> 5] >> (rid & 31)) & 1u; }
+    bool isEnumParam(int rid) const { return rid >= 0 && rid < kRegCap && (enumBits_[rid >> 5] >> (rid & 31)) & 1u; }
     void markEnum(int rid) {
-        if (rid >= 0 && rid < 512) enumBits_[rid >> 5] |= 1u << (rid & 31);
+        if (rid >= 0 && rid < kRegCap) enumBits_[rid >> 5] |= 1u << (rid & 31);
     }
     bool kitPath(char* out, uint32_t cap) const;   // Data/<script>/labkit.lkc
 
@@ -128,6 +129,7 @@ public:
     char dataDir[64] = {};
     char scriptDir[48] = {};
     uint32_t insn = 0, insnLimit = 0;
+    bool timedOut = false;   // the instruction hook stopped the last call
     Pool* pool() { return pool_; }
     void addSampleBytes(uint32_t n) { sampleBytes_ += n; }
     void print(const char* s, uint32_t n);
@@ -165,7 +167,7 @@ private:
     int nPages_ = 0;
     float* modSlots_ = nullptr;
     int nModSlots_ = 0;
-    uint32_t enumBits_[16] = {};
+    uint32_t enumBits_[kRegCap / 32] = {};
     uint32_t lastPollMs_ = 0;
     int errInWindow_ = 0, errorsTotal_ = 0;
     uint32_t errWindowStart_ = 0, lastErrorMs_ = 0;
