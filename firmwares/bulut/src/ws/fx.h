@@ -37,6 +37,7 @@ float fxUnits(int fxMode);                            // the FX mode
 float genUnits(int genType);
 constexpr float kMixUnits = 0.95f;   // a sounding channel's fader / sends / feedback
 constexpr float kBedUnits = 0.55f;   // the freeze bed
+constexpr float kTapeUnits = 1.2f;   // a TAPE FILE source: window fetch + varispeed (~5k M4 insn at 2 x)
 
 class ChannelChain {
 public:

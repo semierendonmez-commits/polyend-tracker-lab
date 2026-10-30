@@ -2,7 +2,8 @@
 # boot, the generator and QUANTA (no input needed), the sample flow (browser,
 # quick swap, REGION pads), every engine, the LABKIT views, FX + routes,
 # gestures, freezes, scenes, resample into a channel, the timeline, projects,
-# radio, MIDI, settings, the display budget. (The gate runs without
+# radio, TAPE FILE (a long WAV streamed from the card), MIDI, settings, the
+# display budget. (The gate runs without
 # --line-in-tone: line in is silent there.)
 wait 3000
 budget
@@ -308,6 +309,92 @@ expect-sound 300
 pad 40 up
 pad 45 up
 budget
+
+# ---- TAPE FILE: a 90 s WAV streams from the card into CH3's buffer like an
+# input (CH3 soloed, GRANULAR; the gate's line in is silent, so its grains
+# only sound once the tape writes the buffer)
+mkwav Samples/0-tape.wav 90 220 2 0
+press Shift
+pad 2 tap
+pad 10 tap
+release Shift
+tap S.Play
+press Shift
+tap F1
+release Shift
+expect-param c3.engine 0
+tap S.Edit
+press Shift
+tap F1
+release Shift
+expect-param c3.source 0
+wait 2500
+peak-reset
+pad 11 down 120
+pad 23 down 110
+wait 800
+expect-silence 60
+pad 11 up
+pad 23 up
+press Shift
+tap F5
+release Shift
+wait 400
+expect-overlay browser
+budget
+tap Insert
+wait 600
+expect-overlay none
+expect-param c3.source 4
+budget
+wait 1500
+peak-reset
+pad 11 down 120
+pad 23 down 110
+wait 1500
+expect-sound 300
+pad 11 up
+pad 23 up
+budget
+# the tape rows (the cursor was on row 9 of 9 = RADIO: LOOP on a TAPE FILE channel)
+tap Up
+tap Up
+enc 5
+expect-param c3.tape.spd 1.110 0.01
+tap Delete
+expect-param c3.tape.spd 1.0 0.001
+enc 10
+tap Down
+enc 10
+expect-param c3.tape.from 0.1 0.001
+tap Down
+enc -1
+expect-param c3.tape.loop 0
+enc 1
+expect-param c3.tape.loop 1
+tap Down
+enc 40
+wait 400
+budget
+tap Up
+tap Up
+tap Up
+tap Up
+enc -1
+wait 300
+press Shift
+tap F8
+release Shift
+wait 1500
+peak-reset
+pad 11 down 120
+wait 1200
+expect-sound 300
+pad 11 up
+budget
+press Shift
+pad 10 tap
+release Shift
 
 # ---- MIDI notes play the selected channel
 peak-reset

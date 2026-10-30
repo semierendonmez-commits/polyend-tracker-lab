@@ -34,7 +34,9 @@ constexpr int kStemCount = 4;
 constexpr float kSr = 44100.0f;
 
 enum EngineKind : uint8_t { kGranular = 0, kQuanta, kBeads, kTape, kEngines };
-enum SrcType : uint8_t { kSrcInput = 0, kSrcOutput, kSrcSample, kSrcGen, kSrcCount };
+// kSrcTape (TAPE FILE, stream.h) came last, so saved indices keep their meaning.
+enum SrcType : uint8_t { kSrcInput = 0, kSrcOutput, kSrcSample, kSrcGen, kSrcTape, kSrcCount };
+constexpr int kSrcCountV1 = 4;   // sources before TAPE FILE (scene values of older projects)
 enum GenType : uint8_t { kGenRete = 0, kGenTone, kGenNoise, kGenCount };
 enum QType : uint8_t { kQSample = 0, kQGlisson, kQGabor, kQGrainlet, kQPulsar, kQTrainlet, kQTypes };
 enum QLaw : uint8_t { kLawSync = 0, kLawPoisson, kLawGauss, kLawCauchy, kLawLogistic, kLaws };
@@ -150,6 +152,10 @@ struct ChParams {
     int source = kSrcInput;
     int genType = kGenRete;
     float gestSpeed = 2.0f; // index into speedMul (int-like float)
+    // TAPE FILE (registry page TAPE, not part of the 36 channel params / scenes)
+    float tapeSpeed = 1.0f; // varispeed 0.25 .. 2 x (pitch follows)
+    float tapeFrom = 0.0f;  // start / loop point, 0..1 of the file
+    int tapeLoop = 1;       // at the end: back to FROM (1) or stop (0)
 };
 
 // ---- per-channel state that is not a parameter ------------------------------
@@ -217,6 +223,16 @@ struct FreezeSlot {
     uint8_t reserved;
     float scale;           // magnitude of 65535
     uint16_t mag[kSpecBins];
+};
+
+// ---- TAPE FILE: what a project remembers of each channel's tape -------------
+// (speed, FROM and LOOP are registry params: the REGC chunk holds them)
+struct TapeSave {
+    char path[128];        // the user's WAV ("" = none)
+    char label[40];
+    uint8_t playing;       // it was playing: it plays again once the file is open
+    uint8_t reserved[3];
+    uint32_t cue;          // the position (file frames at 44.1 kHz)
 };
 
 // ---- master send effects (registry-bound) ------------------------------------

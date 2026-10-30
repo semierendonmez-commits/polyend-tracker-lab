@@ -15,6 +15,9 @@
 namespace bulut {
 
 constexpr uint16_t kProjectVersion = 2;   // 2: four channels + the LABKIT registry chunk
+// Minor 1: TAPE FILE (the TAPE chunk; scenes' SOURCE values count 5 sources).
+// A minor-0 file's scenes are mapped from 4 sources on load.
+constexpr uint16_t kProjectMinor = 1;
 
 // Everything a project holds (pointers into the workstation's memory).
 struct ProjectRefs {
@@ -30,6 +33,7 @@ struct ProjectRefs {
     FreezeSlot* freezes = nullptr;      // kFreezeSlots
     float* bpm = nullptr;
     int* songMode = nullptr;
+    TapeSave* tapes = nullptr;          // kCh (optional)
 };
 
 enum class ProjResult : uint8_t { kOk, kNoCard, kIoError, kBadFile, kTooNew, kPartial, kTooOld };

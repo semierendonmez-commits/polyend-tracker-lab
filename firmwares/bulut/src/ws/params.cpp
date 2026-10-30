@@ -22,9 +22,10 @@ const char* const kLfoNames[kLfoShapes] = {"Sine", "Tri", "Saw", "Square", "S&H"
 const char* const kFltNames[kFltModes] = {"Off", "Low-pass", "Band-pass", "High-pass"};
 const char* const kFxNames[kFxModes] = {"Off", "Texture", "Shifter", "Flanger", "Panner", "Crusher", "Slicer", "Freezer"};
 const char* const kEngNames[kEngines] = {"Granular", "Quanta", "Beads", "Tape"};
-const char* const kSrcNames[kSrcCount] = {"Input", "Output", "Sample", "Generator"};
+const char* const kSrcNames[kSrcCount] = {"Input", "Output", "Sample", "Generator", "Tape file"};
 const char* const kGenNames[kGenCount] = {"Rete", "Tone", "Noise"};
 const char* const kSpeedNames[kSpeeds] = {"1/4 x", "1/2 x", "1 x", "2 x", "4 x"};
+const char* const kLoopNames[2] = {"Off", "On"};
 const char* const kDivNames[kDlyDivs] = {"1/32", "1/16T", "1/16", "1/8T", "1/8", "1/8.", "1/4", "1/4.", "1/2"};
 const char* const kRowNames[24] = {"GAIN", "START", "END", "GEN A", "GEN B", "BED", "LFO RATE", "LFO SHAPE",
                                    "LEVEL", "PAN", "DELAY", "REVERB", "DRIVE", "FILTER", "CUTOFF", "RESO",
@@ -42,7 +43,7 @@ const char* Bulut::paramName(int c, int idx) const {
 
 void Bulut::registerParams() {
     kit::Registry& P = ctx_->params();
-    P.reserve(220);
+    P.reserve(240);
     char key[24];
     for (int c = 0; c < kCh; ++c) {
         ChParams& p = par_[c];
@@ -122,6 +123,32 @@ void Bulut::registerParams() {
     tid_[3] = P.add("spec.sparse", "SPARSE", &tools_.sparse).percent().noMod().pad(3);
     tid_[4] = P.add("spec.morph", "MORPH", &tools_.morph).percent().noMod().pad(4);
     tid_[5] = P.add("spec.mslot", "MORPH SLOT", &tools_.morphSlot).range(0, kFreezeSlots - 1).noMod().pad(5);
+    // TAPE FILE: each channel's SPEED, FROM and LOOP (page TAPE; not in the
+    // channel pages / scenes: those are full). In the channel's SOURCE group.
+    P.setPage(kNavTape);
+    static char sTapeKey[kCh][kTapeParams][24];
+    static char sTapeName[kCh][kTapeParams][16];
+    static const char* const kTpKey[kTapeParams] = {"spd", "from", "loop"};
+    static const char* const kTpName[kTapeParams] = {"SPEED", "FROM", "LOOP"};
+    for (int c = 0; c < kCh; ++c) {
+        char gname[16];
+        std::snprintf(gname, sizeof gname, "C%d SOURCE", c + 1);
+        P.setGroup(P.groupName(P.group(gname)), lab::mix(kChCol[c], Rgb(0xFFFFFF), 0.35f));
+        for (int k = 0; k < kTapeParams; ++k) {
+            std::snprintf(sTapeKey[c][k], sizeof sTapeKey[c][k], "c%d.tape.%s", c + 1, kTpKey[k]);
+            std::snprintf(sTapeName[c][k], sizeof sTapeName[c][k], "C%d %s", c + 1, kTpName[k]);
+        }
+        ChParams& p = par_[c];
+        tapePid_[c][kTpSpeed] = P.add(sTapeKey[c][kTpSpeed], sTapeName[c][kTpSpeed], &p.tapeSpeed)
+                                    .range(kTapeMinSpeed, kTapeMaxSpeed)
+                                    .exp()
+                                    .def(1.0f)
+                                    .unit("x")
+                                    .pad(c * 3);
+        tapePid_[c][kTpFrom] = P.add(sTapeKey[c][kTpFrom], sTapeName[c][kTpFrom], &p.tapeFrom).percent().noMod().pad(c * 3 + 1);
+        tapePid_[c][kTpLoop] =
+            P.add(sTapeKey[c][kTpLoop], sTapeName[c][kTpLoop], &p.tapeLoop).names(kLoopNames, 2).def(1.0f).noMod().pad(c * 3 + 2);
+    }
     for (int c = 0; c < kCh; ++c) {
         engNow_[c] = par_[c].engine;
         srcNow_[c] = par_[c].source;
@@ -227,10 +254,15 @@ int Bulut::navPages(kit::PageInfo* out, int cap) {
         Rgb(0xB9A8F0));
     add("FILE", "16 project slots and the resample loop (record the mix or a channel into another channel).",
         Rgb(0xE6EAF4));
+    add("TAPE", "TAPE FILE of each channel: SPEED (varispeed, pitch follows), FROM (start / loop point), LOOP. "
+                "Play / stop, the file and the position: SOURCE page.",
+        Rgb(0xF5C49A));
     for (int i = 0; i < n; ++i) {
         for (int f = 0; f < 7; ++f) out[i].fkeys[f] = kPagesKeys[f];
         if (!out[i].fkeys[7]) {
-            const int ui = i == 0 ? kPgClouds : (i == kNavMotion ? kPgMotion : (i == kNavFreeze ? kPgFreeze : kPgFile));
+            const int ui = i == 0 ? kPgClouds
+                                  : (i == kNavMotion ? kPgMotion
+                                                     : (i == kNavFreeze ? kPgFreeze : (i == kNavTape ? kPgSource : kPgFile)));
             out[i].fkeys[7] = kAct[ui];
         }
     }
@@ -259,9 +291,17 @@ void Bulut::navGoto(int page) {
     else if (page == kNavMotion) setPage(kPgMotion);
     else if (page == kNavFreeze) setPage(kPgFreeze);
     else if (page == kNavFile) setPage(kPgFile);
+    else if (page == kNavTape) setPage(kPgSource);
 }
 
 void Bulut::navFocus(kit::ParamId id) {
+    for (int c = 0; c < kCh; ++c)   // a TAPE FILE param: its row on the SOURCE page
+        for (int k = 0; k < kTapeParams; ++k)
+            if (tapePid_[c][k] == id) {
+                selectChannel(c);
+                if (par_[c].source == kSrcTape) cur_[kPgSource] = 6 + k;
+                return;
+            }
     int idx = 0;
     const int c = chOf(id, &idx);
     if (c < 0) return;
