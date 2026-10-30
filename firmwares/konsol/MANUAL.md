@@ -42,14 +42,16 @@ models and in the simulator): **Insert** does what a push would do.
 5. [LABKIT: PARAM pads, MAP, macros, modulation](#labkit-param-pads-map-macros-modulation)
 6. [Sound engines](#sound-engine-reference)
 7. [Samples: memory, stretch, warp, slices](#samples-memory-stretch-warp-slices)
-8. [Players and generators](#players-and-generators)
-9. [Recording and export (stems)](#recording-and-export-stems)
-10. [MIDI](#midi)
-11. [Settings](#settings)
-12. [Files on the card](#files-on-the-card)
-13. [Tips](#tips)
-14. [Limits](#limits)
-15. [Credits](#credits)
+8. [Streaming from the card](#streaming-from-the-card)
+9. [Players and generators](#players-and-generators)
+10. [Recording and export (stems)](#recording-and-export-stems)
+11. [MIDI](#midi)
+12. [Settings](#settings)
+13. [Files on the card](#files-on-the-card)
+14. [Tips](#tips)
+15. [Limits](#limits)
+16. [Building](#building)
+17. [Credits](#credits)
 
 ---
 
@@ -299,11 +301,17 @@ louder side) with its slice points in hit colours (red kick, amber snare,
 teal hat, grey other) and bar marks; the file name, mono / stereo, length and
 slice count.
 
-- **TEMPO** card: **Length** in bars (0 = detect), the file's tempo from its
-  length and bars, the project tempo, and which version plays.
+- **TEMPO** card: **Length** in bars (0 = detect), **Stream** (Auto, On, Off:
+  whether the file plays from the card, see
+  [Streaming from the card](#streaming-from-the-card)), the file's tempo from
+  its length and bars, the project tempo, and which version plays.
 - **TIME-STRETCH** card: **Mode** (Beats, Tonal, Repitch) and **Pitch**
-  (-24..+24 semitones; length stays). Up / Down choose the row, the encoder
-  changes it.
+  (-24..+24 semitones; length stays). Up / Down choose the row (Length,
+  Stream, Mode, Pitch), the encoder changes it.
+
+A streamed sample shows a band instead of its waveform (only its first
+0.74 s is in memory, the bright part), with STREAM, its length and the
+underrun count in the header.
 
 | Key | Function |
 | --- | --- |
@@ -524,7 +532,8 @@ whole block budget, and would click.
   mono or 60 s stereo at 44.1 kHz). A file used by several tracks or pads is
   loaded once. Project > **F8 Clean up** frees what nothing uses. Any WAV the
   Tracker reads works (8-32 bit PCM, float, mono or stereo, any rate;
-  resampled to 44.1 kHz), up to 60 s per file.
+  resampled to 44.1 kHz), up to 60 s per file in memory; longer files
+  stream from the card (next section).
 - **Tempo detection.** From the length: the bar count (1, 2, 4 .. 32) whose
   tempo is most plausible (85-180 BPM, near the project tempo) **and** whose
   1/16 grid the detected hits fall on (so a 172 BPM break is not read as
@@ -546,6 +555,75 @@ whole block budget, and would click.
   or perc from what it adds to the sound (low / high band energy against the
   23 ms before it). Edit them in the slice editor.
 - **Stereo** is kept everywhere (SAMPLER, GRAIN, KIT, stretch).
+
+## Streaming from the card
+
+Whole tracks, stems and long loops do not need the sample memory: KONSOL
+plays them straight from the SD card, the way a DAW plays long clips from
+disk. Only the first 0.74 s of a streamed file (its **head**) is in memory;
+the rest is read ahead by the main loop into a ring per playing voice.
+
+**How to stream.** Load a WAV on the Sample page (S.Load, F3) as usual. The
+track's **Stream** row decides:
+
+| Stream | What happens |
+| --- | --- |
+| **Auto** (default) | Files of **30 s and more**, files longer than the 60 s in-memory limit and files that do not fit the free sample memory stream; shorter ones load into memory |
+| **On** | Every file of 2.2 s and more streams |
+| **Off** | Always in memory (as before: up to 60 s, cut at the free memory) |
+
+Changing the row loads the track's file again the new way. The switch is
+saved with the project (chunk `TSMP`); a project opens its streamed files
+from the card again.
+
+**Which files.** A **16-bit, 44.1 kHz** WAV (mono or stereo) streams as it is,
+straight from your file. Any other WAV the Tracker reads (24 / 32-bit, float,
+48 kHz...) is first converted once into a 16-bit 44.1 kHz copy in
+`/Lab/KONSOL/Stream/` (the Sample page shows *Stream: preparing N %*; the
+track keeps its old sample until the copy is ready, one file at a time).
+The copy is reused the next time (its name carries a hash of the path and
+the length). Export 16-bit 44.1 kHz from your DAW to skip the conversion.
+Delete `/Lab/KONSOL/Stream/` any time to free card space: copies are made
+again when needed.
+
+**What streams.** The **SAMPLER** plays a streamed file:
+
+- **One-shot** and **Loop**, with **Warp Off** (speed = pitch), Start / End,
+  Pitch, Fine, envelope, filter, drive, width, gain all work. A loop wraps
+  seamlessly: the reader keeps reading around the loop point.
+- **Slices**: *Equal* slices of Start..End (Transient slicing needs the
+  sample in memory and plays Equal slices here).
+- Pitch up to **+12 semitones** (2x speed; higher notes play at 2x).
+- Up to **8 streamed voices** at once over all tracks (a ninth note takes
+  the oldest one's ring), and up to **16 streamed files** in a project.
+
+**Memory only** (they use the head, the first 0.74 s, of a streamed file, or
+refuse): Warp *Beats* / *Texture* (ignored on a streamed sample), reverse
+notes, GRAIN, KIT pads, **To KIT**, the slice editor, and **time-stretch**
+(F5 says so: stretch is an offline render; use the SAMPLER's Pitch, or
+Stream Off for a file that fits).
+
+**Underruns.** When the card is late, the missing part fades out over 32
+frames and back in when the data arrives, so a slow read never clicks; the
+Sample page counts underruns. A note that starts outside the head (Start
+past the first 0.74 s, or an Equal slice later in the file) starts after
+the first card read (a few ms, faded in); notes from the start of the file
+begin at once.
+
+**Card advice:**
+
+- Use a good card: SDHC/SDXC **Class 10 / U1 or faster** (A1 / A2 help the
+  short reads). 8 stereo voices at normal pitch read about 1.4 MB/s, in
+  64 KB reads; each voice keeps up to 1.5 s read ahead.
+- KONSOL uses OpenTracker's device reader: a streamed file is read as raw
+  sectors through its cluster map, so it must be in at most **32 pieces** on
+  the card (upstream's rule; its advice is to format the card). A file copied to
+  a freshly formatted (FAT32) card is in one piece. *Card too fragmented:
+  copy the file again* means: copy it again (or format the card and copy
+  your files back).
+- Recording (Shift + Rec) writes to the same card: with many streamed
+  voices and stems recording, keep an eye on the underrun count.
+- Pulling the card stops the streams (they fade out); the heads stay.
 
 ## Players and generators
 
@@ -632,6 +710,7 @@ All of them are stored in the project.
 /Lab/KONSOL/Projects/<NAME>.kon   projects
 /Lab/KONSOL/Kits/<NAME>.kit       kits
 /Lab/KONSOL/Samples/              the browser starts here (any folder works)
+/Lab/KONSOL/Stream/*.wav          16-bit 44.1 kHz copies of streamed files (safe to delete)
 /Lab/KONSOL/Rec/REC-nnnn*.wav     recordings and stems
 /Firmware/*.ptf                   firmware images (Config > Firmware)
 ```
@@ -640,7 +719,7 @@ All of them are stored in the project.
 version, then tagged chunks: `HEAD`, `MFX` (send effects incl. types),
 `TRK` (mixer, sample path, MIDI in channel), `ENG` (every parameter of every
 engine of every track), `TSMP` (bars, stretch mode / pitch, stretched or
-not), `KIT` (16 pad records), `CLIP` (player settings, notes with trig
+not, Stream switch), `KIT` (16 pad records), `CLIP` (player settings, notes with trig
 conditions), `XCLP` (a clip's own launch quantise), `SONG`, `MSTR`, `PREF`
 (pad brightness, keyboard layout, hit recording) and `LKIT` (LABKIT macros,
 routes, MIDI learn, values). Unknown chunks are skipped; version-1 projects
@@ -672,7 +751,11 @@ are referenced by path: a missing file falls back to the built-in break.
   the device the budget also follows the measured render load. A PLAITS
   *Modal*, *Harmonic* or *Particle* voice costs half the engine budget or
   more.
-- Samples: one ~10.6 MB pool shared by all tracks and pads, 60 s per file.
+- Samples: one ~10.6 MB pool shared by all tracks and pads, 60 s per file
+  in memory (the stream rings take 2 MB of the SDRAM when a card is in).
+- Streaming: SAMPLER One-shot / Loop / Equal slices with Warp Off, up to
+  +12 semitones, 8 streamed voices, 16 streamed files, files in at most 32
+  pieces on the card; a conversion runs one file at a time.
 - Time-stretch renders one track at a time; SAMPLER Warp is realtime but
   simpler.
 - PLAITS, TB303 and NEURO are mono (one voice per track).
@@ -680,6 +763,28 @@ are referenced by path: a missing file falls back to the built-in break.
 - No perform-scene morphing (SETBOOK) or event recorder (BLACKBOX) yet; no
   follow actions.
 - MIDI out sends notes only. Stems are post-fader without the sends.
+
+## Building
+
+`make` builds `build/PolyendTrackerKONSOL.ptf`; `make lab-gate` checks
+flash, stack, static constructors, the CPU of every bench scenario (one of
+them, *stream8*, plays 8 streamed voices from a synthetic reader) and runs
+the simulator script, which streams a 40 s WAV from its `--sd` folder.
+
+The image must stay under 720,000 B. Two things keep KONSOL there
+(*flash diet*, after upstream 2.2.3 grew the image by 13 KB):
+
+- **No OpenTracker UI font image** (-31 KB): the lab Shell draws only with
+  the FT81x ROM fonts. The Makefile filters out `src/core/ui/fonts/fonts.cpp`
+  for the device image and builds `src/ws/device_fonts.cpp` instead: a
+  12-byte zlib stream the display driver inflates, whose CRC check then
+  fails as designed, so the driver keeps the ROM fonts (the diag log says
+  "MISMATCH (ROM fonts)"). The simulator and host tests keep the real file.
+  No upstream file is edited.
+- **No Plaits LPC word banks** (-11 KB): KONSOL keeps Speech below them
+  anyway (a bank decode is longer than an audio block), so
+  `speech_engine.cpp` passes no banks (`KONSOL_PLAITS_WORDS=1` brings them
+  back).
 
 ## Credits
 

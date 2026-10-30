@@ -178,6 +178,7 @@ expect-overlay none
 tap F5
 wait 2500
 tap Down
+tap Down
 enc 1
 tap F4
 tap F5
@@ -213,6 +214,37 @@ expect-overlay browser
 pad 46 tap
 wait 200
 expect-overlay none
+budget
+# SD streaming: a 40 s stereo WAV (a sustained tone) streams from the card
+# (Stream Auto: 30 s and more); the SAMPLER plays it from 50 %, far past the
+# 0.74 s head that is in memory: the sound comes through the ring
+mkwav Lab/KONSOL/Samples/a_stem.wav 40 220 2 0
+tap Pattern
+tap F1
+pad 1 tap
+tap F1
+wait 2500
+tap S.Load
+tap F3
+wait 300
+expect-overlay browser
+wait 600
+pad 47 tap
+wait 600
+expect-overlay none
+tap F8
+tap Instr
+enc -2
+tap Right
+enc 100
+tap S.Load
+peak-reset
+pad 40 down
+wait 1500
+expect-sound 1000
+wait 3000
+expect-sound 1000
+pad 40 up
 budget
 # LABKIT: PARAM pads on the Sound page, a route LFO1 -> a param, the MAP, HELP
 tap Pattern

@@ -274,7 +274,7 @@ int Konsol::navPages(kit::PageInfo* out, int cap) {
         "Piano roll of the selected clip. Arrows move, Insert adds or removes, F1-F5 pick what the encoder edits.",
         "Players and generators of the selected clip: write a take, or let it vary live while it plays.",
         "The selected track's engine. Up/Down: section, Left/Right: parameter, encoder: value. F3: engine.",
-        "The track's sample: load, tempo, time-stretch to the project (F5); F2: the slice editor.",
+        "The track's sample: load, tempo, Stream (long files play from the card), time-stretch (F5); F2: slices.",
         "16-pad kit: from slices, by class, from a folder of one-shots or pad by pad. Pads 4x4 play / select.",
         "8 channels: level, pan, delay and reverb sends, mute, solo. F2: the send effects and the master bus.",
         "The arrangement: scenes for N bars. Pads 1-4: scenes, 5-12: entries. F8 plays the song.",

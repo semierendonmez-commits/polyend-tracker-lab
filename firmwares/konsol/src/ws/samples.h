@@ -30,11 +30,18 @@ struct SampleSlot {
     uint8_t used = 0;
     uint8_t nOn = 0;                // onsets found
     uint8_t derived = 0;            // made by KONSOL (stretch, kit render): not a file
+    // SD streaming (stream.h): only the head [0, frames) is resident; the
+    // SAMPLER plays the whole file (sframes) from the card through a ring.
+    uint8_t stream = 0;
+    uint8_t sid = 0xFF;             // its binding in the stream reader
+    uint32_t sframes = 0;           // the whole length of a streamed slot
     char path[96] = {};             // card path ("" = built in / derived)
     uint32_t onset[kMaxOnsets] = {};
     uint8_t cls[kMaxOnsets] = {};
     float strength[kMaxOnsets] = {};
 };
+
+class Streams;
 
 class SamplePool {
 public:
@@ -52,6 +59,12 @@ public:
     SampleSlot& slot(int i) { return slot_[i]; }
     const SampleSlot& slot(int i) const { return slot_[i]; }
     bool valid(int i) const { return i >= 0 && i < kSlots && slot_[i].used && slot_[i].frames; }
+    // The playable length: the whole file for a streamed slot, else frames.
+    uint32_t length(int i) const { return slot_[i].stream ? slot_[i].sframes : slot_[i].frames; }
+    bool streamed(int i) const { return valid(i) && slot_[i].stream; }
+    // SD streaming: rings and reader (a released streamed slot unbinds itself).
+    void setStreams(Streams* s) { streams_ = s; }
+    Streams* streams() const { return streams_; }
     const int16_t* left(int i) const { return data_ + slot_[i].off; }
     const int16_t* right(int i) const {
         return data_ + slot_[i].off + (slot_[i].ch == 2 ? slot_[i].cap : 0);
@@ -86,6 +99,7 @@ public:
 private:
     int16_t* data_ = nullptr;
     uint32_t cap_ = 0, top_ = 0;
+    Streams* streams_ = nullptr;
     SampleSlot slot_[kSlots];
 };
 
@@ -98,6 +112,7 @@ struct TrackSample {
     uint8_t mode = 0;               // stretch mode (StretchMode)
     int8_t pitch = 0;               // stretch pitch, semitones
     uint8_t stretched = 0;          // slot is a stretched copy of src
+    uint8_t stream = 0;             // SD streaming switch (StreamMode: Auto, On, Off)
     float srcBpm = 0;               // tempo of the file (from its length and bars)
     float outBpm = 0;               // tempo of `slot`
 };

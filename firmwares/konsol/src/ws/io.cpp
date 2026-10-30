@@ -15,6 +15,7 @@
 //     MSTR  f32 master level
 //     PREF  u8 pad brightness
 //     TSMP  u8 track, bars, stretch mode, i8 pitch, u8 stretched (v2; the stretch re-runs on load)
+//           + u8 stream (SD streaming switch: Auto, On, Off; optional on load)
 //     KIT   u8 track, 16 pad records (sample_mgr.cpp) (v2)
 //     LKIT  the LABKIT chunk: macros, modulation routes, MIDI learn, param values (v2)
 //     XCLP  u8 track, scene, launchQ (v2: the clip's own launch quantise)
@@ -180,12 +181,13 @@ bool Konsol::saveProject(const char* name) {
     // TSMP + KIT
     for (int t = 0; t < kTracks; ++t) {
         const TrackSample& ts = ts_[t];
-        w.chunk("TSMP", 5);
+        w.chunk("TSMP", 6);
         w.u8(uint8_t(t));
         w.u8(ts.bars);
         w.u8(ts.mode);
         w.i8(ts.pitch);
         w.u8(ts.stretched);
+        w.u8(ts.stream);
         w.chunk("KIT ", 1 + kitBytes());
         w.u8(uint8_t(t));
         static uint8_t kb[4096];
@@ -440,6 +442,7 @@ bool Konsol::loadProject(const char* name) {
             tsLoad[t].mode = uint8_t(c.u8() % kStrModes);
             tsLoad[t].pitch = int8_t(dx_clampi(c.i8(), -24, 24));
             tsLoad[t].stretched = c.u8() ? 1 : 0;
+            if (c.p < c.e) tsLoad[t].stream = uint8_t(c.u8() % kStreamModes);   // SD streaming switch
         } else if (!std::memcmp(tag, "KIT ", 4)) {
             const int t = c.u8();
             if (t >= kTracks || uint32_t(c.e - c.p) < kitBytes()) continue;
@@ -459,6 +462,7 @@ bool Konsol::loadProject(const char* name) {
     }
     // samples and kits (the file buffer is still intact: kits read from it)
     for (int t = 0; t < kTracks; ++t) {
+        ts_[t].stream = tsLoad[t].stream;
         if (samplePath[t][0] && !loadSample(t, samplePath[t])) setTrackBreak(t);
         TrackSample& ts = ts_[t];
         ts.mode = tsLoad[t].mode;
@@ -466,7 +470,8 @@ bool Konsol::loadProject(const char* name) {
         if (tsLoad[t].bars) {
             ts.bars = tsLoad[t].bars;
             int bars = ts.bars;
-            if (pool_.valid(ts.src)) ts.srcBpm = ts.outBpm = loopBpm(pool_.slot(ts.src).frames, bars, p.bpm, &pool_.slot(ts.src));
+            if (pool_.valid(ts.src))
+                ts.srcBpm = ts.outBpm = loopBpm(pool_.length(ts.src), bars, p.bpm, pool_.streamed(ts.src) ? nullptr : &pool_.slot(ts.src));
         }
         if (tsLoad[t].stretched) strPend_ = uint8_t(strPend_ | (1u << t));
         if (kitChunk[t]) kitRead(t, kitChunk[t]);
@@ -523,6 +528,7 @@ void Konsol::update(uint32_t ms) {
     applyPick();
     placeSlots();
     stretchService(4096);
+    streamService();
     // live generators: after each loop of a live clip, prepare the next one
     for (int t = 0; t < kTracks; ++t) {
         TrackRt& r = rt_[t];

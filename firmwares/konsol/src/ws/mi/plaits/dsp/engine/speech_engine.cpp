@@ -38,10 +38,17 @@ using namespace stmlib;
 void SpeechEngine::Init(BufferAllocator* allocator) {
   sam_speech_synth_.Init();
   naive_speech_synth_.Init();
+  // KONSOL: no LPC word banks (engines_plaits.cpp keeps Harmonics below
+  // them: decoding a bank takes longer than an audio block). Without the
+  // reference the 11 KB word data is not linked; Load() refuses every bank.
+#if defined(KONSOL_PLAITS_WORDS) && KONSOL_PLAITS_WORDS
   lpc_speech_synth_word_bank_.Init(
       word_banks_,
       LPC_SPEECH_SYNTH_NUM_WORD_BANKS,
       allocator);
+#else
+  lpc_speech_synth_word_bank_.Init(nullptr, 0, allocator);
+#endif
   lpc_speech_synth_controller_.Init(&lpc_speech_synth_word_bank_);
   word_bank_quantizer_.Init(LPC_SPEECH_SYNTH_NUM_WORD_BANKS + 1, 0.1f, false);
   

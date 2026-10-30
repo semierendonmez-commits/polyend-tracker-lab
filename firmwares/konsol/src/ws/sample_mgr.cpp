@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "formats/wav.h"
 #include "ws/kit.h"
 #include "ws/konsol.h"
 #include "ws/stretch.h"
@@ -69,11 +70,11 @@ void Konsol::setTrackBreak(int t) {
     ts.outBpm = ts.srcBpm;
 }
 
-int Konsol::poolFind(const char* path) const {
+int Konsol::poolFind(const char* path, bool streamed) const {
     if (!path || !path[0]) return pool_.valid(breakSlot_) ? breakSlot_ : -1;
     for (int i = 0; i < kSlots; ++i) {
         const SampleSlot& s = pool_.slot(i);
-        if (s.used && s.frames && !s.derived && std::strcmp(s.path, path) == 0) return i;
+        if (s.used && s.frames && !s.derived && (s.stream != 0) == streamed && std::strcmp(s.path, path) == 0) return i;
     }
     return -1;
 }
@@ -126,15 +127,25 @@ void Konsol::compactPool() {
 }
 
 bool Konsol::loadSample(int t, const char* path) {
+    // SD streaming: a long file (or the track's Stream switch) plays from the card
+    bool direct = false;
+    uint32_t full = 0;
+    if (wantStream(t, path, &direct, &full) && streamTrack(t, path, direct, full)) return true;
+    if (str_ && str_->busy() && strTrack_ == t) str_->cancel();
     const int s = poolLoad(path);
     if (s < 0) return false;
+    if (convPend_ & (1u << t)) convPend_ = uint8_t(convPend_ & ~(1u << t));
+    if (convTrack_ == t && conv_) {
+        conv_->cancel();
+        convTrack_ = -1;
+    }
     TrackSample& ts = ts_[t];
     const int oldSlot = ts.slot;
     ts.src = int16_t(s);
     ts.slot = int16_t(s);
     ts.stretched = 0;
     int bars = ts.bars;
-    ts.srcBpm = loopBpm(pool_.slot(s).frames, bars, bpm_, &pool_.slot(s));
+    ts.srcBpm = loopBpm(pool_.length(s), bars, bpm_, &pool_.slot(s));
     ts.bars = uint8_t(bars);
     ts.outBpm = ts.srcBpm;
     (void)oldSlot;
@@ -153,6 +164,10 @@ bool Konsol::stretchTrack(int t) {
     if (!str_) return false;
     TrackSample& ts = ts_[t];
     if (!pool_.valid(ts.src)) return false;
+    if (pool_.streamed(ts.src)) {
+        if (ctx_) ctx_->toast("A streamed sample does not stretch: use the SAMPLER's Pitch");
+        return false;
+    }
     if (str_->busy()) str_->cancel();
     int bars = ts.bars;
     ts.srcBpm = loopBpm(pool_.slot(ts.src).frames, bars, bpm_, &pool_.slot(ts.src));
@@ -237,6 +252,10 @@ int Konsol::kitFromSlices(int t, bool byClass) {
     TrackSample& ts = ts_[t];
     const int s = ts.src;
     if (!pool_.valid(s)) return 0;
+    if (pool_.streamed(s)) {
+        if (ctx_) ctx_->toast("A kit needs the sample in memory (Stream: Off)");
+        return 0;
+    }
     if (pool_.slot(s).nOn <= 1) pool_.detectOnsets(s, 0.5f);
     KitPad* pads = kitPads(eng_[t].e[kEngKit]);
     const SampleSlot& sl = pool_.slot(s);
@@ -462,6 +481,251 @@ bool Konsol::loadKit(int t, const char* path) {
     gcSamples();
     dirty_ = true;
     return true;
+}
+
+// ---- SD streaming (stream.h) ------------------------------------------------------
+
+namespace {
+bool streamable16(const ot::WavInfo& i) {
+    return i.format == ot::wav::kFormatPcm && i.bitsPerSample == 16 && i.sampleRate == 44100 &&
+           (i.channels == 1 || i.channels == 2);
+}
+bool probeWav(IStorage& fs, const char* path, ot::WavInfo& info) {
+    const IStorage::Handle h = fs.open(path, IStorage::kRead);
+    if (h < 0) return false;
+    ot::StorageReader rd(fs, h);
+    const bool ok = ot::wavParseHeader(rd, info) && ot::wavIsSupported(info);
+    fs.close(h);
+    return ok;
+}
+uint32_t ctxMillis(void* c) { return static_cast<Context*>(c)->millis(); }
+}  // namespace
+
+// Should track t stream `path`? (direct: the file streams as it is; frames:
+// its length at 44.1 kHz.)
+int Konsol::wantStream(int t, const char* path, bool* direct, uint32_t* frames) {
+    *direct = false;
+    *frames = 0;
+    const int mode = ts_[t].stream;
+    if (mode == kStreamOff || !ctx_ || !ctx_->fs || !path || !path[0] || !streams_ || !streams_->ready() ||
+        !streams_->reader())
+        return 0;
+    ot::WavInfo info;
+    if (!probeWav(*ctx_->fs, path, info)) return 0;
+    const uint32_t full = ot::wavResampledFrames(ot::wavSourceFrames(info), info.sampleRate);
+    const uint8_t ch = info.channels >= 2 ? 2 : 1;
+    *direct = streamable16(info);
+    *frames = full;
+    if (full < kStreamMinFrames) return 0;
+    if (mode == kStreamOn) return 1;
+    // Auto: long files, files over the in-memory limit and files that do not fit
+    return full >= kStreamAutoFrames || full > 44100u * 60u || full + 64u > pool_.freeFrames(ch) ? 1 : 0;
+}
+
+void Konsol::convPath(const char* src, uint32_t frames, char* out, int cap) const {
+    // <home>/Stream/<file stem>_<FNV-1a of the path and the length>.wav
+    uint32_t h = 2166136261u ^ frames;
+    for (const char* p = src; *p; ++p) h = (h ^ uint8_t(*p)) * 16777619u;
+    const char* b = src;
+    for (const char* p = src; *p; ++p)
+        if (*p == '/') b = p + 1;
+    char stem[25];
+    int n = 0;
+    for (const char* p = b; *p && *p != '.' && n < 24; ++p) {
+        const char c = *p;
+        const bool okc = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+        stem[n++] = okc ? c : '_';
+    }
+    stem[n] = 0;
+    std::snprintf(out, size_t(cap), "%s/Stream/%s_%08lX.wav", ctx_ ? ctx_->home : "", stem, static_cast<unsigned long>(h));
+}
+
+int Konsol::streamOpen(const char* orig, const char* file, bool quiet) {
+    if (!ctx_ || !ctx_->fs || !streams_ || !streams_->reader()) return -1;
+    const int have = poolFind(orig, true);
+    if (have >= 0) return have;
+    IStorage& fs = *ctx_->fs;
+    ot::WavInfo info;
+    if (!probeWav(fs, file, info) || !streamable16(info)) return -1;
+    const uint8_t ch = uint8_t(info.channels);
+    const uint32_t frames = ot::wavSourceFrames(info);
+    // a free binding (16 files at once)
+    uint32_t usedSid = 0;
+    for (int i = 0; i < kSlots; ++i)
+        if (pool_.slot(i).used && pool_.slot(i).stream) usedSid |= 1u << (pool_.slot(i).sid & 31);
+    int sid = 0;
+    while (sid < kStreamFiles && (usedSid >> sid) & 1u) ++sid;
+    if (sid >= kStreamFiles) {
+        if (!quiet) ctx_->toast("16 files already stream from the card");
+        return -1;
+    }
+    const uint32_t head = frames < kHeadFrames ? frames : kHeadFrames;
+    int s = pool_.alloc(head, ch);
+    if (s < 0) {
+        gcSamples();
+        compactPool();
+        s = pool_.alloc(head, ch);
+    }
+    if (s < 0) {
+        if (!quiet) ctx_->toast("Sample memory is full (the stream head)");
+        return -1;
+    }
+    // the head: interleaved in, planar into the slot
+    bool ok = false;
+    const IStorage::Handle h = fs.open(file, IStorage::kRead);
+    if (h >= 0 && fs.seek(h, info.dataOffset)) {
+        int16_t* L = pool_.leftW(s);
+        int16_t* R = pool_.rightW(s);
+        int16_t buf[1024];
+        uint32_t f = 0;
+        ok = true;
+        while (f < head && ok) {
+            uint32_t n = uint32_t(sizeof buf / 2) / ch;
+            if (n > head - f) n = head - f;
+            uint32_t want = n * ch * 2u, got = 0;
+            while (got < want) {   // cards (and the host fake) may read short
+                const int32_t k = fs.read(h, reinterpret_cast<uint8_t*>(buf) + got, want - got);
+                if (k <= 0) break;
+                got += uint32_t(k);
+            }
+            if (got != want) ok = false;
+            for (uint32_t i = 0; i < n && ok; ++i) {
+                L[f + i] = buf[i * ch];
+                if (ch == 2) R[f + i] = buf[i * 2 + 1];
+            }
+            f += n;
+        }
+    }
+    if (h >= 0) fs.close(h);
+    ot::audio::StreamSource src;
+    src.instrument = uint8_t(sid);
+    src.frames = frames * ch;
+    ot::audio::StreamBindInfo bi;
+    if (ok) ok = streams_->reader()->bind(src, file, info.dataOffset, false, &bi);
+    if (!ok) {
+        pool_.release(s);
+        if (!quiet) {
+            char m[48];
+            std::snprintf(m, sizeof m, "Cannot stream the file (%s)", bi.reason[0] ? bi.reason : "read");
+            if (!std::strcmp(bi.reason, "fragmented")) std::snprintf(m, sizeof m, "Card too fragmented: copy the file again");
+            ctx_->toast(m);
+        }
+        return -1;
+    }
+    SampleSlot& sl = pool_.slot(s);
+    copyStr(sl.path, sizeof sl.path, orig);
+    sl.sid = uint8_t(sid);
+    sl.sframes = frames;
+    sl.stream = 1;
+    sl.frames = head;   // last: the slot becomes valid
+    pool_.detectOnsets(s, 0.5f);
+    return s;
+}
+
+// Track t streams `path`: at once when the file is a 16-bit 44.1 kHz WAV (or
+// its converted copy exists), else after the conversion job. False: it
+// cannot stream (the caller loads it into memory).
+bool Konsol::streamTrack(int t, const char* path, bool direct, uint32_t frames) {
+    char file[128];
+    if (direct) std::snprintf(file, sizeof file, "%s", path);
+    else convPath(path, frames, file, sizeof file);
+    int s = -1;
+    if (direct || ctx_->fs->exists(file)) s = streamOpen(path, file, !direct);
+    if (s < 0 && !direct) {   // convert first (one job at a time; the track keeps its sample meanwhile)
+        if (!conv_) return false;
+        std::snprintf(convSrc_[t], sizeof convSrc_[t], "%s", path);
+        convFrames_[t] = frames;
+        if (convTrack_ == t) {
+            conv_->cancel();
+            convTrack_ = -1;
+        }
+        convPend_ = uint8_t(convPend_ | (1u << t));
+        startConv();
+        if (ctx_) ctx_->toast("Preparing the file for streaming (16-bit copy)...");
+        return true;
+    }
+    if (s < 0) return false;
+    if (convPend_ & (1u << t)) convPend_ = uint8_t(convPend_ & ~(1u << t));
+    assignStream(t, s);
+    return true;
+}
+
+void Konsol::assignStream(int t, int s) {
+    TrackSample& ts = ts_[t];
+    if (ts.stretched && ts.slot != ts.src) {
+        const int old = ts.slot;
+        ts.slot = ts.src;
+        pool_.release(old);
+    }
+    ts.src = int16_t(s);
+    ts.slot = int16_t(s);
+    ts.stretched = 0;
+    int bars = ts.bars;
+    ts.srcBpm = loopBpm(pool_.length(s), bars, bpm_, nullptr);
+    ts.bars = uint8_t(bars);
+    ts.outBpm = ts.srcBpm;
+    gcSamples();
+    dirty_ = true;
+}
+
+void Konsol::startConv() {
+    if (!conv_ || conv_->busy() || !ctx_ || !ctx_->fs) return;
+    for (int t = 0; t < kTracks; ++t) {
+        if (!(convPend_ & (1u << t))) continue;
+        char dst[128];
+        convPath(convSrc_[t], convFrames_[t], dst, sizeof dst);
+        char dir[96];
+        std::snprintf(dir, sizeof dir, "%s/Stream", ctx_->home);
+        ctx_->fs->mkdir(dir);
+        if (conv_->start(*ctx_->fs, convSrc_[t], dst)) {
+            convTrack_ = t;
+            return;
+        }
+        convPend_ = uint8_t(convPend_ & ~(1u << t));
+        ctx_->toast("Cannot convert the file for streaming");
+    }
+}
+
+float Konsol::convProgress(int t) const {
+    if (convTrack_ == t && conv_ && conv_->busy()) return conv_->progress();
+    return (convPend_ >> t) & 1u ? 0.0f : -1.0f;
+}
+
+void Konsol::streamService() {
+    if (!streams_) return;
+    // read-ahead first: up to 12 ms of card reads a pass (a chunk is ~2-6 ms)
+    streams_->service(pool_, ctxMillis, ctx_, 12, 24);
+    if (!conv_ || !ctx_) return;
+    if (conv_->busy()) {
+        const uint32_t t0 = ctx_->millis();
+        bool more = true;
+        for (int i = 0; i < 64 && more; ++i) {   // 64 x 4 KB, or ~10 ms
+            more = conv_->step(4096);
+            if (ctx_->millis() - t0 >= 10) break;
+        }
+        if (more) return;
+        const int t = convTrack_;
+        convTrack_ = -1;
+        if (t >= 0 && (convPend_ & (1u << t))) {
+            convPend_ = uint8_t(convPend_ & ~(1u << t));
+            const int s = conv_->ok() ? streamOpen(convSrc_[t], conv_->dst()) : -1;
+            if (s >= 0) assignStream(t, s);
+            if (s < 0) {   // fall back: as much as fits in memory
+                ctx_->toast("Cannot stream the file: loaded into memory");
+                const int s = poolLoad(convSrc_[t]);
+                if (s >= 0) {
+                    ts_[t].src = ts_[t].slot = int16_t(s);
+                    ts_[t].stretched = 0;
+                    int bars = ts_[t].bars;
+                    ts_[t].srcBpm = ts_[t].outBpm = loopBpm(pool_.slot(s).frames, bars, bpm_, &pool_.slot(s));
+                    ts_[t].bars = uint8_t(bars);
+                }
+            } else {
+                std::snprintf(msg_, sizeof msg_, "T%d streams from the card", t + 1);
+            }
+        }
+    }
+    if (convPend_ && !conv_->busy()) startConv();
 }
 
 }  // namespace konsol

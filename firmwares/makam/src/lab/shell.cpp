@@ -137,6 +137,7 @@ bool Shell::init(const Hal& hal, uint8_t* mem, uint32_t memBytes, const char* fw
     ctx_.fs = hal_.fs;
     ctx_.radio = hal_.radio;
     ctx_.home = home_;
+    ctx_.streamReader = hal_.streamReader;
     // LABKIT v2: the registry, mod engine, nav, browser and keyboard exist
     // before the workstation, so init() can register into them.
     kit_ = arena_.make<kit::Kit>();

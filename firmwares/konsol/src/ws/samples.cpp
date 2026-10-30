@@ -10,6 +10,7 @@
 #include "formats/wav.h"
 #include "sdram_bss.h"
 #include "ws/dspx.h"
+#include "ws/stream.h"
 
 namespace lab {
 namespace konsol {
@@ -50,6 +51,11 @@ int SamplePool::alloc(uint32_t frames, uint8_t ch) {
 
 void SamplePool::release(int i) {
     if (i < 0 || i >= kSlots || !slot_[i].used) return;
+    if (slot_[i].stream && streams_) {   // SD streaming: forget the file
+        streams_->dropSlot(i);
+        if (streams_->reader()) streams_->reader()->unbind(slot_[i].sid);
+    }
+    slot_[i].stream = 0;
     slot_[i].frames = 0;
     slot_[i].used = 0;
     // the space at the very top comes back at once; the rest on compact()
