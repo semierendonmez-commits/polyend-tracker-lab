@@ -20,7 +20,8 @@
 //   expect-routes N                      mod routes in use
 //   expect-learn N                       MIDI learn entries
 //   cc CH CC VALUE                       a MIDI CC on the DIN input (CH 1..16)
-//   mkdir PATH | mkwav PATH SECONDS [HZ] [CHANNELS]   make test files on the card
+//   mkdir PATH | mkwav PATH SECONDS [HZ] [CHANNELS] [DECAY]   make test files on the card
+//                                        (DECAY per second, default 3; 0 = a sustained tone)
 #include <SDL.h>
 
 #include <cmath>
@@ -38,6 +39,7 @@
 #include "host_hal.h"
 #include "host_midi.h"
 #include "host_storage.h"
+#include "app/storage_stream_reader.h"
 #include "lab/lab.h"
 #include "panel.h"
 #include "png.h"
@@ -153,6 +155,7 @@ struct Machine {
     SimInput input{clock};
     SimLeds leds;
     HostStorage storage;
+    ot::StorageStreamReader streamReader{storage};   // SD streaming from the --sd folder
     LabMidi midi;
     SdlAudio sdlAudio;
     ManualAudio manualAudio;
@@ -218,6 +221,7 @@ struct Machine {
         h.display = &display;
         h.audio = audio;
         h.fs = &storage;
+        h.streamReader = &streamReader;
         h.midi = &midi;
         h.input = &input;
         h.leds = &leds;
@@ -269,13 +273,14 @@ void saveShot(Machine& m, const std::string& path, bool panel) {
 // A test WAV on the card: a decaying saw + sine (16-bit, 44.1 kHz).
 bool makeWav(Machine& m, const std::string& path, double seconds, double hz, std::istringstream& rest) {
     int ch = 1;
-    rest >> ch;
+    double decay = 3.0;
+    rest >> ch >> decay;
     ch = ch == 2 ? 2 : 1;
     const uint32_t frames = uint32_t(seconds * 44100.0);
     std::vector<int16_t> pcm(size_t(frames) * size_t(ch));
     for (uint32_t i = 0; i < frames; ++i) {
         const double t = double(i) / 44100.0;
-        const double env = std::exp(-t * 3.0);
+        const double env = std::exp(-t * decay);
         const double saw = 2.0 * std::fmod(t * hz, 1.0) - 1.0;
         const double v = env * (0.5 * saw + 0.4 * std::sin(2.0 * M_PI * hz * 0.5 * t));
         for (int c = 0; c < ch; ++c) pcm[size_t(i) * size_t(ch) + size_t(c)] = int16_t(v * (c ? 20000.0 : 26000.0));

@@ -18,8 +18,10 @@ renamed `.cpp`, includes prefixed `ws/mi/`, `stmlib/fft` removed,
 64 (two renders per 128-frame block), `kTriggerDelay` 1 (no trigger delay),
 no note smoothing on the first block of a pitch, `IN_RAM` empty, the
 `stmlib/dsp/dsp.h` ARM path only on ARM, `user_data.h` a stub (no user
-wavetables), and `dx_units.h` `Pow2Fast` shifts an unsigned value (UBSan:
-left shift of a negative value).
+wavetables), `dx_units.h` `Pow2Fast` shifts an unsigned value (UBSan:
+left shift of a negative value), and `speech_engine.cpp` hands the LPC word
+bank no banks unless `KONSOL_PLAITS_WORDS=1` (KONSOL never selects them; the
+11 KB word data is then not linked).
 
 ## Ported (rewritten in KONSOL's own code)
 
@@ -54,6 +56,18 @@ left shift of a negative value).
 | `src/ws/gen_glue.cpp` Usul | Turkish usul rhythm cycles (Aksak, Curcuna, Devr-i Hindi, Turk Aksagi, Aksak Semai, Duyek, Sofyan) as dum / tek strokes | Traditional rhythmic cycles | Public domain music theory |
 | `src/ws/gen_glue.cpp` Pinball | A ball bouncing over a scale grid, bumpers kick it | Concept of the user's Pinball 2 / TILT Max for Live device | Idea only |
 | `src/ws/ui_draw.cpp` | Session-view (clip grid + scene launch) workflow | Common clip-launcher convention (Ableton Live session view, Push / Launchpad style) | Concept only, own layout |
+
+SD streaming (`src/ws/stream.*`) is KONSOL's own ring / loop / fade code
+after upstream OpenTracker's `audio/stream_source.*` design (head resident,
+per-voice rings filled by the main loop, underruns fade); it reads through
+upstream's `ot::audio::IStreamReader` (`hal/sd_stream_reader.*` on the
+device, `app/storage_stream_reader.*` in the simulator, both unchanged) and
+converts files with upstream's `WavChunkConverter` (`formats/wav.*`).
+
+Device image only: `src/core/ui/fonts/fonts.cpp` (OpenTracker's packed UI
+font image) is filtered out by the Makefile and replaced by
+`src/ws/device_fonts.cpp`, a 12-byte stand-in that makes the display driver
+keep the FT81x ROM fonts (MANUAL.md "Building"). No upstream file is edited.
 
 Also used from this tree: `src/core/formats/wav.*` (WAV import with resampling),
 `src/core/formats/patch_pb.*` (synth parameter tables and init patches),

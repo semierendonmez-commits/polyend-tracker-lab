@@ -3,17 +3,9 @@
 #pragma GCC optimize("Os")
 #include <cstdio>
 #include <cstring>
-#include <new>
 
 #include "ws/stream.h"
 
-#if defined(OT_TARGET_DEVICE) && OT_TARGET_DEVICE
-#include "hal/hal.h"
-#include "hal/sd_storage.h"
-#include "hal/sd_stream_reader.h"
-#elif !defined(OT_BENCH_M4)
-#include "app/storage_stream_reader.h"
-#endif
 
 namespace lab {
 namespace konsol {
@@ -22,22 +14,6 @@ namespace {
 constexpr uint32_t kWin = 4096;        // converter window, frames per channel
 constexpr uint32_t kFeedFrames = 512;  // source frames per feed (outputs stay under one window)
 }  // namespace
-
-ot::audio::IStreamReader* makeStreamReader(Context& c) {
-    if (!c.fs || !c.arena) return nullptr;
-#if defined(OT_TARGET_DEVICE) && OT_TARGET_DEVICE
-    // Upstream's device reader: raw sectors through the file's cluster map.
-    // Its bindings live in .sdram_bss and are cleared by this constructor
-    // (run here, long after boardInit() started the SDRAM: tools/check_ctors.py).
-    void* m = c.arena->alloc(sizeof(ot::hal::SdStreamReader), 8);
-    return m ? new (m) ot::hal::SdStreamReader(ot::hal::storage()) : nullptr;
-#elif defined(OT_BENCH_M4)
-    return nullptr;   // the bench installs a FakeStreamReader
-#else
-    void* m = c.arena->alloc(sizeof(ot::StorageStreamReader), 8);
-    return m ? new (m) ot::StorageStreamReader(*c.fs) : nullptr;
-#endif
-}
 
 // ---- conversion ------------------------------------------------------------------
 

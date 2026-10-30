@@ -264,6 +264,14 @@ struct NavKeys;
 using ParamId = int16_t;
 }  // namespace kit
 
+}  // namespace lab
+namespace ot {
+namespace audio {
+class IStreamReader;   // audio/stream_source.h (SD streaming)
+}
+}  // namespace ot
+namespace lab {
+
 // Context handed to the workstation: everything it may use.
 struct Context {
     Shell* shell = nullptr;
@@ -293,7 +301,12 @@ struct Context {
     kit::Mod& mod();             // LFOs, random, macros, routes, exported sources
     kit::Browser& browser();     // sample / file browser modal
     kit::Keyboard& keyboard();   // text entry modal
+    // SD streaming (upstream audio/stream_source.h): raw reads of long files
+    // on the card, main loop only. Null when the build has none (no card, a
+    // PLATFORM station): the workstation keeps every sample in memory.
+    ot::audio::IStreamReader* streamReader = nullptr;
 };
+#define LAB_HAS_STREAM_READER 1
 
 // ---------------------------------------------------------------------------
 // A workstation: one firmware's instrument.
@@ -371,6 +384,8 @@ struct Hal {
     void (*setBacklight)(uint8_t duty) = nullptr;
     // Audio render load of the last second, permille of the block budget (device: DWT).
     uint32_t (*cpuPermille)() = nullptr;
+    // SD streaming reader handed to the workstation (Context::streamReader); may be null.
+    ot::audio::IStreamReader* streamReader = nullptr;
 };
 
 // ---------------------------------------------------------------------------

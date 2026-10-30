@@ -89,10 +89,11 @@ public:
     void onTransport(bool playing) override;
     int settings(SettingRow* rows, int cap) override;
     void save() override;
-    int benchScenarios() const override { return 27; }
+    int benchScenarios() const override { return 28; }
     const char* benchName(int i) const override;
     void benchSetup(int i) override;
     void benchSetupNew(int i);
+    void benchStream8();
 
     // ---- used by the tests ---------------------------------------------------
     Project& project() { return *P_; }

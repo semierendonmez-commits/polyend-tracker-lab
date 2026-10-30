@@ -97,12 +97,22 @@ bool streamFetch(StreamRing* ring, uint32_t gen, const StreamGeom& g, uint8_t ch
             inter = ch == 2;
         }
         if (!src) {   // missing: a linear decay from the last frame read, then silence
+            // the whole missing run at once (f stays past the head until the
+            // loop point; the ring window starts at rb or has ended)
+            if (ra && v < rb) k = minu(k, rb - v);
             ok = false;
             fin = 0;
-            if (fout) --fout;
-            l[i] = int16_t(lastL * int32_t(fout) / int32_t(kStreamFade));
-            r[i] = int16_t(lastR * int32_t(fout) / int32_t(kStreamFade));
-            ++i;
+            uint32_t j = 0;
+            for (; j < k && fout; ++j) {
+                --fout;
+                l[i + j] = int16_t(lastL * int32_t(fout) / int32_t(kStreamFade));
+                r[i + j] = int16_t(lastR * int32_t(fout) / int32_t(kStreamFade));
+            }
+            if (j < k) {
+                std::memset(l + i + j, 0, (k - j) * 2);
+                std::memset(r + i + j, 0, (k - j) * 2);
+            }
+            i += k;
             continue;
         }
         const int16_t* srcR = inter ? src + 1 : (f < head ? hr + f : src);

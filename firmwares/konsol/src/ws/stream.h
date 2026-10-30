@@ -27,10 +27,11 @@
 // the voice's gen counts as empty. A fill that a new note overtook (gen
 // changed while reading) is dropped.
 //
-// Card access goes through ot::audio::IStreamReader: upstream's
-// hal::SdStreamReader on the device (raw sectors through the file's cluster
-// map, no FatFs on the stream path), StorageStreamReader in the simulator
-// and the host tests, a synthetic reader in the CPU bench.
+// Card access goes through ot::audio::IStreamReader, handed over by the
+// Shell (lab::Context::streamReader): upstream's hal::SdStreamReader in the
+// device image (raw sectors through the file's cluster map, no FatFs on the
+// stream path), StorageStreamReader in the simulator, a synthetic reader in
+// the CPU bench. Null (a PLATFORM station, no card): nothing streams.
 #pragma once
 
 #include <cstdint>
@@ -172,11 +173,6 @@ private:
     uint32_t done_ = 0, total_ = 0, bpf_ = 0;
     char dst_[128] = {};
 };
-
-// The reader of this build: hal::SdStreamReader on the device (the card is
-// mounted), a StorageStreamReader over ctx.fs elsewhere; nullptr without a
-// card. Built once from the arena (konsol.cpp, init()).
-ot::audio::IStreamReader* makeStreamReader(Context& c);
 
 #if defined(OT_BENCH_M4) || !defined(__arm__)
 // Bench / tests: a reader that synthesises any frame of any bound file (a

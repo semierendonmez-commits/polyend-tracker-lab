@@ -12,6 +12,7 @@
 #include "hal/hal.h"
 #include "hal/radio_si4703.h"
 #include "hal/sd_storage.h"
+#include "hal/sd_stream_reader.h"
 #include "hal/stack_guard.h"
 #include "hal/telemetry.h"
 #include "lab/lab.h"
@@ -80,6 +81,13 @@ void otAppMain(ot::hal::HalSet& hal) {
     h.selectInput = &selectInputThunk;
     h.setBacklight = &setBacklight;
     h.cpuPermille = &cpuPermille;
+    // SD streaming: upstream's device reader (raw sectors through the file's
+    // cluster map). A function-local static: its constructor clears the
+    // bindings in .sdram_bss here, after the SDRAM is up (tools/check_ctors.py).
+    if (h.fs) {
+        static hal::SdStreamReader streamReader(hal::storage());
+        h.streamReader = &streamReader;
+    }
     if (!gShell.init(h, sdram, arenaBytes, LAB_FW_NAME)) {
         hal::diagLog("lab: shell init failed");
         return;   // falls back to the selftest

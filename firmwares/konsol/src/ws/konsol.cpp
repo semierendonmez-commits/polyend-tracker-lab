@@ -74,13 +74,25 @@ bool Konsol::init(Context& c) {
     reverb_->init(rmem);
     str_ = a.make<Stretcher>();
     if (!str_ || !str_->init(a)) return false;
-    // SD streaming: 8 rings (2 MB) and the conversion job before the pool
-    // takes the rest; without them (or without a card) nothing streams.
-    streams_ = a.make<Streams>();
-    if (streams_ && !streams_->init(a)) streams_ = nullptr;
-    conv_ = a.make<StreamConv>();
-    if (conv_ && !conv_->init(a)) conv_ = nullptr;
-    if (streams_) streams_->setReader(makeStreamReader(c));
+    // SD streaming: 8 rings (2 MB) and the conversion job, before the pool
+    // takes the rest -- only when the Shell hands over a stream reader (a
+    // firmware image with a card, the simulator); a PLATFORM station (no
+    // reader, or an older lab.h) keeps every sample in memory and the 2 MB.
+    ot::audio::IStreamReader* reader = nullptr;
+#if defined(LAB_HAS_STREAM_READER)
+    if (c.fs) reader = c.streamReader;
+#endif
+    bool wantStreams = reader != nullptr;
+#if defined(OT_BENCH_M4) || !defined(__arm__)
+    wantStreams = wantStreams || !c.fs;   // the CPU bench (no card): stream8 brings a synthetic reader
+#endif
+    if (wantStreams) {
+        streams_ = a.make<Streams>();
+        if (streams_ && !streams_->init(a)) streams_ = nullptr;
+        conv_ = a.make<StreamConv>();
+        if (conv_ && !conv_->init(a)) conv_ = nullptr;
+        if (streams_) streams_->setReader(reader);
+    }
     pool_.setStreams(streams_);
     for (int t = 0; t < kTracks; ++t)
         if (!eng_[t].init(a, &pool_, &ts_[t], t)) return false;
@@ -1055,7 +1067,9 @@ const char* Konsol::benchName(int i) const {
                                      "plaits8",  "semi8",       "kit_warp", "fx_shimmer_tape", "mod_slots8",
                                      // solo engines (calibration of the governor's cost estimates)
                                      "s_sampler", "s_grain", "s_drums", "s_ikeda", "s_makam", "s_acd", "s_vap", "s_fat",
-                                     "s_wtfm", "s_perc", "s_plaits", "s_floater", "s_tb303", "s_neuro", "s_quanta", "s_kit"};
+                                     "s_wtfm", "s_perc", "s_plaits", "s_floater", "s_tb303", "s_neuro", "s_quanta", "s_kit",
+                                     // SD streaming: 8 SAMPLER voices from the card (a synthetic reader)
+                                     "stream8"};
     const int n = int(sizeof kN / sizeof kN[0]);
     return kN[i < 0 ? 0 : (i >= n ? n - 1 : i)];
 }
@@ -1150,7 +1164,11 @@ void Konsol::benchSetup(int i) {
 
 void Konsol::benchSetupNew(int i) {
     // i = 6 plaits8, 7 semi8, 8 kit_warp, 9 fx_shimmer_tape, 10 mod_slots8,
-    // 11.. one engine alone on track 1 (all voices busy)
+    // 11.. one engine alone on track 1 (all voices busy), 27 stream8
+    if (i == 27) {
+        benchStream8();
+        return;
+    }
     if (i == 9 || i == 10) {   // the busy synth scenario + the costliest send FX / 8 LFO routes on engine slots
         benchSetup(2);
         if (i == 9) {
@@ -1244,10 +1262,74 @@ void Konsol::benchSetupNew(int i) {
     fxDirty_ = true;
 }
 
+// stream8: every track a SAMPLER looping a 10-minute stereo file from the
+// card (FakeStreamReader: no card in the bench), at +0..+12 semitones (the
+// streamed limit, 2x speed), from 8 different start points: 8 rings busy,
+// the main loop (update(), every 8 blocks in the bench) reading ahead.
+void Konsol::benchStream8() {
+    static FakeStreamReader fake;
+    if (!streams_) return;
+    streams_->setReader(&fake);
+    int s = -1;
+    for (int k = 0; k < kSlots; ++k)
+        if (pool_.streamed(k)) s = k;
+    if (s < 0) {
+        gcSamples();
+        s = pool_.alloc(kHeadFrames, 2);
+        if (s < 0) return;
+        for (uint32_t f = 0; f < kHeadFrames; ++f) {
+            pool_.leftW(s)[f] = FakeStreamReader::sample(0, 2 * f);
+            pool_.rightW(s)[f] = FakeStreamReader::sample(0, 2 * f + 1);
+        }
+        SampleSlot& sl = pool_.slot(s);
+        copyStr(sl.path, sizeof sl.path, "bench/stream.wav");
+        sl.sid = 0;
+        sl.sframes = 44100u * 600u;
+        sl.stream = 1;
+        sl.frames = kHeadFrames;
+    }
+    for (int t = 0; t < kTracks; ++t) {
+        ts_[t].src = ts_[t].slot = int16_t(s);
+        ts_[t].stretched = 0;
+        setEngine(t, kEngSampler);
+        Engine* e = engine(t);
+        e->preset(0);
+        e->set(0, 1.0f);                         // loop
+        e->set(1, 0.05f + 0.1f * float(t));      // start: past the head, a different place per track
+        e->set(6, float(t * 12 / 7));            // pitch 0 .. +12
+        e->set(10, 1.0f);                        // one voice: 8 streamed voices in all
+        e->set(11, 6000.0f);                     // the filter on (the costlier path)
+        Clip& c = P_->clip[t][0];
+        c.lenSteps = 16;
+        c.cur = 0;
+        c.pending = 0;
+        c.gen = kGenNotes;
+        c.live = 0;
+        NoteBuf& b = c.buf[0];
+        b.clear();
+        Note n;
+        n.start = 0;
+        n.len = uint16_t(kTps * 16);
+        n.pitch = 60;
+        n.vel = 110;
+        b.add(n);
+        Mix& m = P_->track[t].mix;
+        m.sendA = 0.3f;
+        m.sendB = 0.3f;
+        m.mute = m.solo = 0;
+        rt_[t].queued = 0;
+    }
+    P_->fx.compRatio = 0.6f;
+    P_->metronome = 0;
+    hpHeld_ = dlyThrow_ = revThrow_ = false;
+    fxDirty_ = true;
+}
+
 #else
 const char* Konsol::benchName(int) const { return "idle"; }
 void Konsol::benchSetup(int) {}
 void Konsol::benchSetupNew(int) {}
+void Konsol::benchStream8() {}
 #endif
 
 }  // namespace konsol
