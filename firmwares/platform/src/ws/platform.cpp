@@ -70,13 +70,32 @@ end
 
 }  // namespace
 
+// The LABKIT objects as they were outside any session (after the Shell's init:
+// its MACRO / MOD params, no routes): sessions register on top, and closing
+// one puts this back (MANUAL.md "LABKIT").
+static_assert(Platform::kKitParams == LuaSession::kRegCap, "one registry size");
+
+struct Platform::KitSnap {
+    alignas(8) unsigned char reg[sizeof(lab::kit::Registry)];
+    alignas(8) unsigned char mod[sizeof(lab::kit::Mod)];
+    alignas(8) unsigned char nav[sizeof(lab::kit::Nav)];
+    float base[lab::kit::kMaxParams];
+    float eff[lab::kit::kMaxParams];
+    uint32_t wsParams = 0;
+    int count = 0;
+    bool active = false;
+    bool taken = false;
+};
+
 bool Platform::init(lab::Context& c) {
     ctx_ = &c;
     theme_ = makeTheme();
     engine_ = c.arena->make<Engine>();
     lua_ = c.arena->make<LuaSession>();
     native_ = c.arena->make<NativeSession>();
-    if (!engine_ || !lua_ || !native_ || !engine_->init(*c.arena)) return false;
+    snap_ = c.arena->make<KitSnap>();
+    if (!engine_ || !lua_ || !native_ || !snap_ || !engine_->init(*c.arena)) return false;
+    if (c.shell) c.params().reserve(kKitParams);   // sessions register into it (stations up to ~700 params)
     // The session pool takes the rest of the SDRAM arena (scripts, samples, native apps).
     uint32_t poolBytes = c.arena->free() > kArenaReserve + kMinPool ? c.arena->free() - kArenaReserve : 0;
     poolMem_ = static_cast<uint8_t*>(c.arena->alloc(poolBytes, 64));
@@ -269,6 +288,7 @@ void Platform::scanApps() {
 
 void Platform::rescan() {
     nEntries_ = 0;
+    previewFor_ = -1;
     scanApps();
     scanScripts();
     // sort: stations, apps, scripts; then by name
@@ -352,17 +372,109 @@ void Platform::setGuard(const char* file, bool on) {
     writeState();
 }
 
-// ---- sessions --------------------------------------------------------------------------
 bool Platform::audioRunning() const {
     // The Shell's audio callback sets the transport rate on its first block;
     // without audio (host tests, the CPU bench) nothing waits for it.
     return ctx_->shell && ctx_->shell->transport().beatsPerSample > 0.0;
 }
 
+// ---- LABKIT state ---------------------------------------------------------------------
+void Platform::waitBlock() {
+    // One audio block: a kit block that was running when the flag changed has
+    // ended (device: the main loop never sees half an interrupt; simulator:
+    // the audio thread). Bounded -- without audio nothing waits.
+    if (!audioRunning()) return;
+    // Bounded twice: by time, and by spins -- the scripted simulator's clock
+    // and audio only advance between main-loop passes.
+    const uint32_t b0 = blocks_, t0 = ctx_->millis();
+    for (uint32_t spins = 0; blocks_ == b0 && ctx_->millis() - t0 < 20u && spins < 400000u; ++spins) {
+    }
+}
+
+void Platform::ensureSnapshot() {
+    if (!snap_ || snap_->taken || !ctx_->shell) return;
+    lab::kit::Kit& k = ctx_->shell->labkit();
+    std::memcpy(static_cast<void*>(snap_->reg), static_cast<const void*>(&k.reg), sizeof snap_->reg);
+    std::memcpy(static_cast<void*>(snap_->mod), static_cast<const void*>(&k.mod), sizeof snap_->mod);
+    std::memcpy(static_cast<void*>(snap_->nav), static_cast<const void*>(&k.nav), sizeof snap_->nav);
+    snap_->count = k.reg.count() < lab::kit::kMaxParams ? k.reg.count() : lab::kit::kMaxParams;   // the Shell's ~34
+    if (k.reg.baseArray() && snap_->count > 0) {
+        std::memcpy(snap_->base, k.reg.baseArray(), sizeof(float) * uint32_t(snap_->count));
+        std::memcpy(snap_->eff, k.reg.effArray(), sizeof(float) * uint32_t(snap_->count));
+    }
+    snap_->wsParams = k.wsParams;
+    snap_->active = k.active;
+    snap_->taken = true;
+}
+
+void Platform::kitOff() {
+    if (!ctx_->shell) return;
+    ctx_->shell->labkit().active = false;
+    waitBlock();
+}
+
+void Platform::kitOn() {
+    if (!ctx_->shell || !snap_ || !snap_->taken) return;
+    lab::kit::Kit& k = ctx_->shell->labkit();
+    k.active = snap_->active;
+    if (k.active) k.nav.refreshPages();
+}
+
+void Platform::restoreKit() {
+    if (!ctx_->shell || !snap_ || !snap_->taken) return;
+    lab::kit::Kit& k = ctx_->shell->labkit();
+    lab::kit::Registry& R = k.reg;
+    // The session's params: a dirty bit left for one of them is dropped by the
+    // next applyBlock (mods != 0: "the mod plan writes it") instead of writing
+    // through a binding into freed session memory.
+    for (int i = snap_->count; i < R.count(); ++i) R.meta(lab::kit::ParamId(i)).mods = 1;
+    std::memcpy(static_cast<void*>(&k.reg), static_cast<const void*>(snap_->reg), sizeof snap_->reg);
+    std::memcpy(static_cast<void*>(&k.mod), static_cast<const void*>(snap_->mod), sizeof snap_->mod);
+    std::memcpy(static_cast<void*>(&k.nav), static_cast<const void*>(snap_->nav), sizeof snap_->nav);
+    if (R.baseArray() && snap_->count > 0) {
+        std::memcpy(R.baseArray(), snap_->base, sizeof(float) * uint32_t(snap_->count));
+        std::memcpy(R.effArray(), snap_->eff, sizeof(float) * uint32_t(snap_->count));
+    }
+    // route counts of the Shell's own params as the restored routes have them
+    for (int i = 0; i < R.count(); ++i) {
+        int n = 0;
+        for (int r = 0; r < k.mod.routeCount(); ++r)
+            if (k.mod.routeAt(r).param == i) ++n;
+        if (R.meta(lab::kit::ParamId(i)).mods != n) R.setModCount(lab::kit::ParamId(i), n);
+    }
+    k.mod.markDirty();
+    k.wsParams = snap_->wsParams;
+}
+
+uint32_t Platform::kitBaseParams() const { return snap_ && snap_->taken ? uint32_t(snap_->count) : 0u; }
+
+void Platform::sessionNav() {
+    if (!ctx_->shell) return;
+    lab::kit::Kit& k = ctx_->shell->labkit();
+    lab::kit::NavKeys keys;
+    if (mode_ == kAppRun) native_->navKeys(keys);
+    k.nav.setKeys(keys);
+    sessTheme_ = mode_ == kAppRun ? native_->labTheme() : nullptr;
+    ctx_->theme = sessTheme_ ? sessTheme_ : &theme_;
+    if (k.active) k.nav.refreshPages();
+}
+
+void Platform::toError() {
+    lab::copyStr(errTitle_, sizeof errTitle_, lua_->name());
+    lab::copyStr(errText_, sizeof errText_, lua_->error());
+    errApp_ = false;
+    mode_ = kError;
+    if (ctx_->shell && ctx_->shell->labkit().active) ctx_->shell->labkit().nav.close();
+    ctx_->requestRedraw();
+}
+
+// ---- sessions ----------------------------------------------------------------------------
 void Platform::closeSession(bool toLauncher) {
     nextOpen_ = -1;
     nextFile_[0] = 0;
+    logOpen_ = false;
     if (mode_ == kScriptRun || mode_ == kAppRun || mode_ == kError) {
+        kitOff();             // no mod / registry writes into the session from here on
         audioQuiet_ = true;   // render() stops calling the native app from the next block
         audioNative_ = false;
         if (lua_->running() || lua_->failed()) lua_->close();   // cleanup(), params saved
@@ -384,9 +496,13 @@ void Platform::closeSession(bool toLauncher) {
 // The audio side has dropped the session (reset acknowledged): free it.
 void Platform::finishClose() {
     native_->close();
+    restoreKit();
     pool_.reset();
     mode_ = kLauncher;
     audioQuiet_ = false;
+    sessTheme_ = nullptr;
+    ctx_->theme = &theme_;
+    kitOn();
     if (nextFile_[0]) {
         char f[48];
         lab::copyStr(f, sizeof f, nextFile_);
@@ -422,6 +538,9 @@ bool Platform::openEntry(int i) {
 
 bool Platform::openNow(int i) {
     const Entry en = entries_[i];
+    ensureSnapshot();
+    kitOff();   // the session registers its params with the kit's audio block off
+    restoreKit();
     pool_.reset();
     audioQuiet_ = false;
     lab::copyStr(lastFile_, sizeof lastFile_, en.file);
@@ -458,7 +577,17 @@ bool Platform::openNow(int i) {
             mode_ = kError;
         }
     }
-    if (!ok) setGuard("", false);
+    if (!ok) {
+        setGuard("", false);
+        native_->close();
+        restoreKit();   // whatever the failed session registered
+        sessTheme_ = nullptr;
+        ctx_->theme = &theme_;
+        kitOn();
+    } else {
+        kitOn();
+        sessionNav();
+    }
     ctx_->requestRedraw();
     return ok;
 }
@@ -474,9 +603,51 @@ void Platform::openSelected() {
 }
 
 // ---- events ----------------------------------------------------------------------------
-bool Platform::isExitCombo(const Event& e) const {
-    // Shift + Help, or Aux held 1 s (handled in update()).
-    return e.type == Event::kPress && e.id == btn::Help && e.shift;
+// Only keys of the original Tracker's matrix: Shift + F8 held = back to the
+// launcher, Shift + F7 held = the LOG view (and the REPL). A tap of either
+// still reaches the session, on the release (tests/lab/platform_test.cpp).
+bool Platform::chordEvent(const Event& e) {
+    const int k = e.id == btn::F7 ? 0 : (e.id == btn::F8 ? 1 : -1);
+    if (k < 0 || !(e.type == Event::kPress || e.type == Event::kRelease || e.type == Event::kHold)) return false;
+    if (e.type == Event::kPress && e.shift) {
+        chordPending_[k] = true;
+        chordPress_[k] = e;
+        return true;
+    }
+    if (e.type == Event::kHold) {
+        if (chordPending_[k]) {
+            chordPending_[k] = false;
+            chordSwallow_[k] = true;
+            if (k == 1) {
+                logOpen_ = false;
+                if (mode_ != kLauncher) closeSession(true);
+            } else {
+                logOpen_ = !logOpen_;
+                logScroll_ = 0;
+            }
+            ctx_->requestRedraw();
+            return true;
+        }
+        return chordSwallow_[k];
+    }
+    // release
+    if (chordSwallow_[k]) {
+        chordSwallow_[k] = false;
+        return true;
+    }
+    if (chordPending_[k]) {
+        chordPending_[k] = false;
+        const Event press = chordPress_[k];
+        if (logOpen_) {
+            logEvent(press);
+            logEvent(e);
+        } else {
+            route(press);
+            route(e);
+        }
+        return true;
+    }
+    return false;
 }
 
 void Platform::onEvent(const Event& e) {
@@ -488,44 +659,91 @@ void Platform::onEvent(const Event& e) {
     }
     if (!bootChecked_) safeBoot_ = true;
     if (mode_ == kClosing) return;
-    if (isExitCombo(e)) {
-        if (mode_ != kLauncher) closeSession(true);
+    if (chordEvent(e)) return;
+    if (logOpen_) {
+        logEvent(e);
         return;
     }
-    if (e.id == btn::Aux && e.type == Event::kPress && !e.shift) {
-        auxHeld_ = true;
-        auxDownMs_ = e.ms;
-        auxUsed_ = false;
-    }
-    if (e.id == btn::Aux && e.type == Event::kRelease) auxHeld_ = false;
-    // Shift + Aux: the params page of a script
-    if (e.type == Event::kPress && e.id == btn::Aux && e.shift && mode_ == kScriptRun) {
-        lua_->toggleParams();
-        return;
-    }
+    route(e);
+}
+
+void Platform::route(const Event& e) {
     switch (mode_) {
         case kLauncher: launcherEvent(e); break;
         case kScriptRun:
             lua_->event(e);
-            if (lua_->failed()) {
-                lab::copyStr(errTitle_, sizeof errTitle_, lua_->name());
-                lab::copyStr(errText_, sizeof errText_, lua_->error());
-                mode_ = kError;
-            }
+            if (lua_->failed()) toError();
             break;
         case kAppRun: native_->event(e); break;
         case kError:
-            if (e.type == Event::kPress && (e.id == btn::F8 || e.id == btn::EncPush)) closeSession(true);
-            if (e.type == Event::kPress && e.id == btn::F7 && lastFile_[0]) {
+            if (e.type != Event::kPress) break;
+            if (e.id == btn::F8) closeSession(true);
+            if ((e.id == btn::F7 || e.id == btn::Insert) && lastFile_[0]) {
                 char f[48];
                 lab::copyStr(f, sizeof f, lastFile_);
                 closeSession(false);
                 rescan();
                 openByName(f);
             }
+            if (e.id == btn::F1) {
+                logOpen_ = true;
+                logScroll_ = 0;
+            }
             break;
         default: break;
     }
+}
+
+// LOG view: the script's print() lines (64 kept) or an app's log, the
+// crash-safe runner's errors, and a REPL line (Insert) for a running script.
+void Platform::logEvent(const Event& e) {
+    const int total = mode_ == kAppRun ? native_->logCount() : lua_->consoleCount();
+    int d = 0;
+    if (e.type == Event::kEncoder) d = -e.delta;
+    if (e.type == Event::kPress) {
+        switch (e.id) {
+            case btn::Up: d = 1; break;
+            case btn::Down: d = -1; break;
+            case btn::Left: d = 12; break;
+            case btn::Right: d = -12; break;
+            case btn::F8:
+                logOpen_ = false;
+                break;
+            case btn::Delete:
+            case btn::F2:
+                if (mode_ != kAppRun) lua_->clearConsole();
+                logScroll_ = 0;
+                break;
+            case btn::Insert:
+            case btn::F1:
+                if (mode_ == kScriptRun && lua_->running()) {
+                    lab::kit::KeyboardRequest r;
+                    r.title = "Lua  (id shows a param, id(v) sets it)";
+                    r.maxLen = 31;
+                    r.ctx = this;
+                    r.onDone = [](void* c, const char* text) {
+                        Platform* p = static_cast<Platform*>(c);
+                        if (text && text[0] && p->mode_ == kScriptRun) {
+                            p->lua_->eval(text);
+                            p->logScroll_ = 0;
+                            if (p->lua_->failed()) p->toError();
+                        }
+                    };
+                    ctx_->keyboard().open(r);
+                } else {
+                    ctx_->toast(mode_ == kScriptRun ? "The script has stopped" : "The REPL needs a running script");
+                }
+                break;
+            default: break;
+        }
+    }
+    if (d) {
+        logScroll_ += d;
+        const int maxScroll = total > 14 ? total - 14 : 0;
+        if (logScroll_ > maxScroll) logScroll_ = maxScroll;
+        if (logScroll_ < 0) logScroll_ = 0;
+    }
+    ctx_->requestRedraw();
 }
 
 void Platform::launcherEvent(const Event& e) {
@@ -542,8 +760,12 @@ void Platform::launcherEvent(const Event& e) {
             case btn::Down: d = 1; break;
             case btn::Left: d = -6; break;
             case btn::Right: d = 6; break;
-            case btn::EncPush:
+            case btn::Insert:
             case btn::F1: openSelected(); return;
+            case btn::F3:
+                preview_ = !preview_;
+                previewFor_ = -1;
+                return;
             case btn::F2:
                 filter_ = (filter_ + 1) % 3;
                 rescan();
@@ -579,6 +801,7 @@ void Platform::onTransport(bool playing) {
 
 void Platform::update(uint32_t ms) {
     nowMs_ = ms;
+    ensureSnapshot();   // first pass: the Shell's kit is complete
     if (!bootChecked_) {
         bootChecked_ = true;
         bootStart_ = ms;
@@ -608,20 +831,11 @@ void Platform::update(uint32_t ms) {
         ctx_->toast(m);
         installed_ = 0;
     }
-    if (auxHeld_ && !auxUsed_ && ms - auxDownMs_ >= 1000 && mode_ != kLauncher) {
-        auxUsed_ = true;
-        closeSession(true);
-        return;
-    }
+    if (mode_ == kLauncher && preview_ && sel_ >= 0 && sel_ < nView_ && previewFor_ != view_[sel_]) loadPreview(view_[sel_]);
     if (guardSet_ && (mode_ == kScriptRun || mode_ == kAppRun) && ms - openedMs_ >= kCrashGuardMs) setGuard("", false);
     if (mode_ == kScriptRun) {
         lua_->update(ms);
-        if (lua_->failed()) {
-            lab::copyStr(errTitle_, sizeof errTitle_, lua_->name());
-            lab::copyStr(errText_, sizeof errText_, lua_->error());
-            mode_ = kError;
-            ctx_->requestRedraw();
-        }
+        if (lua_->failed()) toError();
     } else if (mode_ == kAppRun) {
         native_->update(ms);
     }
@@ -658,6 +872,7 @@ void Platform::render(const lab::Transport& t, const lab::AudioIn& in, float* l,
     // A native app owns the block: the voice engine (Lua's) is silent and was
     // reset before the app opened, so it is skipped -- the hosting overhead of
     // a station is then only the call bridge (hosted bench, make lab-gate).
+    blocks_ = blocks_ + 1u;
     if (audioNative_ && !audioQuiet_) {
         native_->render(t, in, l, r);
         return;
@@ -814,8 +1029,14 @@ void Platform::drawSessionBar(lab::Canvas& g) {
         std::snprintf(buf, sizeof buf, "native %luK%s   %.0f bpm   CPU %lu%%",
                       static_cast<unsigned long>(native_->imageBytes() / 1024), native_->fastInSram() ? " +fast" : "",
                       double(ctx_->bpm()), static_cast<unsigned long>(ctx_->shell->cpuPermille() / 10));
+    if (mode_ == kScriptRun && lua_->errorsTotal() > 0) {
+        // the crash-safe runner kept the script going: a red count, details in the LOG
+        g.color(theme_.warn);
+        g.textf(190, 11, font::kTiny, Canvas::kCenterY, "%d ERR (Shift+F7)", lua_->errorsTotal());
+        g.color(theme_.dim);
+    }
     g.text(560, 11, font::kTiny, buf, Canvas::kCenterY | Canvas::kRight);
-    g.text(792, 11, font::kTiny, "Shift+Help: launcher", Canvas::kCenterY | Canvas::kRight);
+    g.text(792, 11, font::kTiny, "hold Shift+F8: launcher", Canvas::kCenterY | Canvas::kRight);
 }
 
 void Platform::drawLauncher(lab::Canvas& g) {
@@ -851,8 +1072,8 @@ void Platform::drawLauncher(lab::Canvas& g) {
                Canvas::kCenter);
         g.text(400, 258, font::kSmall, "or press F6 to write the example scripts.", Canvas::kCenter);
     }
-    // grid of cards: 3 columns x 2 rows on screen, scrolled by row
-    const int cols = 3, rowsVis = 2;
+    // grid of cards: 3 columns x 2 rows on screen (2 with the preview), scrolled by row
+    const int cols = preview_ ? 2 : 3, rowsVis = 2;
     const int cw = 248, ch = 150, x0 = 16, y0 = 58, gap = 8;
     if (sel_ < top_ * cols) top_ = sel_ / cols;
     if (sel_ >= (top_ + rowsVis) * cols) top_ = sel_ / cols - rowsVis + 1;
@@ -907,15 +1128,16 @@ void Platform::drawLauncher(lab::Canvas& g) {
     if (rowsTotal > rowsVis) {
         g.color(t.dim);
         const int h = 300 * rowsVis / rowsTotal;
-        g.fill(790, 58 + 300 * top_ / rowsTotal, 4, h);
+        g.fill(preview_ ? 518 : 790, 58 + 300 * top_ / rowsTotal, 4, h);
     }
+    if (preview_ && nView_) drawPreview(g, 528, 58, 256, 308);
     // footer hint
     g.color(t.dim);
     g.text(400, 432, font::kTiny,
-           "Encoder / arrows: choose   Push or F1 or a pad: open   Shift+Help or hold Aux: back here   Config: settings",
+           "Arrows / encoder: choose   Insert, F1 or a pad: open   hold Shift+F8: back here   hold Shift+F7: LOG",
            Canvas::kCenter);
-    const char* keys[8] = {"Open", filter_ == 0 ? "All" : (filter_ == 1 ? "Scripts" : "Apps"), "", "", "Rescan",
-                           "Examples", "", ""};
+    const char* keys[8] = {"Open", filter_ == 0 ? "All" : (filter_ == 1 ? "Scripts" : "Apps"),
+                           preview_ ? "Cards" : "Preview", "", "Rescan", "Examples", "", ""};
     lab::drawFKeyBar(g, t, keys);
 }
 
@@ -965,11 +1187,127 @@ void Platform::drawError(lab::Canvas& g) {
     g.color(t.dim);
     g.text(400, 434, font::kTiny, "Sound stopped. Fix the file on the card (or by USB storage), then Retry.",
            Canvas::kCenter);
-    const char* keys[8] = {"", "", "", "", "", "", "Retry", "Launcher"};
+    const char* keys[8] = {"Log", "", "", "", "", "", "Retry", "Launcher"};
+    lab::drawFKeyBar(g, t, keys);
+}
+
+// The first lines of a script (or an app's record) for the launcher's preview.
+void Platform::loadPreview(int i) {
+    previewFor_ = i;
+    previewText_[0] = 0;
+    if (i < 0 || i >= nEntries_) return;
+    const Entry& en = entries_[i];
+    if (en.kind != Entry::kScript || !ctx_->fs) {
+        static const char* const kKinds[] = {"Lua script", "native app", "station"};
+        std::snprintf(previewText_, sizeof previewText_, "%s\n%s\n\nfile  Apps/%s\nby    %s\n\n%s\n\nInsert / F1 opens it.",
+                      en.name, kKinds[en.kind], en.file, en.author[0] ? en.author : "-", en.desc);
+        return;
+    }
+    char path[128];
+    std::snprintf(path, sizeof path, "%s/%s/%s", ctx_->home, kScriptsDir, en.file);
+    const ot::IStorage::Handle h = ctx_->fs->open(path, ot::IStorage::kRead);
+    if (h < 0) return;
+    const int32_t n = ctx_->fs->read(h, previewText_, sizeof previewText_ - 1);
+    ctx_->fs->close(h);
+    previewText_[n > 0 ? n : 0] = 0;
+}
+
+void Platform::drawPreview(lab::Canvas& g, int x, int y, int w, int h) {
+    const lab::Theme& t = theme_;
+    g.color(lab::mix(t.bg, t.panel, 0.7f));
+    g.fill(x, y, w, h);
+    g.color(t.dim);
+    g.frame(x, y, w, h);
+    const Entry& en = entries_[view_[sel_]];
+    g.color(en.color ? Rgb(en.color) : (en.kind == Entry::kScript ? t.accent : t.accent2));
+    g.text(x + 10, y + 14, font::kTiny, en.kind == Entry::kScript ? "SOURCE" : "INFO", Canvas::kCenterY);
+    const int cols = (w - 20) / 7, rows = (h - 36) / 16;
+    const char* p = previewText_;
+    for (int r = 0; r < rows && *p; ++r) {
+        char line[48];
+        int n = 0;
+        while (p[n] && p[n] != '\n' && n < cols && n < int(sizeof line) - 1) ++n;
+        const bool wrap = en.kind != Entry::kScript && p[n] && p[n] != '\n';   // info: wrap words
+        if (wrap) {
+            int b = n;
+            while (b > 8 && p[b] != ' ') --b;
+            if (b > 8) n = b;
+        }
+        for (int k = 0; k < n; ++k) {
+            const unsigned char c = static_cast<unsigned char>(p[k]);
+            line[k] = (c == '\t') ? ' ' : (c < 32 || c > 126 ? '?' : char(c));
+        }
+        line[n] = 0;
+        // comments dim, code bright
+        const bool comment = n > 1 && line[0] == '-' && line[1] == '-';
+        g.color(comment ? t.dim : t.fg);
+        if (n) g.text(x + 10, y + 34 + r * 16, font::kTiny, line, Canvas::kCenterY);
+        p += n;
+        if (wrap) {
+            while (*p == ' ') ++p;
+            continue;
+        }
+        while (*p && *p != '\n') ++p;   // source: cut long lines
+        if (*p == '\n') ++p;
+    }
+}
+
+void Platform::drawLog(lab::Canvas& g) {
+    const lab::Theme& t = theme_;
+    const bool app = mode_ == kAppRun;
+    g.color(t.bg);
+    g.fill(0, 0, lab::kScreenW, lab::kScreenH);
+    g.color(t.panel);
+    g.fill(0, 0, lab::kScreenW, 36);
+    g.color(t.accent);
+    g.text(14, 18, font::kBody, "LOG", Canvas::kCenterY);
+    g.color(t.fg);
+    g.text(80, 18, font::kSmall, app ? native_->info().name : lua_->name(), Canvas::kCenterY);
+    const int total = app ? native_->logCount() : lua_->consoleCount();
+    g.color(t.dim);
+    if (app)
+        g.textf(786, 18, font::kTiny, Canvas::kCenterY | Canvas::kRight, "%d lines", total);
+    else
+        g.textf(786, 18, font::kTiny, Canvas::kCenterY | Canvas::kRight, "%d lines   %d errors   %s", lua_->consoleTotal(),
+                lua_->errorsTotal(), lua_->running() ? "running" : "stopped");
+    g.color(t.accent);
+    g.fill(0, 36, lab::kScreenW, 1);
+    const int rows = 15;
+    const int last = total - 1 - logScroll_;
+    const int first = last - rows + 1 < 0 ? 0 : last - rows + 1;
+    for (int i = first, r = 0; i <= last; ++i, ++r) {
+        const char* line = app ? native_->logLine(i) : lua_->consoleLine(i);
+        const bool err = line[0] == '!' || !std::strncmp(line, "error", 5);
+        const bool in = line[0] == '>' && line[1] == ' ';
+        g.color(err ? t.warn : (in ? t.accent2 : t.fg));
+        g.text(14, 52 + r * 22, font::kTiny, line, Canvas::kCenterY);
+    }
+    if (!total) {
+        g.color(t.dim);
+        g.text(400, 200, font::kSmall, app ? "The app logged nothing (PlatHost::log)." : "Nothing printed yet (print in a script).",
+               Canvas::kCenter);
+    }
+    if (!app && lua_->errorsTotal() > 0) {
+        g.color(lab::mix(t.bg, t.warn, 0.15f));
+        g.fill(0, 384, lab::kScreenW, 40);
+        g.color(t.warn);
+        g.textf(14, 396, font::kTiny, Canvas::kCenterY, "last error (%lu s ago):",
+                static_cast<unsigned long>((nowMs_ - lua_->lastErrorMs()) / 1000u));
+        g.color(t.fg);
+        g.text(14, 414, font::kTiny, lua_->lastError(), Canvas::kCenterY);
+    }
+    g.color(t.dim);
+    g.text(400, 436, font::kTiny, "Up / Down / encoder: scroll   Insert: REPL line   Delete: clear   F8 or hold Shift+F7: close",
+           Canvas::kCenter);
+    const char* keys[8] = {app ? "" : "REPL", app ? "" : "Clear", "", "", "", "", "", "Close"};
     lab::drawFKeyBar(g, t, keys);
 }
 
 void Platform::draw(lab::Canvas& g) {
+    if (logOpen_ && mode_ != kClosing) {
+        drawLog(g);
+        return;
+    }
     switch (mode_) {
         case kClosing:
         case kLauncher:
@@ -992,7 +1330,7 @@ void Platform::draw(lab::Canvas& g) {
         case kScriptRun: {
             BudgetCanvas c(g, kAppWords - (sessionBar_ ? 120u : 0u));
             lua_->draw(c);
-            if (lua_->consoleCount() && !lua_->paramsOpen()) {
+            if (lua_->consoleCount()) {
                 // most recent print line at the bottom
                 g.color(theme_.dim);
                 if (g.room(100)) g.text(10, 470, font::kTiny, lua_->consoleLine(lua_->consoleCount() - 1), Canvas::kCenterY);
@@ -1009,6 +1347,58 @@ void Platform::draw(lab::Canvas& g) {
             break;
         }
     }
+}
+
+// ---- LABKIT navigation ----------------------------------------------------------------------
+int Platform::navPages(lab::kit::PageInfo* out, int cap) {
+    if (cap <= 0) return 0;
+    if (mode_ == kAppRun) {
+        const int n = native_->navPages(out, cap);
+        if (n > 0) return n;
+        out[0] = lab::kit::PageInfo();
+        out[0].name = native_->info().name;
+        out[0].help = "The app's params (PlatHost::paramAdd)";
+        return 1;
+    }
+    if (mode_ == kScriptRun && lua_->pageCount() > 0) {
+        const int n = lua_->pageCount() < cap ? lua_->pageCount() : cap;
+        for (int i = 0; i < n; ++i) {
+            out[i] = lab::kit::PageInfo();
+            out[i].name = lua_->pageName(i);
+            out[i].help = "Script params: params:add{id, name, min, max, default, unit, page}";
+        }
+        return n;
+    }
+    static const char* const kLauncherKeys[8] = {"Open the selected script / app", "Filter: all / scripts / apps",
+                                                 "Preview: source / info", nullptr, "Rescan the card",
+                                                 "Write the example scripts", nullptr, nullptr};
+    out[0] = lab::kit::PageInfo();
+    if (mode_ == kScriptRun) {
+        out[0].name = "SCRIPT";
+        out[0].help = "This script has no params (params:add) - macros and LFOs still run";
+    } else {
+        out[0].name = "LAUNCHER";
+        out[0].help = "Shift+F8 held: back here.  Shift+F7 held: LOG / REPL.";
+        for (int i = 0; i < 8; ++i) out[0].fkeys[i] = kLauncherKeys[i];
+    }
+    return 1;
+}
+
+int Platform::navPage() const {
+    if (mode_ == kAppRun) return native_->navPage();
+    return -1;
+}
+
+void Platform::navGoto(int page) {
+    if (mode_ == kAppRun) native_->navGoto(page);
+}
+
+void Platform::navFocus(lab::kit::ParamId id) {
+    if (mode_ == kAppRun) native_->navFocus(id);
+}
+
+void Platform::navParamChanged(lab::kit::ParamId id) {
+    if (mode_ == kAppRun) native_->navParamChanged(id);
 }
 
 // ---- bench ------------------------------------------------------------------------------------

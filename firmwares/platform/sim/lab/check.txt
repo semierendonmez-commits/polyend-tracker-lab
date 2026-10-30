@@ -1,14 +1,22 @@
 # PLATFORM lab-gate simulator check (make lab-gate). The card was filled by
 # `make sim-card`: examples/scripts, examples/test, the SDK apps (.so) and the
-# six stations in /Firmware/Apps (installed by PLATFORM at boot).
+# seven stations in /Firmware/Apps (installed by PLATFORM at boot).
 # Launcher order (pad = entry): 0 BULUT 1 DATAMATICS 2 FLIPPER 3 GRAF 4 KONSOL
-# 5 MAKAM (stations), 6 Drone 7 StepSeq (apps), 8 Arp 9 Broken 10 Drift
-# 11 Euclid 12 Hello 13 Spin 14 Steps (scripts). The sim runs with a 330 Hz line-in tone.
+# 5 MAKAM 6 TILT (stations), 7 Drone 8 StepSeq (apps), 9 Arp 10 Broken 11 Datum
+# 12 Drift 13 Euclid 14 Hello 15 Pinball 16 Seyir 17 Spin 18 Steps (scripts).
+# Only keys of the original Tracker: Shift + F8 held = back to the launcher,
+# Shift + F7 held = LOG / REPL. The sim runs with a 330 Hz line-in tone.
 wait 3500
 budget
+expect-overlay none
+# the launcher's preview panel (F3)
+tap F3
+wait 200
+budget
+tap F3
 # ---- every example script opens, plays, sounds, stays in budget ----
 # Arp: hold three pads -> MIDI notes out + its voice
-pad 8 tap
+pad 9 tap
 wait 400
 peak-reset
 pad 24 down
@@ -22,29 +30,41 @@ pad 28 up
 pad 31 up
 budget
 press Shift
-tap Help
+hold F8 700
+release Shift
+wait 300
+# Datum: bits, clicks, sine pulses -- on its own
+pad 11 tap
+peak-reset
+wait 2000
+expect-sound 100
+budget
+press Shift
+hold F8 700
 release Shift
 wait 300
 # Drift: generative, sounds on its own
-pad 10 tap
+pad 12 tap
 peak-reset
 wait 8000
 expect-sound 100
 budget
-hold Aux 1200
+press Shift
+hold F8 700
+release Shift
 wait 300
 # Euclid: runs without the transport
-pad 11 tap
+pad 13 tap
 peak-reset
 wait 2500
 expect-sound 300
 budget
 press Shift
-tap Help
+hold F8 700
 release Shift
 wait 300
-# Hello: pads play sines
-pad 12 tap
+# Hello: pads play sines; its Hue param on the LABKIT PARAM pads / MAP / MOD page
+pad 14 tap
 wait 400
 peak-reset
 pad 20 down
@@ -52,43 +72,110 @@ wait 500
 expect-sound 300
 pad 20 up
 budget
-hold Aux 1200
+expect-param lua.hue 0.55 0.001
+enc 5
+wait 100
+expect-param lua.hue 0.6 0.02
+tap I.Param
+wait 200
+expect-overlay param
+budget
+tap I.Param
+wait 200
+expect-overlay none
+tap Master
+wait 200
+expect-overlay map
+budget
+tap Master
+wait 200
+press Shift
+tap Master
+release Shift
+wait 200
+expect-overlay mod
+budget
+press Shift
+tap Master
+release Shift
+wait 200
+expect-overlay none
+# the LOG view (Shift + F7 held) and back
+press Shift
+hold F7 700
+release Shift
+wait 200
+budget
+tap F8
+wait 200
+# a Shift + F8 tap still reaches the script (it does nothing there)
+press Shift
+tap F8
+release Shift
+wait 200
+budget
+press Shift
+hold F8 700
+release Shift
 wait 300
-# Steps: needs Play
-pad 14 tap
+# Pinball: the ball plays on its own
+pad 15 tap
+peak-reset
+wait 3000
+expect-sound 100
+budget
+press Shift
+hold F8 700
+release Shift
+wait 300
+# Seyir: a makam line over its drone
+pad 16 tap
+peak-reset
+wait 4000
+expect-sound 100
+budget
+press Shift
+hold F8 700
+release Shift
+wait 300
+# Steps: needs Play; its params live on the PARAM pads
+pad 18 tap
 wait 300
 tap Play
 peak-reset
 wait 2500
 expect-sound 300
 budget
-# its params page
-press Shift
-tap Aux
-release Shift
+expect-param lua.bass_cut 400 1
+tap I.Param
 wait 200
-tap Down
-enc 3
+expect-overlay param
 budget
-press Shift
-tap Aux
-release Shift
+tap I.Param
 tap Play
 press Shift
-tap Help
+hold F8 700
 release Shift
 wait 300
 # ---- native apps (SDK examples, loaded from the card) ----
-pad 6 tap
+pad 7 tap
 wait 400
 peak-reset
 pad 3 tap
 wait 1500
 expect-sound 300
+expect-param drone.cutoff 900 1
 budget
-hold Aux 1200
+tap I.Param
+wait 200
+expect-overlay param
+budget
+tap I.Param
+press Shift
+hold F8 700
+release Shift
 wait 300
-pad 7 tap
+pad 8 tap
 wait 300
 tap Play
 peak-reset
@@ -97,10 +184,10 @@ expect-sound 300
 tap Play
 budget
 press Shift
-tap Help
+hold F8 700
 release Shift
 wait 300
-# ---- stations: the six sibling workstations as apps ----
+# ---- stations: the seven sibling workstations as apps ----
 # BULUT (QUANTA synthesis on cloud 3, as in BULUT's own check)
 pad 0 tap
 wait 2000
@@ -116,9 +203,16 @@ pad 26 up
 pad 31 up
 expect-sound 300
 budget
+# its params are in PLATFORM's MAP
+tap Master
+wait 200
+expect-overlay map
+budget
+tap Master
+wait 200
 tap Play
 press Shift
-tap Help
+hold F8 700
 release Shift
 wait 500
 # DATAMATICS
@@ -135,7 +229,7 @@ expect-sound 100
 budget
 tap Play
 press Shift
-tap Help
+hold F8 700
 release Shift
 wait 500
 # FLIPPER
@@ -152,7 +246,7 @@ expect-sound 100
 budget
 tap Play
 press Shift
-tap Help
+hold F8 700
 release Shift
 wait 500
 # GRAF
@@ -169,7 +263,7 @@ expect-sound 100
 budget
 tap Play
 press Shift
-tap Help
+hold F8 700
 release Shift
 wait 500
 # KONSOL
@@ -186,7 +280,7 @@ expect-sound 100
 budget
 tap Play
 press Shift
-tap Help
+hold F8 700
 release Shift
 wait 500
 # MAKAM
@@ -203,18 +297,35 @@ expect-sound 100
 budget
 tap Play
 press Shift
-tap Help
+hold F8 700
+release Shift
+wait 500
+# TILT
+pad 6 tap
+wait 2000
+tap Play
+peak-reset
+pad 13 down
+pad 40 down
+wait 3000
+pad 13 up
+pad 40 up
+expect-sound 100
+budget
+tap Play
+press Shift
+hold F8 700
 release Shift
 wait 500
 # ---- failures stay contained ----
-# a runtime error -> error page, sound stops, back to the launcher
-pad 9 tap
+# runtime errors again and again -> the error page, sound stops, back to the launcher
+pad 10 tap
 wait 2500
 budget
 tap F8
 wait 300
 # an endless loop -> stopped by the instruction limit
-pad 13 tap
+pad 17 tap
 wait 300
 pad 0 tap
 wait 500
@@ -222,7 +333,7 @@ budget
 tap F8
 wait 300
 # the launcher still works: open Hello again and play
-pad 12 tap
+pad 14 tap
 wait 300
 peak-reset
 pad 10 down
@@ -234,5 +345,6 @@ tap Config
 tap F2
 tap F3
 tap F1
-tap F8
+tap Config
+wait 200
 budget

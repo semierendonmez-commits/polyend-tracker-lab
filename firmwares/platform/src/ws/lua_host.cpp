@@ -50,7 +50,7 @@ const KeyName kKeys[] = {
     {lab::btn::F1, "F1"}, {lab::btn::F2, "F2"}, {lab::btn::F3, "F3"}, {lab::btn::F4, "F4"},
     {lab::btn::F5, "F5"}, {lab::btn::F6, "F6"}, {lab::btn::F7, "F7"}, {lab::btn::F8, "F8"},
     {lab::btn::Up, "UP"}, {lab::btn::Down, "DOWN"}, {lab::btn::Left, "LEFT"}, {lab::btn::Right, "RIGHT"},
-    {lab::btn::EncPush, "ENC"}, {lab::btn::Shift, "SHIFT"}, {lab::btn::Aux, "AUX"}, {lab::btn::Help, "HELP"},
+    {lab::btn::Shift, "SHIFT"},
     {lab::btn::Copy, "COPY"}, {lab::btn::Insert, "INSERT"}, {lab::btn::Delete, "DELETE"}, {lab::btn::Rec, "REC"},
     {lab::btn::Note, "NOTE"}, {lab::btn::Instr, "INSTR"}, {lab::btn::Fx1, "FX1"}, {lab::btn::Fx2, "FX2"},
     {lab::btn::Pattern, "PATTERN"}, {lab::btn::Song, "SONG"}, {lab::btn::Performance, "PERFORMANCE"},
@@ -75,8 +75,10 @@ void hook(lua_State* L, lua_Debug* ar) {
     (void)ar;
     LuaSession* s = S(L);
     s->insn += 1000;
-    if (s->insnLimit && s->insn > s->insnLimit)
+    if (s->insnLimit && s->insn > s->insnLimit) {
+        s->timedOut = true;   // a hang is never "keep going": the runner stops the script
         luaL_error(L, "script ran too long (over %d VM instructions in one call) - endless loop?", int(s->insnLimit));
+    }
 }
 
 int traceback(lua_State* L) {
@@ -782,6 +784,268 @@ local function count() local n = 0 for _ in pairs(co) do n = n + 1 end return n 
 return tick, rebase, count
 )LUA";
 
+// ---- LABKIT: params, mod sources, routes, macros ------------------------------------
+const lab::Rgb kPagePalette[] = {lab::Rgb(0x39E6B4), lab::Rgb(0xFFB347), lab::Rgb(0x4DA3FF), lab::Rgb(0xFF6FA8),
+                                 lab::Rgb(0xB48CFF), lab::Rgb(0xFFE14D), lab::Rgb(0x5CF07A), lab::Rgb(0xFF7A45)};
+
+const char* fieldStr(lua_State* L, int t, const char* k, const char* def) {
+    lua_getfield(L, t, k);
+    const char* s = lua_isstring(L, -1) ? lua_tostring(L, -1) : def;
+    lua_pop(L, 1);
+    return s;
+}
+bool fieldNum(lua_State* L, int t, const char* k, float& out) {
+    lua_getfield(L, t, k);
+    const bool ok = lua_isnumber(L, -1) != 0;
+    if (ok) out = float(lua_tonumber(L, -1));
+    lua_pop(L, 1);
+    return ok;
+}
+
+// Registry::add counts a param before its binding is complete: the kit's
+// audio block is off around it (PLATFORM keeps it off for the whole init()).
+bool kitPause(LuaSession* s) {
+    if (!s->ctx()->shell) return false;
+    lab::kit::Kit& k = s->ctx()->shell->labkit();
+    const bool was = k.active;
+    k.active = false;
+    return was;
+}
+void kitResume(LuaSession* s, bool was) {
+    if (s->ctx()->shell) s->ctx()->shell->labkit().active = was;
+}
+
+int k_paramAdd(lua_State* L) {
+    LuaSession* s = S(L);
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lab::kit::Registry& R = s->ctx()->params();
+    const char* id = fieldStr(L, 1, "id", nullptr);
+    if (!id) return luaL_error(L, "params: id missing");
+    const char* name = fieldStr(L, 1, "name", id);
+    const char* kind = fieldStr(L, 1, "kind", "control");
+    const char* unit = fieldStr(L, 1, "unit", nullptr);
+    // page: a name ("FILTER") or a number (1..); default the first page
+    int page = 0;
+    lua_getfield(L, 1, "page");
+    if (lua_type(L, -1) == LUA_TSTRING) page = s->pageOf(lua_tostring(L, -1));
+    else if (lua_isnumber(L, -1)) {
+        char nm[16];
+        const int want = int(lua_tointeger(L, -1));
+        std::snprintf(nm, sizeof nm, "PAGE %d", want < 1 ? 1 : want);
+        while (s->pageCount() < want && s->pageCount() < LuaSession::kMaxPages) {
+            char n2[16];
+            std::snprintf(n2, sizeof n2, "PAGE %d", s->pageCount() + 1);
+            s->pageOf(n2);
+        }
+        page = want - 1;
+    } else page = s->pageCount() ? 0 : s->pageOf("PARAMS");
+    lua_pop(L, 1);
+    if (page < 0) page = 0;
+    if (page >= s->pageCount()) page = s->pageCount() - 1;
+    float lo = 0.0f, hi = 1.0f, def = 0.0f, step = 0.0f;
+    fieldNum(L, 1, "min", lo);
+    fieldNum(L, 1, "max", hi);
+    if (!fieldNum(L, 1, "default", def)) def = lo;
+    const bool hasStep = fieldNum(L, 1, "step", step);
+    if (!(hi > lo)) hi = lo + 1.0f;
+    char key[48];
+    std::snprintf(key, sizeof key, "lua.%s", id);
+    float* slot = static_cast<float*>(s->pool()->alloc(sizeof(float), 4));
+    if (!slot) return luaL_error(L, "params: out of session memory");
+    R.setPage(page);
+    R.setGroup(s->pageName(page), kPagePalette[page % 8]);
+    const bool isOption = !std::strcmp(kind, "option");
+    lab::kit::ParamId rid = lab::kit::kNoParam;
+    if (isOption) {
+        lua_getfield(L, 1, "options");
+        const int n = lua_istable(L, -1) ? int(luaL_len(L, -1)) : 0;
+        if (n <= 0) {
+            lua_pop(L, 1);
+            return luaL_error(L, "params: option '%s' has no options", id);
+        }
+        const char** names = static_cast<const char**>(s->pool()->alloc(sizeof(char*) * uint32_t(n), 8));
+        if (!names) return luaL_error(L, "params: out of session memory");
+        for (int i = 0; i < n; ++i) {
+            lua_geti(L, -1, i + 1);
+            names[i] = s->keep(luaL_tolstring(L, -1, nullptr));
+            lua_pop(L, 2);
+        }
+        lua_pop(L, 1);
+        *slot = def - 1.0f;   // Lua options are 1..n, the registry's 0..n-1
+        const char* nm = s->keep(name);
+        const bool was = kitPause(s);
+        rid = R.add(key, nm, slot).names(names, n).def(def - 1.0f);
+        kitResume(s, was);
+        if (rid != lab::kit::kNoParam) s->markEnum(rid);
+    } else {
+        *slot = def;
+        const char* nm = s->keep(name);
+        const char* un = unit ? s->keep(unit) : nullptr;
+        const bool was = kitPause(s);
+        lab::kit::Param& P = R.add(key, nm, slot).range(lo, hi).def(def);
+        rid = P;
+        if (rid != lab::kit::kNoParam) {
+            if (!std::strcmp(kind, "number")) P.integer();
+            if (hasStep && step > 0.0f) P.step(step);
+            if (un) P.unit(un);
+            if (lo < 0.0f && hi > 0.0f) P.bipolar();
+        }
+        kitResume(s, was);
+    }
+    if (rid == lab::kit::kNoParam) return luaL_error(L, "params: the registry is full (1024 params)");
+    lua_pushinteger(L, rid);
+    return 1;
+}
+int k_paramGet(lua_State* L) {
+    LuaSession* s = S(L);
+    const lab::kit::Registry& R = s->ctx()->params();
+    const int rid = int(luaL_checkinteger(L, 1));
+    if (!R.valid(lab::kit::ParamId(rid))) return 0;
+    float v = lua_toboolean(L, 2) ? R.get(lab::kit::ParamId(rid)) : R.effective(lab::kit::ParamId(rid));
+    if (s->isEnumParam(rid)) {
+        lua_pushinteger(L, lua_Integer(v + 0.5f) + 1);
+        return 1;
+    }
+    if (R.curve(lab::kit::ParamId(rid)) == lab::kit::Curve::kInt) lua_pushinteger(L, lua_Integer(floorf(v + 0.5f)));
+    else lua_pushnumber(L, lua_Number(v));
+    return 1;
+}
+int k_paramSet(lua_State* L) {
+    LuaSession* s = S(L);
+    lab::kit::Registry& R = s->ctx()->params();
+    const int rid = int(luaL_checkinteger(L, 1));
+    float v = float(luaL_checknumber(L, 2));
+    if (!R.valid(lab::kit::ParamId(rid))) return 0;
+    if (s->isEnumParam(rid)) v -= 1.0f;
+    R.set(lab::kit::ParamId(rid), v);
+    return 0;
+}
+int k_paramString(lua_State* L) {
+    LuaSession* s = S(L);
+    const lab::kit::Registry& R = s->ctx()->params();
+    const int rid = int(luaL_checkinteger(L, 1));
+    char buf[48] = {};
+    if (R.valid(lab::kit::ParamId(rid))) R.format(lab::kit::ParamId(rid), buf, sizeof buf, true);
+    lua_pushstring(L, buf);
+    return 1;
+}
+int k_paramNudge(lua_State* L) {
+    LuaSession* s = S(L);
+    lab::kit::Registry& R = s->ctx()->params();
+    const int rid = int(luaL_checkinteger(L, 1));
+    if (R.valid(lab::kit::ParamId(rid))) R.nudge(lab::kit::ParamId(rid), int(luaL_checkinteger(L, 2)));
+    return 0;
+}
+int k_kitSave(lua_State* L) {
+    LuaSession* s = S(L);
+    char path[96];
+    lua_pushboolean(L, s->kitPath(path, sizeof path) && s->ctx()->params().saveFile(s->ctx()->fs, path));
+    return 1;
+}
+int k_kitLoad(lua_State* L) {
+    LuaSession* s = S(L);
+    char path[96];
+    bool ok = s->kitPath(path, sizeof path) && s->ctx()->fs && s->ctx()->fs->exists(path);
+    if (ok) ok = s->ctx()->params().loadFile(s->ctx()->fs, path);
+    lua_pushboolean(L, ok);
+    return 1;
+}
+int k_modSource(lua_State* L) {
+    LuaSession* s = S(L);
+    const char* name = luaL_checkstring(L, 1);
+    const bool bip = lua_toboolean(L, 2) != 0;
+    const int slot = s->addModSlot();
+    float* v = s->modSlot(slot);
+    if (!v) return luaL_error(L, "mod.source: at most %d sources per script", LuaSession::kMaxSources);
+    *v = 0.0f;
+    const int id = s->ctx()->mod().addSource(s->keep(name), v, bip);
+    if (id < 0) return luaL_error(L, "mod.source: no room for another source");
+    lua_pushinteger(L, slot);
+    lua_pushinteger(L, id);
+    return 2;
+}
+int k_modSet(lua_State* L) {
+    float* v = S(L)->modSlot(int(luaL_checkinteger(L, 1)));
+    float x = float(luaL_checknumber(L, 2));
+    if (v) *v = x < -1.0f ? -1.0f : (x > 1.0f ? 1.0f : x);
+    return 0;
+}
+int k_modFind(lua_State* L) {
+    const char* n = luaL_checkstring(L, 1);
+    int id = -1;
+    if (!std::strncmp(n, "LFO", 3) && n[3] >= '1' && n[3] <= '4' && !n[4]) id = lab::kit::kSrcLfo + (n[3] - '1');
+    else if (!std::strncmp(n, "RND", 3) && n[3] >= '1' && n[3] <= '2' && !n[4]) id = lab::kit::kSrcRnd + (n[3] - '1');
+    else if (n[0] == 'M' && n[1] >= '1' && n[1] <= '8' && !n[2]) id = lab::kit::kSrcMacro + (n[1] - '1');
+    else id = S(L)->ctx()->mod().findSource(n);
+    if (id < 0) return 0;
+    lua_pushinteger(L, id);
+    return 1;
+}
+int k_modRoute(lua_State* L) {
+    LuaSession* s = S(L);
+    const int r = s->ctx()->mod().route(int(luaL_checkinteger(L, 1)), lab::kit::ParamId(luaL_checkinteger(L, 2)),
+                                        float(luaL_checknumber(L, 3)));
+    lua_pushboolean(L, r >= 0);
+    return 1;
+}
+int k_modUnroute(lua_State* L) {
+    lua_pushboolean(L, S(L)->ctx()->mod().unroute(int(luaL_checkinteger(L, 1)),
+                                                  lab::kit::ParamId(luaL_checkinteger(L, 2))));
+    return 1;
+}
+int k_modClear(lua_State* L) {
+    S(L)->ctx()->mod().clearRoutes();
+    return 0;
+}
+int k_modCount(lua_State* L) {
+    lua_pushinteger(L, S(L)->ctx()->mod().routeCount());
+    return 1;
+}
+int macroIndex(lua_State* L) {
+    const int i = int(luaL_checkinteger(L, 1));
+    luaL_argcheck(L, i >= 1 && i <= lab::kit::kMacros, 1, "macro 1..8");
+    return i - 1;
+}
+int k_macroGet(lua_State* L) {
+    lua_pushnumber(L, lua_Number(S(L)->ctx()->mod().macro(macroIndex(L))));
+    return 1;
+}
+int k_macroSet(lua_State* L) {
+    S(L)->ctx()->mod().setMacro(macroIndex(L), float(luaL_checknumber(L, 2)));
+    return 0;
+}
+int k_macroName(lua_State* L) {
+    S(L)->ctx()->mod().setMacroName(macroIndex(L), luaL_checkstring(L, 2));
+    return 0;
+}
+int k_lfo(lua_State* L) {
+    LuaSession* s = S(L);
+    const int i = int(luaL_checkinteger(L, 1));
+    luaL_argcheck(L, i >= 1 && i <= lab::kit::kLfos, 1, "LFO 1..4");
+    static const char* const kFields[] = {"shape", "rate", "sync", "phase", "retrig"};
+    const char* f = luaL_checkstring(L, 2);
+    int field = -1;
+    for (int k = 0; k < 5; ++k)
+        if (!std::strcmp(f, kFields[k])) field = k;
+    if (field < 0) return luaL_error(L, "mod.lfo: field shape | rate | sync | phase | retrig");
+    lab::kit::Registry& R = s->ctx()->params();
+    const lab::kit::ParamId p = s->ctx()->mod().lfoParam(i - 1, field);
+    if (!R.valid(p)) return 0;
+    if (!lua_isnoneornil(L, 3)) {
+        float v = 0.0f;
+        if (field == 0 && lua_type(L, 3) == LUA_TSTRING) {
+            static const char* const kShapes[] = {"sine", "tri", "saw", "square", "sh", "smooth"};
+            for (int k = 0; k < 6; ++k)
+                if (!std::strcmp(lua_tostring(L, 3), kShapes[k])) v = float(k);
+        } else {
+            v = float(luaL_checknumber(L, 3));
+        }
+        R.set(p, v);
+    }
+    lua_pushnumber(L, lua_Number(R.get(p)));
+    return 1;
+}
+
 int openLibs(lua_State* L) {
     luaL_requiref(L, LUA_GNAME, luaopen_base, 1);
     luaL_requiref(L, LUA_COLIBNAME, luaopen_coroutine, 1);
@@ -847,6 +1111,15 @@ int openLibs(lua_State* L) {
     lua_register(L, "_plat_stop", c_stop);
     lua_register(L, "_plat_playing", c_playing);
     lua_register(L, "_plat_millis", c_millis);
+    static const luaL_Reg kit[] = {
+        {"_plat_param_add", k_paramAdd}, {"_plat_param_get", k_paramGet}, {"_plat_param_set", k_paramSet},
+        {"_plat_param_string", k_paramString}, {"_plat_param_nudge", k_paramNudge}, {"_plat_kit_save", k_kitSave},
+        {"_plat_kit_load", k_kitLoad}, {"_plat_mod_source", k_modSource}, {"_plat_mod_set", k_modSet},
+        {"_plat_mod_find", k_modFind}, {"_plat_mod_route", k_modRoute}, {"_plat_mod_unroute", k_modUnroute},
+        {"_plat_mod_clear", k_modClear}, {"_plat_mod_count", k_modCount}, {"_plat_macro_get", k_macroGet},
+        {"_plat_macro_set", k_macroSet}, {"_plat_macro_name", k_macroName}, {"_plat_lfo", k_lfo},
+        {nullptr, nullptr}};
+    for (const luaL_Reg* r = kit; r->name; ++r) lua_register(L, r->name, r->func);
     // clock scheduler -> registry
     if (luaL_loadbufferx(L, kClockLua, sizeof kClockLua - 1, "=clock", "t") != LUA_OK) return lua_error(L);
     lua_call(L, 0, 3);
@@ -909,6 +1182,35 @@ void parseScriptHeader(const char* text, uint32_t len, const char* fileName, Scr
     }
 }
 
+int LuaSession::pageOf(const char* name) {
+    for (int i = 0; i < nPages_; ++i)
+        if (!std::strcmp(pageNames_[i], name)) return i;
+    if (nPages_ >= kMaxPages) return -1;
+    int o = 0;
+    for (const char* p = name; *p && o < 15; ++p) {
+        const char c = *p;
+        pageNames_[nPages_][o++] = (c >= 'a' && c <= 'z') ? char(c - 32) : ((c >= 32 && c <= 126) ? c : '?');
+    }
+    pageNames_[nPages_][o] = 0;
+    return nPages_++;
+}
+
+const char* LuaSession::keep(const char* str) {
+    if (!str) return "";
+    const uint32_t n = uint32_t(std::strlen(str));
+    char* d = pool_ ? static_cast<char*>(pool_->alloc(n + 1, 1)) : nullptr;
+    if (!d) return "";
+    std::memcpy(d, str, n);
+    d[n] = 0;
+    return d;
+}
+
+bool LuaSession::kitPath(char* out, uint32_t cap) const {
+    if (!ctx_ || !ctx_->fs || !dataDir[0]) return false;
+    std::snprintf(out, cap, "%s/labkit.lkc", dataDir);
+    return true;
+}
+
 LuaSession* LuaSession::from(lua_State* L) {
     // LUA_EXTRASPACE holds the session pointer (copied into every coroutine).
     LuaSession* s;
@@ -951,13 +1253,14 @@ void LuaSession::fail(const char* msg) {
     if (engine_) engine_->panic();
 }
 
-bool LuaSession::call(int nargs, uint32_t limit) {
+bool LuaSession::call(int nargs, uint32_t limit, bool fatal) {
     // stack: ... fn args  ->  insert the traceback handler below fn
     const int base = lua_gettop(L_) - nargs;
     lua_pushcfunction(L_, traceback);
     lua_insert(L_, base);
     insn = 0;
     insnLimit = limit;
+    timedOut = false;
     LuaSession* prev = gPrint;
     gPrint = this;
     const int r = lua_pcall(L_, nargs, 0, base);
@@ -966,12 +1269,92 @@ bool LuaSession::call(int nargs, uint32_t limit) {
     schedBeat = -1.0;
     if (r != LUA_OK) {
         const char* m = lua_tostring(L_, -1);
-        fail(m ? m : (r == LUA_ERRMEM ? "out of memory (script heap is full)" : "error"));
+        const char* msg = m ? m : (r == LUA_ERRMEM ? "out of memory (script heap is full)" : "error");
+        // Crash-safe runner: an error in a callback is logged and the script keeps
+        // running (like norns); loading / init errors, out of memory, an endless
+        // loop, or more than kMaxErrors errors in kErrorWindowMs stop it with the
+        // error page.
+        if (fatal || r == LUA_ERRMEM || timedOut) {
+            fail(msg);
+        } else {
+            const uint32_t now = ctx_ ? ctx_->millis() : 0;
+            if (now - errWindowStart_ > kErrorWindowMs) {
+                errWindowStart_ = now;
+                errInWindow_ = 0;
+            }
+            ++errInWindow_;
+            ++errorsTotal_;
+            lab::copyStr(lastError_, sizeof lastError_, msg);
+            lastErrorMs_ = now;
+            print("! ", 2);
+            // first line of the message only into the console
+            uint32_t n = 0;
+            while (msg[n] && msg[n] != '\n') ++n;
+            print(msg, n);
+            printEnd();
+            if (errInWindow_ > kMaxErrors) {
+                char m2[640];
+                std::snprintf(m2, sizeof m2, "%d errors in %u s - stopped. Last one:\n%s", errInWindow_,
+                              unsigned(kErrorWindowMs / 1000), msg);
+                fail(m2);
+            }
+        }
         lua_settop(L_, base - 1);
         return false;
     }
     lua_settop(L_, base - 1);
     return true;
+}
+
+void LuaSession::clearConsole() {
+    consoleN_ = consoleCol_ = 0;
+    console_[0][0] = 0;
+}
+
+bool LuaSession::eval(const char* line) {
+    if (!running() || !line) return false;
+    print("> ", 2);
+    print(line, uint32_t(std::strlen(line)));
+    printEnd();
+    // an expression first ("1 + 2", "params:get('cut')"), else a statement
+    char buf[300];
+    std::snprintf(buf, sizeof buf, "return %s", line);
+    if (luaL_loadbufferx(L_, buf, std::strlen(buf), "=repl", "t") != LUA_OK) {
+        lua_pop(L_, 1);
+        if (luaL_loadbufferx(L_, line, std::strlen(line), "=repl", "t") != LUA_OK) {
+            const char* m = lua_tostring(L_, -1);
+            print("! ", 2);
+            print(m ? m : "syntax error", uint32_t(std::strlen(m ? m : "syntax error")));
+            printEnd();
+            lua_pop(L_, 1);
+            return false;
+        }
+    }
+    // run in the REPL environment (param ids as names, the globals behind them)
+    lua_getfield(L_, LUA_REGISTRYINDEX, "plat.host");
+    if (lua_istable(L_, -1)) {
+        lua_getfield(L_, -1, "repl_env");
+        if (lua_istable(L_, -1)) lua_setupvalue(L_, -3, 1);
+        else lua_pop(L_, 1);
+    }
+    lua_pop(L_, 1);
+    // results printed through print(...)
+    lua_getglobal(L_, "print");
+    lua_insert(L_, -2);
+    lua_pushcfunction(L_, [](lua_State* L) -> int {
+        // stack: print, chunk -> call the chunk, then print its results (if any)
+        const int top0 = lua_gettop(L);
+        lua_call(L, 0, LUA_MULTRET);
+        const int n = lua_gettop(L) - top0 + 1;
+        if (n > 0) {
+            lua_pushvalue(L, top0 - 1);   // print
+            lua_insert(L, -n - 1);
+            lua_call(L, n, 0);
+        }
+        return 0;
+    });
+    lua_insert(L_, -3);
+    return call(2, cfg_.callInsnLimit, false);
 }
 
 bool LuaSession::callGlobal(const char* fn, int nargs) {
@@ -982,7 +1365,7 @@ bool LuaSession::callGlobal(const char* fn, int nargs) {
         return false;
     }
     if (nargs) lua_insert(L_, -1 - nargs);
-    return call(nargs, cfg_.callInsnLimit);
+    return call(nargs, cfg_.callInsnLimit, false);
 }
 
 bool LuaSession::open(Pool& pool, lab::Context& ctx, Engine& engine, const char* scriptPath, const char* name,
@@ -994,6 +1377,13 @@ bool LuaSession::open(Pool& pool, lab::Context& ctx, Engine& engine, const char*
     failed_ = false;
     error_[0] = 0;
     consoleN_ = consoleCol_ = 0;
+    nPages_ = 0;
+    nModSlots_ = 0;
+    std::memset(enumBits_, 0, sizeof enumBits_);
+    errInWindow_ = errorsTotal_ = 0;
+    errWindowStart_ = lastErrorMs_ = lastPollMs_ = 0;
+    lastError_[0] = 0;
+    modSlots_ = static_cast<float*>(pool.alloc(sizeof(float) * kMaxSources, 16));
     nTimed_ = 0;
     gridColor = 0x40C0FF;
     lab::copyStr(name_, sizeof name_, name);
@@ -1131,7 +1521,7 @@ void LuaSession::save() {
     lua_getfield(L_, LUA_REGISTRYINDEX, "plat.host");
     lua_getfield(L_, -1, "save");
     lua_remove(L_, -2);
-    call(0, cfg_.callInsnLimit);
+    call(0, cfg_.callInsnLimit, false);
 }
 
 void LuaSession::commit() {
@@ -1176,7 +1566,7 @@ void LuaSession::runClock() {
     const double look = snapBeat_ + snapBps_ * 44100.0 * 0.06;
     lua_getfield(L_, LUA_REGISTRYINDEX, "plat.clock_tick");
     lua_pushnumber(L_, lua_Number(look));
-    call(1, cfg_.callInsnLimit);
+    call(1, cfg_.callInsnLimit, false);
 }
 
 void LuaSession::update(uint32_t ms) {
@@ -1186,11 +1576,20 @@ void LuaSession::update(uint32_t ms) {
     if (snapEpoch_ != oldEpoch) {   // transport restarted: every clock coroutine resumes at the new beat
         lua_getfield(L_, LUA_REGISTRYINDEX, "plat.clock_rebase");
         lua_pushnumber(L_, lua_Number(snapBeat_));
-        call(1, cfg_.callInsnLimit);
+        call(1, cfg_.callInsnLimit, false);
         nTimed_ = 0;
     }
     if (running()) runClock();
     if (running()) flushMidi();
+    // params changed by the LABKIT views (pads, MAP, macros, routes, MIDI learn)
+    // and the script's own mod sources: ~100 times a second
+    if (running() && ms - lastPollMs_ >= 10) {
+        lastPollMs_ = ms;
+        lua_getfield(L_, LUA_REGISTRYINDEX, "plat.host");
+        lua_getfield(L_, -1, "poll");
+        lua_remove(L_, -2);
+        call(0, cfg_.callInsnLimit, false);
+    }
     // redraw at the script's frame rate (or when asked)
     if (running() && hasRedraw_) {
         const bool due = fps > 0.0f && float(ms - lastRedrawMs_) >= 1000.0f / fps;
@@ -1208,31 +1607,11 @@ void LuaSession::update(uint32_t ms) {
 
 void LuaSession::event(const lab::Event& e) {
     if (!running()) return;
-    if (paramsOpen_) {
-        const int n = paramCount();
-        int delta = 0;
-        if (e.type == lab::Event::kPress) {
-            if (e.id == lab::btn::Up && paramSel_ > 0) --paramSel_;
-            if (e.id == lab::btn::Down && paramSel_ + 1 < n) ++paramSel_;
-            if (e.id == lab::btn::Left) delta = -1;
-            if (e.id == lab::btn::Right || e.id == lab::btn::EncPush) delta = 1;
-        }
-        if (e.type == lab::Event::kEncoder) delta = e.delta;
-        if (delta && n) {
-            if (e.shift) delta *= 10;
-            lua_getfield(L_, LUA_REGISTRYINDEX, "plat.host");
-            lua_getfield(L_, -1, "param_delta");
-            lua_remove(L_, -2);
-            lua_pushinteger(L_, paramSel_ + 1);
-            lua_pushinteger(L_, delta);
-            call(2, cfg_.callInsnLimit);
-        }
-        return;
-    }
     switch (e.type) {
         case lab::Event::kPress:
         case lab::Event::kRelease:
         case lab::Event::kHold:
+            if (keyName(e.id)[0] == '?') break;   // not a key of the Tracker's matrix
             lua_pushstring(L_, keyName(e.id));
             lua_pushinteger(L_, e.type == lab::Event::kPress ? 1 : (e.type == lab::Event::kHold ? 2 : 0));
             lua_pushboolean(L_, e.shift);
@@ -1279,7 +1658,7 @@ void LuaSession::midi(const lab::MidiMsg& m) {
     lua_rawseti(L_, -2, 2);
     lua_pushinteger(L_, m.d2);
     lua_rawseti(L_, -2, 3);
-    call(1, cfg_.callInsnLimit);
+    call(1, cfg_.callInsnLimit, false);
 }
 
 void LuaSession::transport(bool playing) {
@@ -1290,87 +1669,14 @@ void LuaSession::transport(bool playing) {
     if (lua_istable(L_, -1)) {
         lua_getfield(L_, -1, playing ? "start" : "stop");
         lua_remove(L_, -2);
-        if (lua_isfunction(L_, -1)) call(0, cfg_.callInsnLimit);
+        if (lua_isfunction(L_, -1)) call(0, cfg_.callInsnLimit, false);
         else lua_pop(L_, 1);
     } else {
         lua_pop(L_, 1);
     }
 }
 
-int LuaSession::paramCount() {
-    if (!running()) return 0;
-    lua_getfield(L_, LUA_REGISTRYINDEX, "plat.host");
-    lua_getfield(L_, -1, "param_count");
-    lua_remove(L_, -2);
-    if (lua_pcall(L_, 0, 1, 0) != LUA_OK) {
-        lua_pop(L_, 1);
-        return 0;
-    }
-    const int n = int(lua_tointeger(L_, -1));
-    lua_pop(L_, 1);
-    return n;
-}
-
-void LuaSession::toggleParams() {
-    paramsOpen_ = !paramsOpen_;
-    const int n = paramCount();
-    if (paramSel_ >= n) paramSel_ = n ? n - 1 : 0;
-}
-
 void LuaSession::draw(BudgetCanvas& c) {
-    if (paramsOpen_ && running()) {
-        // params page
-        c.color(0x0A0E14);
-        c.fill(0, 30, 800, 420);
-        c.color(0x40C0FF);
-        c.text(20, 52, lab::font::kLarge, "PARAMS", lab::Canvas::kCenterY);
-        c.color(0x808890);
-        c.text(780, 52, lab::font::kSmall, name_, lab::Canvas::kCenterY | lab::Canvas::kRight);
-        const int n = paramCount();
-        if (!n) {
-            c.color(0x808890);
-            c.text(400, 220, lab::font::kBody, "This script has no params", lab::Canvas::kCenter);
-            return;
-        }
-        const int vis = 11;
-        int top = paramSel_ - vis / 2;
-        if (top > n - vis) top = n - vis;
-        if (top < 0) top = 0;
-        lua_getfield(L_, LUA_REGISTRYINDEX, "plat.host");
-        lua_getfield(L_, -1, "param_row");
-        lua_remove(L_, -2);
-        for (int i = top; i < n && i < top + vis; ++i) {
-            const int y = 76 + (i - top) * 32;
-            lua_pushvalue(L_, -1);
-            lua_pushinteger(L_, i + 1);
-            if (lua_pcall(L_, 1, 3, 0) != LUA_OK) {
-                lua_pop(L_, 1);
-                break;
-            }
-            const char* label = lua_tostring(L_, -3);
-            const char* val = lua_tostring(L_, -2);
-            const char* kind = lua_tostring(L_, -1);
-            const bool sep = kind && !std::strcmp(kind, "separator");
-            if (i == paramSel_) {
-                c.color(0x18222E);
-                c.fill(16, y, 768, 30);
-                c.color(0x40C0FF);
-                c.fill(16, y, 4, 30);
-            }
-            c.color(sep ? 0xFF6F9F : 0xE8ECF0);
-            c.text(sep ? 30 : 34, y + 15, lab::font::kBody, label ? label : "", lab::Canvas::kCenterY);
-            if (!sep) {
-                c.color(i == paramSel_ ? 0x40C0FF : 0xB0B8C0);
-                c.text(764, y + 15, lab::font::kBody, val ? val : "", lab::Canvas::kCenterY | lab::Canvas::kRight);
-            }
-            lua_pop(L_, 3);
-        }
-        lua_pop(L_, 1);
-        c.color(0x606870);
-        c.text(400, 438, lab::font::kTiny, "Up/Down: param   Encoder, Left/Right: value (Shift x10)   Shift+Aux: close",
-               lab::Canvas::kCenter);
-        return;
-    }
     // replay the committed list
     const DrawList& d = lists_[back_ ^ 1];
     c.color(0xFFFFFF);

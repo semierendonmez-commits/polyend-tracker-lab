@@ -36,7 +36,11 @@ All buttons except **Config** (settings), **Play** (transport) and
 F1..F8 under the screen, the module keys (InstrParams, Performance, File,
 Master, SampleLoader, SamplePlayback, SampleEditor, SampleRecorder, Song,
 Pattern), Note / Instr / Fx1 / Fx2, Copy, Insert, Delete, Rec, Shift,
-arrows, EncPush, Aux, Help. `Event::kHold` fires once after 500 ms.
+arrows. `Event::kHold` fires once after 500 ms.
+**EncPush, Aux and Help exist only on the simulator panel**: the real Tracker's
+key matrix has no such keys (`src/hal/input.cpp`), so never give them an action.
+With LABKIT v2, I.Param, Shift + I.Param, Master, Shift + Master and
+Shift + Config belong to the Shell (see `labkit/NAV.md`).
 Pads: 48, `pad = row * 12 + col`, row 0 at the top, with velocity.
 
 ## Rules

@@ -11,6 +11,7 @@
 #include <cstdint>
 
 #include "lab/lab.h"
+#include "lab/nav.h"
 #include "platform_app.h"
 #include "ws/budget_canvas.h"
 #include "ws/pool.h"
@@ -63,11 +64,25 @@ public:
     Pool* pool() { return pool_; }
     BudgetCanvas* canvas() { return canvas_; }
     void log(const char* s);
+    void noteParam() { ++params_; }
+    int paramCount() const { return params_; }
+
+    // LABKIT navigation, forwarded to the app (PlatApp nav callbacks)
+    bool hasNav() const;
+    int navPages(lab::kit::PageInfo* out, int cap);
+    int navPage() const;
+    void navGoto(int page);
+    void navFocus(int id);
+    void navParamChanged(int id);
+    void navKeys(lab::kit::NavKeys& keys);   // stations only
+    const lab::Theme* labTheme() const;      // stations only
     const char* logLine(int i) const { return log_[(logN_ - logCount() + i) % kLog]; }
     int logCount() const { return logN_ < kLog ? logN_ : kLog; }
 
 private:
     void fail(const char* msg);
+    void saveKit();
+    bool kitPath(char* out, uint32_t cap) const;
     void buildHost();
     bool loadImage(const char* path);
 
@@ -86,6 +101,7 @@ private:
     static constexpr int kLog = 6;
     char log_[kLog][80] = {};
     int logN_ = 0;
+    int params_ = 0;   // registry params the app added (its labkit.lkc is saved)
 #if !defined(__arm__)
     void* dl_ = nullptr;
     int fd_ = -1;

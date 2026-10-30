@@ -38,7 +38,7 @@ public:
             pat_[t][s] = pat_[t][s] ? 0 : 1;
         }
         if (e.type == PLAT_EV_PRESS && (e.id == PLAT_BTN_LEFT || e.id == PLAT_BTN_RIGHT)) page_ = e.id == PLAT_BTN_RIGHT;
-        if (e.type == PLAT_EV_PRESS && e.id == PLAT_BTN_ENCPUSH) host->setPlaying(host->ctx, !host->playing(host->ctx));
+        if (e.type == PLAT_EV_PRESS && e.id == PLAT_BTN_INSERT) host->setPlaying(host->ctx, !host->playing(host->ctx));
         if (e.type == PLAT_EV_ENCODER) {
             if (e.shift) {
                 float s = swing_ + float(e.delta) * 0.02f;
@@ -112,8 +112,8 @@ public:
         color(0x39E6B4);
         text(30, 34, PLAT_FONT_HUGE, "STEPSEQ");
         color(0x808890);
-        text(32, 92, PLAT_FONT_SMALL, host->playing(host->ctx) ? "playing - Play or encoder push to stop"
-                                                                : "press Play (or push the encoder)");
+        text(32, 92, PLAT_FONT_SMALL, host->playing(host->ctx) ? "playing - Play or Insert to stop"
+                                                                : "press Play (or Insert)");
         static const char* const names[kTracks] = {"KICK", "SNARE", "HAT", "OPEN"};
         const int ps = playStep_;
         for (int t = 0; t < kTracks; ++t) {

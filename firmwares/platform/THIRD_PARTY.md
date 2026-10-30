@@ -30,3 +30,10 @@ print sink) is configured from outside the Lua files, in `src/ws/lua_user.h`,
 
 `src/lab/*` (the Shell), `src/core/formats/wav.*` (WAV import for `engine.load`),
 `src/core/fastrun.h`, `src/hal/sdram_cache.*` (cache maintenance after loading code).
+
+## Station apps (release/Apps, built by `make stations`)
+
+Station `.papp` files contain the sibling workstations' own code (read from `../<fw>/src`,
+under those firmwares' licences). The TILT station (`tilt.papp`) also contains TILT's
+`src/ws/mi/` -- Mutable Instruments Plaits drum models and stmlib by Emilie Gillet, MIT
+(`../tilt/src/ws/mi/plaits/LICENSE`, `../tilt/src/ws/mi/stmlib/LICENSE`).

@@ -1,11 +1,11 @@
 -- name: Broken
 -- author: PLATFORM tests
--- desc: Fails on purpose after a moment: shows the error page
+-- desc: Fails on purpose after a moment, again and again: shows the error page
 -- icon: spark
 
 local n = 0
 function init()
-  print("broken.lua: this script calls a missing function on its 20th frame")
+  print("broken.lua: from its 20th frame on, every redraw indexes a nil value")
   screen.fps(20)
 end
 
@@ -18,5 +18,5 @@ function redraw()
   screen.font("large")
   screen.level(15)
   screen.text_center(400, 200, "frame " .. n)
-  if n == 20 then inner() end
+  if n >= 20 then inner() end   -- the crash-safe runner logs 5, stops at the 6th
 end

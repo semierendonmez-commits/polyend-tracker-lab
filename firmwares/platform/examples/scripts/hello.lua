@@ -1,10 +1,9 @@
 -- name: Hello
 -- author: PLATFORM
--- desc: Drawing demo: shapes, text, encoder colour, pads play sines
+-- desc: Drawing demo: shapes, text, a Hue param an LFO can sweep, pads play sines
 -- icon: spark
 
 local t = 0
-local hue = 0.55
 local hits = {}
 
 local function hsv(h, s, v)
@@ -24,15 +23,19 @@ function init()
     engine.voice(v, {wave = "sine", attack = 0.01, release = 0.6, amp = 0.35, send_reverb = 0.3})
   end
   engine.fx("reverb_level", 0.35)
-  print("hello from Lua " .. _VERSION)
+  -- a LABKIT param: on the PARAM pads (I.Param) and in the MAP (Master);
+  -- Shift + Master (MOD page) routes an LFO to it -- the colours then drift
+  params:add{id = "hue", name = "Hue", min = 0, max = 1, default = 0.55, page = "HELLO"}
+  params:add{id = "glow", name = "Glow", min = 0.2, max = 1, default = 0.7, page = "HELLO"}
+  print("hello from " .. _VERSION)
 end
 
 function enc(d)
-  hue = (hue + d * 0.01) % 1
+  params:delta("hue", d)
 end
 
 function key(name, z)
-  if name == "ENC" and z == 1 then hue = math.random() end
+  if name == "INSERT" and z == 1 then params:set("hue", math.random()) end
 end
 
 function pad(n, vel, z)
@@ -47,13 +50,14 @@ end
 
 function redraw()
   t = t + 1
-  local r, g, b = hsv(hue, 0.7, 1)
+  local hue, glow = params:get("hue"), params:get("glow")
+  local r, g, b = hsv(hue, 0.7, glow)
   screen.color(r, g, b)
   screen.font("huge")
   screen.text_center(400, 60, "HELLO, PLATFORM")
   screen.font("small")
   screen.level(8)
-  screen.text_center(400, 96, "turn the encoder - play the pads - hold Aux for the launcher")
+  screen.text_center(400, 96, "encoder: hue - Insert: random - pads play - hold Shift+F8: launcher")
   -- orbiting points
   local pts = {}
   for i = 0, 23 do

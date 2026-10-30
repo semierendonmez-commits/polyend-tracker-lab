@@ -16,6 +16,7 @@
 #include <cstring>
 
 #include "lab/lab.h"
+#include "lab/nav.h"
 #include "platform_app.h"
 #include "ws/lab_layout.h"
 
@@ -51,7 +52,7 @@ lab::Canvas& canvas() { return *static_cast<lab::Canvas*>(gS.host->labCanvas); }
 bool init(void*, const PlatHost* h) {
     if (!h || h->abi != PLAT_ABI_VERSION || h->size < sizeof(PlatHost)) return false;
     gS.host = h;
-    if (h->labLayout != plat::kLabLayout || !h->labShell) {
+    if (h->labLayout != plat::kKitLayout || !h->labShell) {
         h->log(h->ctx, "station: built against other lab.h sources (layout mismatch)");
         return false;
     }
@@ -77,7 +78,26 @@ bool init(void*, const PlatHost* h) {
     gS.ws = lab::createWorkstation(gS.arena);
     if (!gS.ws) return false;
     gS.ctx.theme = &gS.ws->theme();
-    return gS.ws->init(gS.ctx);
+    if (!gS.ws->init(gS.ctx)) return false;
+    // what the workstation took (tools/build_stations.sh sizes MEMKB from it)
+    char m[64];
+    const unsigned kb = unsigned(gS.arena.used() / 1024u);
+    int n = 0;
+    for (const char* p = "station: arena "; *p; ++p) m[n++] = *p;
+    char d[12];
+    int k = 0;
+    unsigned v = kb;
+    do {
+        d[k++] = char('0' + v % 10u);
+        v /= 10u;
+    } while (v && k < 10);
+    while (k) m[n++] = d[--k];
+    m[n++] = ' ';
+    m[n++] = 'K';
+    m[n++] = 'B';
+    m[n] = 0;
+    h->log(h->ctx, m);
+    return true;
 }
 
 void drawIntro(void*, uint32_t ms) { gS.ws->drawIntro(canvas(), ms); }
@@ -130,6 +150,15 @@ void close(void*) {}
 int benchScenarios(void*) { return gS.ws->benchScenarios(); }
 const char* benchName(void*, int i) { return gS.ws->benchName(i); }
 void benchSetup(void*, int i) { gS.ws->benchSetup(i); }
+// LABKIT v2: the station registered into the host's kit (ctx.params() is the
+// host Shell's registry); its pages, keys and theme go to PLATFORM's nav.
+int navPages(void*, PlatPage* out, int cap) { return gS.ws->navPages(reinterpret_cast<lab::kit::PageInfo*>(out), cap); }
+int navPage(void*) { return gS.ws->navPage(); }
+void navGoto(void*, int p) { gS.ws->navGoto(p); }
+void navFocus(void*, int id) { gS.ws->navFocus(lab::kit::ParamId(id)); }
+void navParamChanged(void*, int id) { gS.ws->navParamChanged(lab::kit::ParamId(id)); }
+void navKeys(void*, void* k) { gS.ws->navKeys(*static_cast<lab::kit::NavKeys*>(k)); }
+const void* labTheme(void*) { return &gS.ws->theme(); }
 
 }  // namespace
 
@@ -212,5 +241,12 @@ plat_app_entry(void) {
     a.benchScenarios = benchScenarios;
     a.benchName = benchName;
     a.benchSetup = benchSetup;
+    a.navPages = navPages;
+    a.navPage = navPage;
+    a.navGoto = navGoto;
+    a.navFocus = navFocus;
+    a.navParamChanged = navParamChanged;
+    a.navKeys = navKeys;
+    a.labTheme = labTheme;
     return &a;
 }

@@ -25,7 +25,8 @@ function init()
   engine.voice(4, {wave = "fm", env_mode = "perc", decay = 0.25, fm_ratio = 3.5, fm_index = 4, amp = 0.35, send_delay = 0.2})
   engine.fx("delay_time", 0.33)
   for i = 1, 4 do rebuild(i) end
-  params:add_toggle("follow", "only while playing", false)
+  params:add_toggle("follow", "only while playing", false, "EUCLID")
+  params:add{id = "accent", name = "accent", min = 0.3, max = 1, default = 0.75, page = "EUCLID"}
   clock.run(function()
     while true do
       clock.sync(1 / 4)
@@ -33,7 +34,7 @@ function init()
         tick = tick + 1
         for i, t in ipairs(tr) do
           local s = (tick - 1) % t.steps + 1
-          if pat[i][s] then engine.note(i, t.note, (s == 1) and 1 or 0.75) end
+          if pat[i][s] then engine.note(i, t.note, (s == 1) and 1 or params:get("accent")) end
         end
         screen.dirty()
       end

@@ -48,13 +48,13 @@ local function noteOff(n)
 end
 
 function init()
-  params:add_option("mode", "mode", modes, 1)
-  params:add_option("rate", "rate", rateNames, 4)
-  params:add_number("octaves", "octaves", 1, 4, 2)
-  params:add_control("gate", "gate", 0.05, 1, 0.5, 0.05)
-  params:add_number("channel", "MIDI out channel", 1, 16, 1)
-  params:add_toggle("latch", "latch", false)
-  params:add_number("base", "pad base note", 24, 72, 48, function(v) return music.note_name(v) end)
+  params:add_option("mode", "mode", modes, 1, "ARP")
+  params:add_option("rate", "rate", rateNames, 4, "ARP")
+  params:add_number("octaves", "octaves", 1, 4, 2, nil, nil, "ARP")
+  params:add_control("gate", "gate", 0.05, 1, 0.5, 0.05, nil, "ARP")   -- an LFO on gate: breathing notes
+  params:add_toggle("latch", "latch", false, "ARP")
+  params:add_number("channel", "MIDI out channel", 1, 16, 1, nil, nil, "SETUP")
+  params:add_number("base", "pad base note", 24, 72, 48, function(v) return music.note_name(v) end, nil, "SETUP")
   engine.voice(1, {wave = "square", pw = 0.3, env_mode = "perc", decay = 0.3, cutoff = 1800, fenv = 2, res = 2,
     amp = 0.35, send_delay = 0.3})
   engine.fx("delay_time", 0.25)
@@ -148,7 +148,7 @@ function redraw()
   flash = math.max(0, flash - 1)
   screen.font("tiny")
   screen.level(6)
-  screen.text(24, 456, "F1 mode  F2 octaves  F3 latch  enc: rate  Delete: release all  Shift+Aux: params")
+  screen.text(24, 456, "F1 mode  F2 octaves  F3 latch  enc: rate  Delete: release all  I.Param: params")
   local base = params:get("base")
   for i = 1, 48 do
     local note = base + (i - 1) % 12 + 12 * (3 - (i - 1) // 12)
@@ -157,6 +157,168 @@ function redraw()
     if held[note] then grid.led(x, y, 255, 179, 71)
     elseif note == last then grid.led(x, y, 57, 230, 180)
     else grid.led(x, y, black and 4 or 14, black and 6 or 20, black and 10 or 28) end
+  end
+end
+)PLATLUA"},
+    {"datum.lua", R"PLATLUA(-- name: Datum
+-- author: PLATFORM
+-- desc: Data as sound, after Ikeda: a bit register, sine pulses, clicks, a barcode
+-- icon: grid
+
+-- A 48-bit register (the pads) is read one bit per step: a 1 clicks. A 16-bit
+-- LFSR picks the sine pulses' frequencies and mutates the register once per
+-- cycle. Everything is white on black; the only colour is the cursor.
+
+local reg = {}                 -- 48 bits, 0 / 1
+local pos = 0
+local lfsr = 0xACE1
+local hist = {}                -- the last 96 steps, for the barcode
+local ones = 0                 -- ones in the last 16 steps
+local frame = 0
+local rates = {1 / 8, 1 / 16, 1 / 32}
+
+local function shift()
+  -- Galois LFSR x^16 + x^14 + x^13 + x^11 + 1
+  local lsb = lfsr & 1
+  lfsr = lfsr >> 1
+  if lsb == 1 then lfsr = lfsr ~ 0xB400 end
+  return lfsr
+end
+
+local function hex(v, n)
+  return string.format("%0" .. n .. "X", v)
+end
+
+function init()
+  screen.fps(30)
+  for i = 1, 48 do reg[i] = (i % 3 == 1 or i % 7 == 0) and 1 or 0 end
+  params:add_option("rate", "Rate", {"1/32", "1/64", "1/128"}, 2, "DATA")
+  params:add_number("length", "Length", 8, 48, 48, nil, "bits", "DATA")
+  params:add{id = "density", name = "Density", min = 0, max = 1, default = 0.85, page = "DATA"}
+  params:add{id = "mutate", name = "Mutation", min = 0, max = 1, default = 0.15, page = "DATA"}
+  params:add{id = "pitch", name = "Pulse pitch", min = 1000, max = 16000, default = 9600, unit = "Hz", page = "TONE"}
+  params:add{id = "click", name = "Click decay", min = 0.001, max = 0.04, default = 0.004, unit = "s", page = "TONE",
+             action = function(v) engine.set(1, "decay", v) end}
+  params:add{id = "pulse", name = "Pulse level", min = 0, max = 1, default = 0.35, page = "TONE",
+             action = function(v) engine.set(2, "amp", v * 0.5) end}
+  params:add{id = "sub", name = "Sub level", min = 0, max = 1, default = 0.4, page = "TONE",
+             action = function(v) engine.set(3, "amp", v * 0.7) end}
+  -- how many ones went by: an envelope for anything on the MOD page
+  mod.source("BITS", {fn = function() return ones / 16 end})
+  engine.voice(1, {wave = "click", env_mode = "perc", attack = 0, decay = 0.004, amp = 0.9, ftype = "off"})
+  engine.voice(2, {wave = "sine", env_mode = "perc", attack = 0, decay = 0.012, amp = 0.18, ftype = "off"})
+  engine.voice(3, {wave = "sine", env_mode = "perc", attack = 0.001, decay = 0.09, amp = 0.28, ftype = "off"})
+  engine.voice(4, {wave = "noise", env_mode = "perc", attack = 0, decay = 0.002, ftype = "hp", cutoff = 9000, amp = 0.25})
+  engine.fx("reverb_level", 0)
+  engine.fx("delay_level", 0)
+  clock.run(function()
+    while true do
+      clock.sync(rates[params:get("rate")])
+      local len = math.floor(params:get("length"))
+      pos = pos % len + 1
+      local bit = reg[pos]
+      local r = shift()
+      if bit == 1 and math.random() < params:get("density") then
+        engine.note(1, 60, 1)
+        if (r & 7) == 0 then engine.note(4, 60, 1) end
+      end
+      -- every 4th step: a sine pulse at a pitch the LFSR picks from 4 ratios
+      if pos % 4 == 1 then
+        local ratios = {1, 1.5, 2, 0.75}
+        engine.hz(2, params:get("pitch") * ratios[(r >> 4) % 4 + 1], 1)
+      end
+      if pos == 1 then engine.hz(3, 55 * (1 + (r >> 8) % 3), 1) end
+      -- once per cycle the register drifts
+      if pos == len and math.random() < params:get("mutate") then
+        local i = r % len + 1
+        reg[i] = 1 - reg[i]
+      end
+      hist[#hist + 1] = bit
+      if #hist > 96 then table.remove(hist, 1) end
+      ones = 0
+      for k = math.max(1, #hist - 15), #hist do ones = ones + hist[k] end
+    end
+  end)
+end
+
+function pad(n, vel, z)
+  if z == 1 then reg[n] = 1 - reg[n] end
+end
+
+function key(name, z)
+  if z ~= 1 then return end
+  if name == "DELETE" then for i = 1, 48 do reg[i] = 0 end end
+  if name == "INSERT" then for i = 1, 48 do reg[i] = math.random() < 0.4 and 1 or 0 end end
+  if name == "F1" then params:delta("rate", 1) end
+end
+
+function enc(d, shift_)
+  if shift_ then params:delta("pitch", d) else params:delta("density", d) end
+end
+
+function redraw()
+  frame = frame + 1
+  local len = math.floor(params:get("length"))
+  -- header
+  screen.font("title")
+  screen.color(0xFFFFFF)
+  screen.text(30, 34, "DATUM")
+  screen.font("small")
+  screen.level(10)
+  screen.text(190, 44, string.format("lfsr 0x%s   pos %02d/%02d   %s   %.0f Hz", hex(lfsr, 4), pos, len,
+    params:string("rate"), params:get("pitch")))
+  -- the barcode: one bar per recent step (a 1 is white)
+  local bars = {}
+  for i, b in ipairs(hist) do
+    if b == 1 then
+      local x = 30 + (i - 1) * 7.6
+      bars[#bars + 1] = x; bars[#bars + 1] = 74; bars[#bars + 1] = x + 4; bars[#bars + 1] = 214
+    end
+  end
+  screen.color(0xFFFFFF)
+  screen.rects(bars)
+  -- the register as 48 cells, the read head in red
+  local cells, offs = {}, {}
+  for i = 1, 48 do
+    local x, y = 30 + ((i - 1) % 24) * 30, 238 + ((i - 1) // 24) * 30
+    local t = reg[i] == 1 and cells or offs
+    t[#t + 1] = x; t[#t + 1] = y; t[#t + 1] = x + 24; t[#t + 1] = y + 24
+  end
+  screen.color(0xFFFFFF)
+  screen.rects(cells)
+  screen.color(0x262626)
+  screen.rects(offs)
+  local cx, cy = 30 + ((pos - 1) % 24) * 30, 238 + ((pos - 1) // 24) * 30
+  screen.color(0xFF2A2A)
+  screen.frame(cx - 3, cy - 3, 30, 30)
+  -- a hex dump of the register, 3 words of 16 bits
+  screen.font("tiny")
+  screen.level(12)
+  for w = 0, 2 do
+    local v = 0
+    for b = 1, 16 do v = v * 2 + reg[w * 16 + b] end
+    screen.text(30 + w * 120, 316, "0x" .. hex(v, 4))
+  end
+  -- a scope of the last 64 LFSR states as a staircase
+  local pts = {}
+  local s = lfsr
+  for i = 0, 63 do
+    pts[#pts + 1] = 420 + i * 5.6
+    pts[#pts + 1] = 384 - ((s >> (i % 12)) & 15) * 4
+  end
+  screen.level(8)
+  screen.polyline(pts, 1)
+  screen.level(5)
+  screen.text(30, 352, string.format("ones %2d/16   density %.2f   mutation %.2f", ones, params:get("density"),
+    params:get("mutate")))
+  screen.text(30, 432, "pads: bits   Insert: random   Delete: clear   F1: rate   enc: density (Shift: pitch)")
+  -- pads mirror the register, the head lit
+  for i = 1, 48 do
+    local x, y = (i - 1) % 12 + 1, (i - 1) // 12 + 1
+    if i == pos then grid.led(x, y, 255, 40, 40)
+    elseif i > len then grid.led(x, y, 2, 2, 2)
+    elseif reg[i] == 1 then grid.led(x, y, 200, 200, 200)
+    else grid.led(x, y, 10, 10, 10) end
   end
 end
 )PLATLUA"},
@@ -174,10 +336,10 @@ local function rebuild()
 end
 
 function init()
-  params:add_number("root", "root", 36, 60, 45, function(v) return music.note_name(v) end)
-  params:add_option("scale", "scale", {"minor pent", "dorian", "lydian", "hijaz", "whole"}, 1)
-  params:add_control("density", "density", 0.1, 1, 0.45, 0.05)
-  params:add_control("space", "space", 0, 1, 0.8, 0.05)
+  params:add_number("root", "root", 36, 60, 45, function(v) return music.note_name(v) end, nil, "DRIFT")
+  params:add_option("scale", "scale", {"minor pent", "dorian", "lydian", "hijaz", "whole"}, 1, "DRIFT")
+  params:add_control("density", "density", 0.1, 1, 0.45, 0.05, nil, "DRIFT")
+  params:add_control("space", "space", 0, 1, 0.8, 0.05, nil, "DRIFT")
   params:set_action("root", rebuild)
   params:set_action("scale", rebuild)
   params:set_action("space", function(v)
@@ -281,7 +443,8 @@ function init()
   engine.voice(4, {wave = "fm", env_mode = "perc", decay = 0.25, fm_ratio = 3.5, fm_index = 4, amp = 0.35, send_delay = 0.2})
   engine.fx("delay_time", 0.33)
   for i = 1, 4 do rebuild(i) end
-  params:add_toggle("follow", "only while playing", false)
+  params:add_toggle("follow", "only while playing", false, "EUCLID")
+  params:add{id = "accent", name = "accent", min = 0.3, max = 1, default = 0.75, page = "EUCLID"}
   clock.run(function()
     while true do
       clock.sync(1 / 4)
@@ -289,7 +452,7 @@ function init()
         tick = tick + 1
         for i, t in ipairs(tr) do
           local s = (tick - 1) % t.steps + 1
-          if pat[i][s] then engine.note(i, t.note, (s == 1) and 1 or 0.75) end
+          if pat[i][s] then engine.note(i, t.note, (s == 1) and 1 or params:get("accent")) end
         end
         screen.dirty()
       end
@@ -374,11 +537,10 @@ end
 )PLATLUA"},
     {"hello.lua", R"PLATLUA(-- name: Hello
 -- author: PLATFORM
--- desc: Drawing demo: shapes, text, encoder colour, pads play sines
+-- desc: Drawing demo: shapes, text, a Hue param an LFO can sweep, pads play sines
 -- icon: spark
 
 local t = 0
-local hue = 0.55
 local hits = {}
 
 local function hsv(h, s, v)
@@ -398,15 +560,19 @@ function init()
     engine.voice(v, {wave = "sine", attack = 0.01, release = 0.6, amp = 0.35, send_reverb = 0.3})
   end
   engine.fx("reverb_level", 0.35)
-  print("hello from Lua " .. _VERSION)
+  -- a LABKIT param: on the PARAM pads (I.Param) and in the MAP (Master);
+  -- Shift + Master (MOD page) routes an LFO to it -- the colours then drift
+  params:add{id = "hue", name = "Hue", min = 0, max = 1, default = 0.55, page = "HELLO"}
+  params:add{id = "glow", name = "Glow", min = 0.2, max = 1, default = 0.7, page = "HELLO"}
+  print("hello from " .. _VERSION)
 end
 
 function enc(d)
-  hue = (hue + d * 0.01) % 1
+  params:delta("hue", d)
 end
 
 function key(name, z)
-  if name == "ENC" and z == 1 then hue = math.random() end
+  if name == "INSERT" and z == 1 then params:set("hue", math.random()) end
 end
 
 function pad(n, vel, z)
@@ -421,13 +587,14 @@ end
 
 function redraw()
   t = t + 1
-  local r, g, b = hsv(hue, 0.7, 1)
+  local hue, glow = params:get("hue"), params:get("glow")
+  local r, g, b = hsv(hue, 0.7, glow)
   screen.color(r, g, b)
   screen.font("huge")
   screen.text_center(400, 60, "HELLO, PLATFORM")
   screen.font("small")
   screen.level(8)
-  screen.text_center(400, 96, "turn the encoder - play the pads - hold Aux for the launcher")
+  screen.text_center(400, 96, "encoder: hue - Insert: random - pads play - hold Shift+F8: launcher")
   -- orbiting points
   local pts = {}
   for i = 0, 23 do
@@ -464,6 +631,482 @@ function redraw()
   end
 end
 )PLATLUA"},
+    {"pinball.lua", R"PLATLUA(-- name: Pinball
+-- author: PLATFORM
+-- desc: A ball on a table of bumpers; every hit walks a Markov chain of notes
+-- icon: spark
+
+-- The table runs on the clock (four physics steps per 16th note), so every
+-- hit lands on the grid. A hit advances an 8-state Markov chain over the
+-- scale: the next degree is drawn from the current state's row of weights.
+-- Pads, rows 1-2: teach / forget transitions; rows 3-4: place bumpers.
+
+local W, H = 470, 360          -- the table, top-left at (X0, Y0)
+local X0, Y0 = 24, 44
+local BR = 7                   -- ball radius
+local DEG = 8
+local scaleNames = {"minor_pent", "dorian", "hijaz", "lydian", "whole"}
+
+local ball = {x = 60, y = 40, vx = 3.2, vy = 0}
+local bumper = {}              -- bumper[row][col] = flash level (0 = on, nil = none)
+local M = {}                   -- M[i][j]: weight of the step from degree i to j
+local state = 1
+local trail = {}
+local hits, lastName = 0, "-"
+
+local function bumperPos(col, row)
+  return X0 + 30 + (col - 1) * (W - 60) / 11, Y0 + 130 + (row - 1) * 110
+end
+
+local function resetChain()
+  for i = 1, DEG do
+    M[i] = {}
+    for j = 1, DEG do
+      local d = math.abs(i - j)
+      M[i][j] = (d == 0) and 0.25 or 1 / d   -- steps are likelier than leaps
+    end
+  end
+end
+
+-- the next degree: the row's weights, flattened towards uniform by temperature
+local function nextState()
+  local temp = params:get("temperature")
+  local row, total = M[state], 0
+  for j = 1, DEG do total = total + row[j] * (1 - temp) + temp end
+  local r = math.random() * total
+  for j = 1, DEG do
+    r = r - (row[j] * (1 - temp) + temp)
+    if r <= 0 then state = j return j end
+  end
+  state = DEG
+  return DEG
+end
+
+local function noteOf(deg)
+  local s = music.scale(params:get("root"), scaleNames[params:get("scale")], DEG)
+  return s[deg]
+end
+
+local function play(kind, speed)
+  local n = noteOf(nextState())
+  local vel = math.min(1, 0.45 + speed * 0.07)
+  if kind == "bumper" then engine.note(1, n + 12, vel)
+  elseif kind == "wall" then engine.note(2, n, vel * 0.8)
+  else engine.note(3, n - 12, vel) end   -- the floor (the flipper)
+  lastName = music.note_name(n)
+  hits = hits + 1
+end
+
+local function launch()
+  ball.x, ball.y = 40 + math.random() * (W - 80), 30
+  ball.vx, ball.vy = (math.random() < 0.5 and -1 or 1) * (2.5 + math.random() * 2), 0
+end
+
+-- one physics step; returns the kind of the first thing hit (or nil) and the speed
+local function step()
+  local g, bounce, sp = params:get("gravity"), params:get("bounce"), params:get("speed")
+  ball.vy = ball.vy + g * sp
+  ball.x = ball.x + ball.vx * sp
+  ball.y = ball.y + ball.vy * sp
+  local what
+  if ball.x < BR then ball.x = BR; ball.vx = math.abs(ball.vx) * bounce; what = "wall" end
+  if ball.x > W - BR then ball.x = W - BR; ball.vx = -math.abs(ball.vx) * bounce; what = "wall" end
+  if ball.y < BR then ball.y = BR; ball.vy = math.abs(ball.vy) * bounce; what = "wall" end
+  if ball.y > H - BR then
+    -- the flipper: always kicks the ball back up, a little sideways
+    ball.y = H - BR
+    ball.vy = -(5.5 + math.random() * 3)
+    ball.vx = ball.vx + (math.random() - 0.5) * 2
+    what = "floor"
+  end
+  for row = 1, 2 do
+    for col = 1, 12 do
+      if bumper[row][col] then
+        local bx, by = bumperPos(col, row)
+        bx, by = bx - X0, by - Y0
+        local dx, dy = ball.x - bx, ball.y - by
+        local d2, rr = dx * dx + dy * dy, BR + 11
+        if d2 < rr * rr and d2 > 0.01 then
+          local d = math.sqrt(d2)
+          local nx, ny = dx / d, dy / d
+          local dot = ball.vx * nx + ball.vy * ny
+          if dot < 0 then
+            ball.vx = (ball.vx - 2 * dot * nx) * 1.08   -- reflect, with a pop
+            ball.vy = (ball.vy - 2 * dot * ny) * 1.08
+          end
+          ball.x, ball.y = bx + nx * rr, by + ny * rr
+          bumper[row][col] = 8
+          what = "bumper"
+        end
+      end
+    end
+  end
+  local v = math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy)
+  if v > 10 then ball.vx, ball.vy, v = ball.vx * 10 / v, ball.vy * 10 / v, 10 end
+  return what, v
+end
+
+function init()
+  screen.fps(25)
+  params:add{id = "gravity", name = "Gravity", min = 0.05, max = 0.6, default = 0.22, page = "TABLE"}
+  params:add{id = "bounce", name = "Bounce", min = 0.5, max = 1, default = 0.92, page = "TABLE"}
+  params:add{id = "speed", name = "Speed", min = 0.4, max = 2, default = 1, page = "TABLE"}
+  params:add{id = "temperature", name = "Temperature", min = 0, max = 1, default = 0.2, page = "CHAIN"}
+  params:add_number("root", "Root", 36, 60, 48, function(v) return music.note_name(v) end, nil, "CHAIN")
+  params:add_option("scale", "Scale", {"minor pent", "dorian", "hijaz", "lydian", "whole"}, 1, "CHAIN")
+  params:add{id = "decay", name = "Decay", min = 0.05, max = 1.5, default = 0.35, unit = "s", page = "SOUND",
+             action = function(v) for i = 1, 3 do engine.set(i, "decay", v * (i == 3 and 1.6 or 1)) end end}
+  params:add{id = "bright", name = "Brightness", min = 300, max = 8000, default = 2400, unit = "Hz", page = "SOUND",
+             action = function(v) for i = 1, 3 do engine.set(i, "cutoff", v) end end}
+  -- the ball as two modulation sources: route them on the MOD page (Shift + Master)
+  mod.source("BALL_X", {fn = function() return ball.x / W end})
+  mod.source("BALL_Y", {fn = function() return 1 - ball.y / H end})
+  engine.voice(1, {wave = "fm", fm_ratio = 3.01, fm_index = 1.5, env_mode = "perc", decay = 0.35, amp = 0.5,
+                   send_reverb = 0.35, send_delay = 0.2, pan = 0.3})
+  engine.voice(2, {wave = "tri", env_mode = "perc", decay = 0.35, amp = 0.45, send_reverb = 0.3, pan = -0.3})
+  engine.voice(3, {wave = "saw", env_mode = "perc", decay = 0.5, cutoff = 900, res = 2, fenv = 2, amp = 0.4})
+  engine.fx("reverb_size", 0.7)
+  engine.fx("delay_time", 0.375)
+  resetChain()
+  for row = 1, 2 do bumper[row] = {} end
+  for _, c in ipairs({3, 6, 9}) do bumper[1][c] = 0 end
+  for _, c in ipairs({2, 5, 8, 11}) do bumper[2][c] = 0 end
+  clock.run(function()
+    while true do
+      clock.sync(1 / 16)
+      local first, fv
+      for _ = 1, 4 do
+        local what, v = step()
+        if what and not first then first, fv = what, v end
+      end
+      if first then play(first, fv) end
+      trail[#trail + 1] = {ball.x, ball.y}
+      if #trail > 24 then table.remove(trail, 1) end
+    end
+  end)
+end
+
+function pad(n, vel, z)
+  if z ~= 1 then return end
+  local col, row = (n - 1) % 12 + 1, (n - 1) // 12 + 1
+  if row == 1 and col <= DEG then
+    -- teach: the current state likes this degree more; play it now
+    M[state][col] = M[state][col] + 1
+    state = col
+    engine.note(1, noteOf(col) + 12, vel / 127)
+  elseif row == 2 and col <= DEG then
+    for i = 1, DEG do M[i][col] = M[i][col] * 0.5 end   -- forget: every way into it halves
+  elseif row == 1 and col == 12 then launch()
+  elseif row == 2 and col == 12 then resetChain()
+  elseif row >= 3 then
+    local r = row - 2
+    if bumper[r][col] then bumper[r][col] = nil else bumper[r][col] = 0 end
+  end
+end
+
+function key(name, z)
+  if z ~= 1 then return end
+  if name == "INSERT" then launch() end
+  if name == "DELETE" then resetChain() end
+end
+
+function enc(d) params:delta("temperature", d) end
+
+function redraw()
+  -- table
+  screen.level(3)
+  screen.frame(X0, Y0, W, H)
+  -- bumpers: two batches of dots (lit ones bigger)
+  local on, lit = {}, {}
+  for row = 1, 2 do
+    for col = 1, 12 do
+      local f = bumper[row][col]
+      if f then
+        local x, y = bumperPos(col, row)
+        local t = (f > 0) and lit or on
+        t[#t + 1] = x
+        t[#t + 1] = y
+        if f > 0 then bumper[row][col] = f - 1 end
+      end
+    end
+  end
+  screen.color(0x3A6E8C)
+  screen.points(on, 18)
+  screen.color(0xFFB347)
+  screen.points(lit, 26)
+  -- trail and ball
+  if #trail > 1 then
+    local pts = {}
+    for _, p in ipairs(trail) do pts[#pts + 1] = X0 + p[1]; pts[#pts + 1] = Y0 + p[2] end
+    screen.color(0x1F7A63)
+    screen.polyline(pts, 2)
+  end
+  screen.color(0x39E6B4)
+  screen.circle(X0 + ball.x, Y0 + ball.y, BR)
+  -- the chain: an 8 x 8 heat map, the current row framed
+  local mx, my, cs = 540, 70, 26
+  local bins = {{}, {}, {}, {}}
+  for i = 1, DEG do
+    local rowMax = 0
+    for j = 1, DEG do rowMax = math.max(rowMax, M[i][j]) end
+    for j = 1, DEG do
+      local k = math.min(4, 1 + math.floor(M[i][j] / rowMax * 3.99))
+      local b = bins[k]
+      local x, y = mx + (j - 1) * cs, my + (i - 1) * cs
+      b[#b + 1] = x; b[#b + 1] = y; b[#b + 1] = x + cs - 3; b[#b + 1] = y + cs - 3
+    end
+  end
+  local shades = {0x14202A, 0x1E4A5C, 0x2F8FA0, 0x8FF0E0}
+  for k = 1, 4 do screen.color(shades[k]); screen.rects(bins[k]) end
+  screen.color(0xFFB347)
+  screen.frame(mx - 2, my + (state - 1) * cs - 2, DEG * cs + 1, cs + 1)
+  screen.font("small")
+  screen.level(9)
+  screen.text(mx, my - 26, "MARKOV  from -> to")
+  screen.font("large")
+  screen.color(0xE8ECF0)
+  screen.text(mx, my + DEG * cs + 16, lastName)
+  screen.font("small")
+  screen.level(7)
+  screen.text(mx + 90, my + DEG * cs + 22, string.format("hits %d   temp %.2f", hits, params:get("temperature")))
+  screen.level(5)
+  screen.font("tiny")
+  screen.text(24, 432, "pads row 1: teach a degree   row 2: forget it   rows 3-4: bumpers   Insert: launch   Delete: reset chain")
+  -- pads
+  local row = M[state]
+  local rowMax = 0
+  for j = 1, DEG do rowMax = math.max(rowMax, row[j]) end
+  for j = 1, 12 do
+    if j <= DEG then
+      local k = row[j] / rowMax
+      if j == state then grid.led(j, 1, 255, 179, 71) else grid.led(j, 1, 20, math.floor(40 + 200 * k), math.floor(30 + 150 * k)) end
+      grid.led(j, 2, 40, 18, 18)
+    else
+      grid.led(j, 1, 0, 0, 0)
+      grid.led(j, 2, 0, 0, 0)
+    end
+    for r = 1, 2 do
+      local f = bumper[r][j]
+      if f then grid.led(j, r + 2, f > 0 and 255 or 40, f > 0 and 179 or 110, f > 0 and 71 or 140) else grid.led(j, r + 2, 4, 6, 8) end
+    end
+  end
+  grid.led(12, 1, 57, 230, 180)
+  grid.led(12, 2, 255, 77, 94)
+end
+)PLATLUA"},
+    {"seyir.lua", R"PLATLUA(-- name: Seyir
+-- author: PLATFORM
+-- desc: A makam melody walks its seyir: from the durak up to the guclu and home
+-- icon: wave
+
+-- Pitches are in 53-tone koma (1 koma = 12/53 semitone) -- engine.note takes
+-- fractional notes. A seyir is the path a makam melody takes: it opens around
+-- the durak (tonic), climbs to the guclu (dominant), lingers above it, then
+-- descends and settles on the durak with a cadence. Each phase biases a
+-- random walk over the scale; a drone holds the durak.
+
+local MAKAM = {
+  {name = "Rast", koma = {0, 9, 17, 22, 31, 40, 48, 53, 62, 70},
+   notes = {"Rast", "Dugah", "Segah", "Cargah", "Neva", "Huseyni", "Evic", "Gerdaniye", "Muhayyer", "Tiz segah"},
+   guclu = 5, root = 55},
+  {name = "Hicaz", koma = {0, 5, 17, 22, 31, 40, 48, 53, 58, 70},
+   notes = {"Dugah", "Dik kurdi", "Nim hicaz", "Neva", "Huseyni", "Evic", "Gerdaniye", "Muhayyer", "Sunbule", "Tiz hicaz"},
+   guclu = 4, root = 57},
+  {name = "Ussak", koma = {0, 8, 13, 22, 31, 35, 44, 53, 61, 66},
+   notes = {"Dugah", "Segah", "Cargah", "Neva", "Huseyni", "Acem", "Gerdaniye", "Muhayyer", "Tiz segah", "Tiz cargah"},
+   guclu = 4, root = 57},
+}
+local PHASES = {"zemin", "guclu", "meyan", "karar"}   -- open, dominant, upper, cadence
+
+local deg = 1
+local phase = 1
+local steps = 0
+local path = {}         -- the last 48 degrees
+local playing = true
+
+local function mk() return MAKAM[params:get("makam")] end
+
+local function noteOf(d)
+  local m = mk()
+  return m.root + m.koma[d] * 12 / 53
+end
+
+-- the next degree for the phase: a step mostly, a leap sometimes
+local function walk()
+  local m = mk()
+  local top = #m.koma
+  local target
+  if phase == 1 then target = math.random(1, m.guclu)
+  elseif phase == 2 then target = m.guclu + math.random(-1, 1)
+  elseif phase == 3 then target = math.random(m.guclu, top)
+  else target = 1 end
+  local d = deg
+  if target > deg then d = deg + 1 elseif target < deg then d = deg - 1
+  else d = deg + (math.random() < 0.5 and -1 or 1) end
+  if math.random() < 0.12 then d = d + (math.random() < 0.5 and -2 or 2) end
+  d = math.max(1, math.min(top, d))
+  -- phase changes: by time in the phase and by reaching its goal
+  steps = steps + 1
+  if phase == 1 and (d >= m.guclu or steps > 10) then phase, steps = 2, 0
+  elseif phase == 2 and steps > 6 then phase, steps = 3, 0
+  elseif phase == 3 and steps > 8 then phase, steps = 4, 0
+  elseif phase == 4 and d == 1 then phase, steps = 1, 0 end
+  return d
+end
+
+function init()
+  screen.fps(20)
+  params:add_option("makam", "Makam", {"Rast", "Hicaz", "Ussak"}, 1, "SEYIR")
+  params:add{id = "pace", name = "Pace", min = 0.25, max = 2, default = 1, unit = "x", page = "SEYIR"}
+  params:add{id = "ornament", name = "Ornament", min = 0, max = 1, default = 0.35, page = "SEYIR"}
+  params:add{id = "drone", name = "Drone", min = 0, max = 1, default = 0.5, page = "SEYIR",
+             action = function(v) engine.set(3, "amp", v * 0.3); engine.set(4, "amp", v * 0.16) end}
+  params:add{id = "breath", name = "Breath", min = 0, max = 1, default = 0.4, page = "TONE",
+             action = function(v) engine.set(2, "amp", v * 0.12) end}
+  params:add{id = "tone", name = "Tone", min = 400, max = 6000, default = 2200, unit = "Hz", page = "TONE",
+             action = function(v) engine.set(1, "cutoff", v); engine.set(2, "cutoff", v * 1.5) end}
+  params:add{id = "space", name = "Space", min = 0, max = 1, default = 0.6, page = "TONE",
+             action = function(v) engine.fx("reverb_level", 0.15 + v * 0.5); engine.fx("reverb_size", 0.6 + v * 0.38) end}
+  params:set_action("makam", function() deg, phase, steps = 1, 1, 0 end)
+  -- where the melody is (0 durak .. 1 top) and the seyir phase, as mod sources
+  mod.source("PITCH", {fn = function() return (deg - 1) / (#mk().koma - 1) end})
+  mod.source("PHASE", {fn = function() return (phase - 1) / 3 end})
+  -- 1 the ney-ish line, 2 its breath, 3-4 the drone (durak, and the fifth below)
+  engine.voice(1, {wave = "tri", attack = 0.06, decay = 0.4, sustain = 0.7, release = 0.35, cutoff = 2200, res = 0.8,
+                   glide = 0.05, amp = 0.5, send_reverb = 0.5, send_delay = 0.15})
+  engine.voice(2, {wave = "noise", ftype = "bp", cutoff = 3300, res = 2, attack = 0.08, release = 0.3, amp = 0.05,
+                   send_reverb = 0.5})
+  engine.voice(3, {wave = "sine", attack = 2, sustain = 1, release = 3, amp = 0.15, send_reverb = 0.3})
+  engine.voice(4, {wave = "fm", fm_ratio = 1.5, fm_index = 0.3, attack = 3, sustain = 1, release = 3, amp = 0.08,
+                   send_reverb = 0.3})
+  engine.fx("delay_time", 0.5)
+  engine.fx("delay_feedback", 0.3)
+  clock.run(function()
+    local lastDrone = -1
+    while true do
+      if not playing then clock.sync(1 / 2)
+      else
+        local m = mk()
+        if lastDrone ~= params:get("makam") then
+          lastDrone = params:get("makam")
+          engine.note(3, m.root - 12, 1)
+          engine.note(4, m.root - 12 + m.koma[m.guclu] * 12 / 53 - 12, 1)
+        end
+        local nd = walk()
+        -- an ornament: a quick upper neighbour before the note
+        if math.random() < params:get("ornament") and nd < #m.koma then
+          engine.note(1, noteOf(nd + 1), 0.6)
+          clock.sync(1 / 16)
+        end
+        deg = nd
+        engine.note(1, noteOf(deg), (deg == 1 or deg == m.guclu) and 0.9 or 0.7)
+        engine.note(2, noteOf(deg) + 12, 0.5)
+        path[#path + 1] = deg
+        if #path > 48 then table.remove(path, 1) end
+        -- durations: long on the durak and the guclu, the cadence slows down
+        local d = ({1 / 4, 1 / 2, 1 / 2, 3 / 4, 1})[math.random(1, 5)]
+        if deg == 1 or deg == m.guclu then d = d * 2 end
+        if phase == 4 then d = d * 1.5 end
+        clock.sync(d / params:get("pace"))
+        engine.off(2)
+        if phase == 1 and deg == 1 and steps == 0 then clock.sync(2) end   -- a breath at home
+      end
+    end
+  end)
+end
+
+function pad(n, vel, z)
+  local m = mk()
+  local col, row = (n - 1) % 12 + 1, (n - 1) // 12 + 1
+  if row == 4 and col <= #m.koma then
+    if z == 1 then
+      deg = col
+      engine.note(1, noteOf(col), vel / 127)
+      path[#path + 1] = deg
+      if #path > 48 then table.remove(path, 1) end
+    end
+  elseif row == 3 and col <= 4 and z == 1 then
+    phase, steps = col, 0   -- jump to a phase of the seyir
+  end
+end
+
+function key(name, z)
+  if z ~= 1 then return end
+  if name == "INSERT" then
+    playing = not playing
+    if not playing then engine.off(1); engine.off(2) end
+  end
+  if name == "F1" then params:set("makam", 1) end
+  if name == "F2" then params:set("makam", 2) end
+  if name == "F3" then params:set("makam", 3) end
+end
+
+function enc(d, shift_)
+  if shift_ then params:delta("ornament", d) else params:delta("pace", d) end
+end
+
+function redraw()
+  local m = mk()
+  local top = #m.koma
+  screen.font("title")
+  screen.color(0xE8D5A8)
+  screen.text(30, 34, "SEYIR")
+  screen.font("body")
+  screen.color(0xFFB347)
+  screen.text(180, 40, m.name)
+  screen.font("small")
+  screen.level(9)
+  screen.text(300, 44, string.format("phase: %s   pace %.2fx   %s", PHASES[phase], params:get("pace"),
+    playing and "playing" or "paused (Insert)"))
+  -- the ladder: one line per degree, spaced by its koma
+  local y0, y1 = 410, 80
+  local function yOf(d) return y0 - (m.koma[d] / m.koma[top]) * (y0 - y1) end
+  local lines = {}
+  for d = 1, top do
+    local y = yOf(d)
+    lines[#lines + 1] = 170; lines[#lines + 1] = y; lines[#lines + 1] = 770; lines[#lines + 1] = y
+  end
+  screen.level(3)
+  screen.lines(lines, 1)
+  screen.font("tiny")
+  for d = 1, top do
+    local strong = d == 1 or d == m.guclu
+    if strong then screen.color(0xFFB347) else screen.level(7) end
+    screen.text_right(160, yOf(d) - 7, m.notes[d])
+  end
+  -- the path so far
+  if #path > 1 then
+    local pts = {}
+    for i, d in ipairs(path) do
+      pts[#pts + 1] = 180 + (i - 1) * 12.5
+      pts[#pts + 1] = yOf(d)
+    end
+    screen.color(0x39E6B4)
+    screen.polyline(pts, 2)
+    screen.points(pts, 5)
+    screen.color(0xFFFFFF)
+    screen.circle(pts[#pts - 1], pts[#pts], 7)
+  end
+  -- the phase bar
+  for p = 1, 4 do
+    if p == phase then screen.color(0xFFB347) else screen.level(4) end
+    screen.rect(180 + (p - 1) * 150, 420, 140, 6)
+  end
+  screen.level(5)
+  screen.text(30, 440, "pads row 4: degrees   row 3: phase   Insert: play / pause   F1-F3: makam   enc: pace")
+  -- pads: row 4 the degrees (durak and guclu amber), row 3 the phases
+  for c = 1, 12 do
+    if c <= top then
+      if c == deg then grid.led(c, 4, 255, 255, 255)
+      elseif c == 1 or c == m.guclu then grid.led(c, 4, 255, 150, 50)
+      else grid.led(c, 4, 20, 80, 70) end
+    else grid.led(c, 4, 0, 0, 0) end
+    if c <= 4 then
+      if c == phase then grid.led(c, 3, 255, 179, 71) else grid.led(c, 3, 30, 20, 10) end
+    else grid.led(c, 3, 0, 0, 0) end
+  end
+end
+)PLATLUA"},
     {"steps.lua", R"PLATLUA(-- name: Steps
 -- author: PLATFORM
 -- desc: 4-track, 12-step sequencer on the pads: kick, snare, hat, bass
@@ -485,11 +1128,16 @@ function init()
   engine.voice(2, {wave = "noise", env_mode = "perc", decay = 0.16, ftype = "bp", cutoff = 1800, res = 1.2, amp = 0.6, send_reverb = 0.25})
   engine.voice(3, {wave = "noise", env_mode = "perc", decay = 0.04, ftype = "hp", cutoff = 7000, amp = 0.25})
   engine.voice(4, {wave = "saw", env_mode = "perc", decay = 0.22, cutoff = 400, res = 3, fenv = 3, amp = 0.45, send_delay = 0.2})
-  params:add_number("root", "bass root", 24, 48, 33, function(v) return music.note_name(v) end)
-  params:add_control("swing", "swing", 0, 0.4, 0, 0.01)
-  params:add_control("hat_level", "hat level", 0, 1, 0.25, 0.01)
-  params:set_action("hat_level", function(v) engine.set(3, "amp", v) end)
-  params:add_toggle("run_stopped", "run when stopped", false)
+  params:add_number("root", "bass root", 24, 48, 33, function(v) return music.note_name(v) end, nil, "GROOVE")
+  params:add_control("swing", "swing", 0, 0.4, 0, 0.01, nil, "GROOVE")
+  params:add_toggle("run_stopped", "run when stopped", false, "GROOVE")
+  -- the sound on its own page: macros and LFO routes reach it from the MOD page
+  params:add{id = "hat_level", name = "hat level", min = 0, max = 1, default = 0.25, page = "SOUND",
+             action = function(v) engine.set(3, "amp", v) end}
+  params:add{id = "bass_cut", name = "bass cutoff", min = 100, max = 4000, default = 400, unit = "Hz", page = "SOUND",
+             action = function(v) engine.set(4, "cutoff", v) end}
+  params:add{id = "snare_tone", name = "snare tone", min = 600, max = 6000, default = 1800, unit = "Hz", page = "SOUND",
+             action = function(v) engine.set(2, "cutoff", v) end}
   clock.run(function()
     while true do
       local swing = params:get("swing")
@@ -535,7 +1183,7 @@ function key(name, z)
   if z ~= 1 then return end
   if name == "F1" or name == "F2" or name == "F3" or name == "F4" then sel = tonumber(name:sub(2)) end
   if name == "DELETE" then for i = 1, STEPS do tracks[sel].pat[i] = 0 end end
-  if name == "ENC" then if clock.playing() then clock.stop() else clock.start() end end
+  if name == "INSERT" then if clock.playing() then clock.stop() else clock.start() end end
 end
 
 function redraw()
@@ -569,7 +1217,7 @@ function redraw()
   end
   screen.level(6)
   screen.font("tiny")
-  screen.text(30, 456, "pads: toggle steps   enc: tempo (shift: swing)   push: play/stop   F1-F4: track   Delete: clear track")
+  screen.text(30, 456, "pads: toggle steps   enc: tempo (shift: swing)   Insert: play/stop   F1-F4: track   Delete: clear track")
   -- pad LEDs
   for r, t in ipairs(tracks) do
     for c = 1, STEPS do
@@ -581,6 +1229,6 @@ function redraw()
 end
 )PLATLUA"},
 };
-constexpr int kExampleScriptCount = 5;
+constexpr int kExampleScriptCount = 8;
 
 }  // namespace plat

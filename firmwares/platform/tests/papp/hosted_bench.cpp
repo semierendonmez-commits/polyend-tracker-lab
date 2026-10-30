@@ -4,7 +4,8 @@
 // semihosting: build/perf/hosted_station.papp), the launcher code opens it
 // (loader, relocation, init), and each of the station's own bench scenarios
 // (Workstation::benchScenarios / benchSetup, through PlatApp) runs 600 audio
-// blocks through Platform::render -- the voice engine (idle) + the station.
+// blocks through Shell::kitBlock + Platform::render -- LABKIT (the station's
+// params, routes, LFOs in the host's kit), the voice engine (idle) + the station.
 // Output lines "lab.<STATION>.<scenario> avg N worst N M4 insn per block,
 // limit 180000" are checked by tools/lab_gate.py like the firmware's own bench.
 #include <cmath>
@@ -12,6 +13,7 @@
 #include <cstring>
 
 #include "lab/lab.h"
+#include "lab/nav.h"
 #include "ws/platform.h"
 
 namespace {
@@ -103,6 +105,9 @@ int main() {
     std::printf("hosted-bench: %s in PLATFORM: image %lu KB (fast %lu B in %s), session pool %lu KB, %d scenario(s)\n", name,
                 static_cast<unsigned long>(p->native().imageBytes() / 1024), static_cast<unsigned long>(p->native().fastBytes()),
                 p->native().fastInSram() ? "SRAM" : "SDRAM", static_cast<unsigned long>(p->poolBytes() / 1024), n);
+    for (int i = 0; i < p->native().logCount(); ++i) std::printf("hosted-bench: %s\n", p->native().logLine(i));
+    std::printf("hosted-bench: LABKIT %d params (%d of them the station's), %d pages\n", shell.labkit().reg.count(),
+                shell.labkit().reg.count() - int(p->kitBaseParams()), shell.labkit().nav.pageCount());
     static int16_t input[lab::kBlock * 2];
     for (uint32_t i = 0; i < lab::kBlock; ++i) {
         input[2 * i] = int16_t(8000.0f * sinf(float(i) * 0.05f));
@@ -122,6 +127,7 @@ int main() {
         for (int b = 0; b < kBlocks; ++b) {
             for (uint32_t i = 0; i < lab::kBlock; ++i) l[i] = r[i] = 0.0f;
             const double t0 = nowInsn();
+            shell.kitBlock(tr);
             p->render(tr, in, l, r);
             const double d = nowInsn() - t0;
             sum += d;
@@ -129,7 +135,10 @@ int main() {
             for (uint32_t i = 0; i < lab::kBlock; ++i)
                 if (!(std::fabs(l[i]) < 1e6f)) finite = false;
             tr.beat += tr.beatsPerSample * lab::kBlock;
-            if ((b & 7) == 0) p->update(uint32_t(b) * 3u + 2u);
+            if ((b & 7) == 0) {
+                p->update(uint32_t(b) * 3u + 2u);
+                shell.labkit().update(uint32_t(b) * 3u + 2u);
+            }
         }
         std::printf("lab.%s.%-14s avg %9.0f  worst %9.0f M4 insn per block, limit %d%s\n", name, p->native().benchName(s),
                     sum / kBlocks, worst, kLimit, finite ? "" : " (NON-FINITE OUTPUT)");

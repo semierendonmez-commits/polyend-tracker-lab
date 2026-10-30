@@ -38,7 +38,10 @@ class Drone : public plat::App {
 public:
     // state shared main -> audio (plain floats written by the main loop)
     volatile float target_[kPairs] = {};
-    volatile float cutoff_ = 900.0f, res_ = 2.5f, level_ = 0.0f, detune_ = 0.004f;
+    // LABKIT params: the registry writes base + modulation here every block
+    float cutoff_ = 900.0f, res_ = 2.5f, level_ = 0.0f, detune_ = 0.004f;
+    int pid_[3] = {-1, -1, -1};   // cutoff, resonance, detune
+    float env_ = 0.0f;            // a mod source: the output level, 0..1
     int chord_ = 0, root_ = 36;
     float ph_[kPairs][2] = {}, lfo_[kPairs] = {}, hz_[kPairs] = {};
     float ic1_ = 0, ic2_ = 0, ic1r_ = 0, ic2r_ = 0;
@@ -64,6 +67,13 @@ public:
             }
             host->fileClose(host->ctx, h);
         }
+        // LABKIT: the three sound params on the PARAM pads / MAP (macros, LFO
+        // routes, MIDI learn come with them); the output level as a mod source
+        pid_[0] = param("drone.cutoff", "Cutoff", &cutoff_, 60.0f, 9000.0f, cutoff_, "Hz", 0, PLAT_PARAM_EXP);
+        pid_[1] = param("drone.res", "Reso", &res_, 0.5f, 12.0f, res_, nullptr, 0, 0);
+        pid_[2] = param("drone.detune", "Detune", &detune_, 0.0f, 0.03f, detune_, nullptr, 0, 0);
+        param("drone.level", "Level", &level_, 0.0f, 1.0f, level_, nullptr, 0, PLAT_PARAM_PERCENT);
+        modSource("DRONE", &env_);
         log("drone ready");
         return gSine.t[64] > 0.99f;   // the static constructor ran
     }
@@ -102,10 +112,14 @@ public:
         }
         if (e.type == PLAT_EV_ENCODER) {
             const float d = float(e.delta) * (e.shift ? 10.0f : 1.0f);
+            // through the registry when it has the param (base value; LFOs add on top)
+            const float c = pid_[0] >= 0 ? paramGet(pid_[0]) : cutoff_;
+            const float q = pid_[1] >= 0 ? paramGet(pid_[1]) : res_;
+            const float dt = pid_[2] >= 0 ? paramGet(pid_[2]) : detune_;
             switch (sel_) {
-                case 0: cutoff_ = clamp(cutoff_ * exp2f(d / 24.0f), 60.0f, 9000.0f); break;
-                case 1: res_ = clamp(res_ + d * 0.1f, 0.5f, 12.0f); break;
-                case 2: detune_ = clamp(detune_ + d * 0.0005f, 0.0f, 0.03f); break;
+                case 0: setp(0, cutoff_, clamp(c * exp2f(d / 24.0f), 60.0f, 9000.0f)); break;
+                case 1: setp(1, res_, clamp(q + d * 0.1f, 0.5f, 12.0f)); break;
+                case 2: setp(2, detune_, clamp(dt + d * 0.0005f, 0.0f, 0.03f)); break;
                 default:
                     root_ = int(clamp(float(root_) + d, 24.0f, 60.0f));
                     setChord(chord_);
@@ -114,6 +128,22 @@ public:
         }
     }
     static float clamp(float v, float a, float b) { return v < a ? a : (v > b ? b : v); }
+    void setp(int i, float& field, float v) {
+        if (pid_[i] >= 0) paramSet(pid_[i], v);
+        else field = v;
+    }
+    int navPages(PlatPage* out, int cap) override {
+        if (cap < 1) return 0;
+        out[0] = PlatPage();
+        out[0].name = "DRONE";
+        out[0].help = "Pads pick the chord. Cutoff / Reso / Detune / Level take macros and LFOs.";
+        out[0].fkeys[0] = "Cutoff";
+        out[0].fkeys[1] = "Resonance";
+        out[0].fkeys[2] = "Detune";
+        out[0].fkeys[3] = "Root";
+        return 1;
+    }
+    int navPage() override { return 0; }
 
     void render(const PlatTransport&, const int16_t*, float* l, float* r) override {
         const float g = tanf(3.14159265f * clamp(cutoff_, 20.0f, 18000.0f) / 44100.0f);
@@ -158,6 +188,7 @@ public:
             l[i] += yl * amp_;
             r[i] += v2 * amp_;
         }
+        env_ = clamp(amp_ * 20.0f * (0.5f + res_ * 0.05f), 0.0f, 1.0f);
         // a few points for the scope (the main loop reads them)
         int w = scopeW_;
         for (uint32_t i = 0; i < PLAT_BLOCK; i += 32) {

@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "lab/lab.h"
+#include "lab/nav.h"
 #include "ws/engine.h"
 #include "ws/lua_host.h"
 #include "ws/native.h"
@@ -29,10 +30,14 @@ public:
     static constexpr uint32_t kMinPool = 4u * 1024u * 1024u;        // smallest usable session pool
     static constexpr uint32_t kCrashGuardMs = 4000;              // "opened" flag cleared after this
     static constexpr uint32_t kAppWords = 1680;                  // display words an app may use
+    // LABKIT registry capacity: the Shell's MACRO / MOD params + the biggest
+    // station (GRAF registers ~690) -- reserved in init(), before the pool.
+    static constexpr int kKitParams = 1024;
 
     const char* name() const override { return "PLATFORM"; }
     const char* tagline() const override { return "Lua scripts and native apps from the card"; }
-    const lab::Theme& theme() const override { return theme_; }
+    // a station's own theme while it runs (LABKIT overlays and the Shell use it)
+    const lab::Theme& theme() const override { return sessTheme_ ? *sessTheme_ : theme_; }
     bool init(lab::Context& c) override;
     uint32_t introMs() const override { return 3000; }
     void drawIntro(lab::Canvas& g, uint32_t t) override;
@@ -48,6 +53,12 @@ public:
     int benchScenarios() const override { return 6; }
     const char* benchName(int i) const override;
     void benchSetup(int i) override;
+    // LABKIT navigation: the launcher's page, a script's params pages, an app's own pages
+    int navPages(lab::kit::PageInfo* out, int cap) override;
+    int navPage() const override;
+    void navGoto(int page) override;
+    void navFocus(lab::kit::ParamId id) override;
+    void navParamChanged(lab::kit::ParamId id) override;
 
     // ---- used by tests / the simulator check ----
     enum Mode : uint8_t { kLauncher, kScriptRun, kAppRun, kError, kClosing };
@@ -65,6 +76,10 @@ public:
     LuaSession& lua() { return *lua_; }
     NativeSession& native() { return *native_; }
     bool safeBoot() const { return safeBoot_; }
+    bool logOpen() const { return logOpen_; }
+    bool previewOpen() const { return preview_; }
+    uint32_t kitBaseParams() const;   // registry params outside any session (the Shell's own)
+    static constexpr uint32_t kHoldExitMs = lab::kHoldMs;   // Shift + F8 held: back to the launcher
     void rescan();
     uint32_t poolBytes() const { return pool_.size(); }
 
@@ -82,8 +97,23 @@ private:
     void drawIcon(lab::Canvas& g, const char* icon, int cx, int cy, float r, lab::Rgb c, uint32_t t);
     void launcherEvent(const lab::Event& e);
     void openSelected();
-    bool isExitCombo(const lab::Event& e) const;
+    bool chordEvent(const lab::Event& e);   // Shift + F7 / F8 held
+    void route(const lab::Event& e);        // to the launcher / session / error page
+    void logEvent(const lab::Event& e);
+    void drawLog(lab::Canvas& g);
+    void drawPreview(lab::Canvas& g, int x, int y, int w, int h);
+    void loadPreview(int entry);
+    void toError();
     bool openNow(int i);
+    // LABKIT state outside sessions: snapshot once after the Shell's init, the
+    // audio block off while a session registers / is torn down, then restored.
+    struct KitSnap;
+    void ensureSnapshot();
+    void kitOff();
+    void kitOn();
+    void restoreKit();
+    void waitBlock();
+    void sessionNav();   // after an open: keys, pages, theme
     void finishClose();
     bool audioRunning() const;
 
@@ -122,9 +152,19 @@ private:
     int nextOpen_ = -1;                   // entry opened once the closing session is gone
     char nextFile_[48] = {};
     uint32_t nowMs_ = 0;
-    bool auxHeld_ = false;
-    uint32_t auxDownMs_ = 0;
-    bool auxUsed_ = false;
+    // Shift + F7 / Shift + F8: the press is held back until the hold (ours) or
+    // the release (then press + release go to the session as usual)
+    bool chordPending_[2] = {};
+    bool chordSwallow_[2] = {};
+    lab::Event chordPress_[2];
+    bool logOpen_ = false;
+    int logScroll_ = 0;                   // lines up from the newest
+    bool preview_ = false;                // launcher: F3 source / info panel
+    int previewFor_ = -1;
+    char previewText_[1400] = {};
+    KitSnap* snap_ = nullptr;
+    volatile uint32_t blocks_ = 0;        // audio blocks rendered (waitBlock)
+    const lab::Theme* sessTheme_ = nullptr;
     float meterPk_ = 0.0f;
     int benchMode_ = -1;
 };

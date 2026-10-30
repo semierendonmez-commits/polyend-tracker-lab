@@ -14,7 +14,7 @@ finished WAV (sound sources, sequencing, arrangement, mixing, stems).
 | [DATAMATICS](#datamatics) | Ryoji-Ikeda-style data music from any file on the card | [`PolyendTrackerDATAMT.ptf`](firmwares/datamatics/release/PolyendTrackerDATAMT.ptf) | [MANUAL](firmwares/datamatics/MANUAL.md) |
 | [MAKAM](#makam) | Turkish makam meets jungle: usul-cut breaks, microtonal bass and lead | [`PolyendTrackerMAKAMJ.ptf`](firmwares/makam/release/PolyendTrackerMAKAMJ.ptf) | [MANUAL](firmwares/makam/MANUAL.md) |
 | [TILT](#tilt) | Pinball 2 Markov sequencer: 17x17 matrix, 8 sample/synth channels | [`PolyendTrackerTILTPB.ptf`](firmwares/tilt/release/PolyendTrackerTILTPB.ptf) | [MANUAL](firmwares/tilt/MANUAL.md) |
-| [PLATFORM](#platform) | Lua scripts and native apps from the SD card (norns-style); hosts all six as apps | [`PolyendTrackerPLATFM.ptf`](firmwares/platform/release/PolyendTrackerPLATFM.ptf) | [MANUAL](firmwares/platform/MANUAL.md) |
+| [PLATFORM](#platform) | Lua scripts and native apps from the SD card (norns-style, params/mod API); hosts all seven as apps | [`PolyendTrackerPLATFM.ptf`](firmwares/platform/release/PolyendTrackerPLATFM.ptf) | [MANUAL](firmwares/platform/MANUAL.md) |
 
 > **Status: v0.1, not yet tested on a real Tracker.** Every image passed the
 > lab gate (below) in the simulator and under QEMU. Keep a stock image in
@@ -40,7 +40,7 @@ Boot intro turns it off).
 
 ### Common navigation (LABKIT)
 
-The round-2 firmwares (KONSOL, GRAF, BULUT, DATAMATICS, MAKAM and TILT so far) share one
+All firmwares except FLIPPER (KONSOL, GRAF, BULUT, DATAMATICS, MAKAM, TILT and PLATFORM) share one
 navigation layer, [LABKIT](labkit/NAV.md):
 
 | Key | Action |
@@ -343,34 +343,51 @@ from that step's row.
 
 ## PLATFORM
 
-![PLATFORM launcher](firmwares/platform/docs/screenshots/launcher.png)
+![PLATFORM launcher](firmwares/platform/docs/screenshots/launcher-preview.png)
 
 A platform instead of an instrument: it runs **Lua scripts** and **native
 apps** from the SD card, like monome norns runs scripts.
 
-- **Launcher:** cards for every script and app on the card. It reopens the
-  last one at power-on; hold any key during the countdown for a safe boot.
-- **Lua 5.4** with a norns-like API: `init`, `redraw`, `key`, `enc`, `pad`,
-  `screen.*`, `grid`, `clock.run/sync/sleep`, `midi`, `params`, `metro`,
-  `util`, `music`. A script error shows a readable error page, and an endless
-  loop is stopped. It never freezes the Tracker.
+- **Launcher:**
+  - Cards for every script and app on the card, with a preview of the
+    script's source or the app's info.
+  - It reopens the last one at power-on; hold any key during the countdown
+    for a safe boot.
+  - Hold **Shift+F8** to come back to the launcher from anything; hold
+    **Shift+F7** for the LOG.
+- **Lua 5.4** with a norns-like API:
+  - `init`, `redraw`, `key`, `enc`, `pad`, `screen.*`, `grid`,
+    `clock.run/sync/sleep`, `midi`, `metro`, `util`, `music`.
+  - **params**: `params:add{id, name, min, max, default, unit, page}`, plus
+    the LABKIT layer, so a script's params get the PARAM pads, MAP, macros,
+    LFO routes and MIDI learn.
+  - `mod.source` and `mod.route` for modulation.
+  - Everything is saved per script.
+- **Safe runner:**
+  - A failing callback is logged and counted; the script stops after repeated
+    errors.
+  - Endless loops and out-of-memory stop it at once.
+  - A LOG view and a small REPL typed on the pads.
 - **Voice engine** for scripts: 16 voices (anti-aliased waves, noise, FM,
   sample, grain, click), filter, envelopes, delay and reverb. Notes from Lua
   clocks land on the exact sample.
 - **Native apps** (`.papp`): compiled C++ loaded from the card at full speed,
-  with an SDK and two examples (drone, step sequencer). Native apps have no
-  memory protection: a faulty one needs a power cycle (safe boot recovers).
-- **Five example scripts**: hello, steps, drift, euclid, arp.
-- **Stations:** the six workstations above also run *inside* PLATFORM as
-  native apps, built unchanged from their own source
-  ([`release/Apps/`](firmwares/platform/release/Apps)). Copy `release/` to
-  `/Firmware` on the card; PLATFORM installs the apps at boot. Every station
-  passed its own CPU scenarios while hosted (worst: BULUT 174,520 of 180,000
-  instructions).
+  with an SDK (params and mod sources included) and two examples.
+- **Eight example scripts:** hello, steps, drift, euclid, arp, and new
+  **pinball** (a ball on bumpers walking a Markov chain), **datum**
+  (Ikeda-style bit register and barcode) and **seyir** (Rast, Hicaz, Uşşak in
+  53-koma steps).
+- **Stations:** all seven workstations also run *inside* PLATFORM as native
+  apps, built from their round-2 source: KONSOL, GRAF, BULUT, DATAMATICS,
+  MAKAM, TILT, FLIPPER ([`release/Apps/`](firmwares/platform/release/Apps)).
+  - Copy `release/` to `/Firmware` on the card; PLATFORM installs the apps at
+    boot.
+  - Every station passed its own CPU scenarios while hosted. The worst was
+    KONSOL, at 171,200 of 180,000 instructions.
 
-| Lua script running | GRAF as a station inside PLATFORM |
+| Pinball script | GRAF as a station inside PLATFORM |
 |---|---|
-| ![Euclid](firmwares/platform/docs/screenshots/script-euclid.png) | ![GRAF station](firmwares/platform/docs/screenshots/station-graf.png) |
+| ![Pinball](firmwares/platform/docs/screenshots/script-pinball.png) | ![GRAF station](firmwares/platform/docs/screenshots/station-graf.png) |
 
 [Manual](firmwares/platform/MANUAL.md) · [Image](firmwares/platform/release/PolyendTrackerPLATFM.ptf)
 
