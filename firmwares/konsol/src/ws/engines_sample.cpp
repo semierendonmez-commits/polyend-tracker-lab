@@ -11,6 +11,7 @@
 #include "ws/engine_table.h"
 #include "ws/kit.h"
 #include "ws/model.h"
+#include "ws/stream.h"
 
 namespace lab {
 namespace konsol {
@@ -69,7 +70,6 @@ public:
         const int slot = ts_->slot;
         if (!pool_->valid(slot)) return;
         const SampleSlot& sl = pool_->slot(slot);
-        const uint32_t len = sl.frames;
         const int maxV = ip(sVoices);
         int vi = -1;
         for (int i = 0; i < maxV; ++i)
@@ -86,7 +86,12 @@ public:
                 }
         }
         V& v = v_[vi];
+        dropRing(v);
         const int mode = ip(sMode);
+        // SD streaming: a streamed slot plays its whole file (One-shot / Loop,
+        // Equal slices; no Warp, no reverse, at most kStreamMaxRate).
+        const bool str = sl.stream && pool_->streams();
+        const uint32_t len = str ? sl.sframes : sl.frames;
         uint32_t a = uint32_t(p_[sStart] * float(len)), e = uint32_t(p_[sEnd] * float(len));
         if (e > len) e = len;
         if (e <= a + 64) {
@@ -97,7 +102,7 @@ public:
         v.warp = 0;
         if (mode == 2) {
             const int note = pitch - 36;
-            if (ip(sSliceMode) == 1 && sl.nOn > 1) {
+            if (ip(sSliceMode) == 1 && sl.nOn > 1 && !str) {
                 int k0 = 0;
                 while (k0 < sl.nOn && sl.onset[k0] < a) ++k0;
                 int n = 0;
@@ -118,13 +123,22 @@ public:
             }
         } else {
             rate *= dx::semis(float(pitch - 60));
-            if (ip(sWarp) && ts_->outBpm > 1.0f) {
+            if (ip(sWarp) && ts_->outBpm > 1.0f && !str) {
                 v.warp = uint8_t(ip(sWarp));
                 rate = dx::semis(p_[sPitch] + p_[sFine] + float(pitch - 60));   // pitch only, the tempo moves time
             }
         }
         v.slot = int16_t(slot);
-        v.rev = (flags & kFlagReverse) != 0 && !v.warp;
+        v.rev = (flags & kFlagReverse) != 0 && !v.warp && !str;
+        v.str = str;
+        if (str) {
+            if (rate > kStreamMaxRate) rate = kStreamMaxRate;
+            v.g.a = a;
+            v.g.e = e;
+            v.g.loop = mode == 1;
+            // a note whose whole range is resident needs no ring
+            if (e > sl.frames) v.ring = int8_t(pool_->streams()->acquire(slot, sl.ch, sl.sid, sl.frames, v.g, &v.rgen));
+        }
         v.a = a;
         v.e = e;
         v.loop = mode == 1;
@@ -171,8 +185,11 @@ public:
         }
         const SampleSlot& sl = pool_->slot(slot);
         const uint32_t len = sl.frames;
+        const uint32_t full = pool_->length(slot);
         const int16_t* dl = pool_->left(slot);
         const int16_t* dr = pool_->right(slot);
+        for (auto& v : v_)
+            if (!v.on) dropRing(v);
         if (filtDirty_) {
             const float hz = p_[sCutoff] * toneMul_;
             fl_.set(hz, resQ(p_[sRes]));
@@ -184,8 +201,9 @@ public:
         const float ratio = ts_->outBpm > 1.0f ? bpm_ / ts_->outBpm : 1.0f;
         for (auto& v : v_) {
             if (!v.on) continue;
-            if (v.slot != slot || v.e > len || v.a + 2 >= v.e) {   // the sample changed under the voice
-                v.on = false;
+            if (v.slot != slot || v.e > (v.str ? full : len) || v.a + 2 >= v.e || v.str != (sl.stream != 0)) {
+                v.on = false;   // the sample changed under the voice
+                dropRing(v);
                 continue;
             }
             if (!any) {
@@ -193,10 +211,14 @@ public:
                 any = true;
             }
             bool alive;
-            if (v.warp == 1) alive = renderBeats(v, sl, dl, dr, al, ar, ratio);
+            if (v.str) alive = renderStream(v, sl, dl, dr, al, ar);
+            else if (v.warp == 1) alive = renderBeats(v, sl, dl, dr, al, ar, ratio);
             else if (v.warp == 2) alive = renderTexture(v, dl, dr, al, ar, ratio);
             else alive = renderPlain(v, dl, dr, al, ar, len);
-            if (!alive) v.on = false;
+            if (!alive) {
+                v.on = false;
+                dropRing(v);
+            }
         }
         if (!any) return;
         const float gain = p_[sGain] * (1.0f / 32768.0f);
@@ -233,11 +255,12 @@ public:
     int32_t cost() const override {
         int32_t c = 0;
         for (auto& v : v_)
-            if (v.on) c += v.warp == 2 ? 25500 : (v.warp == 1 ? 13000 : 9300);
+            if (v.on) c += v.warp == 2 ? 25500 : (v.warp == 1 ? 13000 : (v.str ? kStreamCost : 9300));
         return c ? c + base() : 0;
     }
     int32_t noteCost() const override {
-        const int32_t one = ip(sMode) != 2 && ip(sWarp) == 2 ? 25500 : (ip(sMode) != 2 && ip(sWarp) == 1 ? 13000 : 9300);
+        int32_t one = ip(sMode) != 2 && ip(sWarp) == 2 ? 25500 : (ip(sMode) != 2 && ip(sWarp) == 1 ? 13000 : 9300);
+        if (pool_->streamed(ts_->slot)) one = kStreamCost;
         return active() ? one : one + base();
     }
     bool steal() override {
@@ -267,7 +290,65 @@ private:
         uint32_t gpos[2] = {};
         float gfrac[2] = {}, gph[2] = {};
         int32_t gnext = 0;
+        // SD streaming: virtual positions (pos), the note's geometry, its ring
+        bool str = false;
+        int8_t ring = -1;
+        uint32_t rgen = 0;
+        StreamGeom g;
     };
+    // QEMU-measured streamed voice (window fetch + the plain loop)
+    static constexpr int32_t kStreamCost = 11500;
+    void dropRing(V& v) {
+        if (v.ring >= 0 && pool_->streams()) pool_->streams()->release(v.ring, v.rgen);
+        v.ring = -1;
+    }
+    // A streamed voice: each block copies its window (head / ring, underruns
+    // fade) and runs the plain linear interpolation over it.
+    bool renderStream(V& v, const SampleSlot& sl, const int16_t* dl, const int16_t* dr, float* al, float* ar) {
+        Streams* st = pool_->streams();
+        StreamRing* ring = nullptr;
+        if (v.ring >= 0) {
+            if (!st->owns(v.ring, v.rgen)) return false;   // another note took the ring
+            ring = &st->ring(v.ring);
+        }
+        const uint32_t i0 = v.wait;
+        v.wait = 0;
+        const float inc = v.inc;
+        float frac = v.frac, env = v.env;
+        constexpr uint32_t kWin = uint32_t(kStreamMaxRate) * kBlock + 4;
+        uint32_t n = uint32_t(frac + inc * float(kBlock - i0)) + 2;
+        if (n > kWin) n = kWin;
+        int16_t wl[kWin], wr[kWin];
+        const uint32_t pos = v.pos;
+        streamFetch(ring, v.rgen, v.g, sl.ch, dl, dr, sl.frames, pos, n, wl, wr);
+        const float g = v.vel;
+        uint32_t j = 0;
+        bool alive = true;
+        for (uint32_t i = i0; i < kBlock; ++i) {
+            if (!envStep(v, env)) {
+                alive = false;
+                break;
+            }
+            if (!v.g.loop && pos + j + 1 >= v.g.e) {
+                alive = false;
+                break;
+            }
+            const float ge = g * env;
+            const uint32_t j1 = j + 1 < n ? j + 1 : j;
+            al[i] += (float(wl[j]) + float(wl[j1] - wl[j]) * frac) * ge;
+            ar[i] += (float(wr[j]) + float(wr[j1] - wr[j]) * frac) * ge;
+            frac += inc;
+            const uint32_t k = uint32_t(frac);
+            frac -= float(k);
+            j += k;
+            if (j + 1 >= n) j = n - 2;   // never past the window (rounding)
+        }
+        v.pos = pos + j;
+        v.frac = frac;
+        v.env = env;
+        if (ring) ring->need = v.pos;
+        return alive;
+    }
     void changed(int i) override {
         if (i == sCutoff || i == sRes) filtDirty_ = true;
     }

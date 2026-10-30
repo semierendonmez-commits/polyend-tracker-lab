@@ -107,7 +107,13 @@ APP_CXX   := $(shell find src -name '*.cpp')
 ifeq ($(OT_GAMES),0)
 APP_CXX   := $(filter-out src/core/games/%,$(APP_CXX))
 endif
-OBJS      := $(patsubst %,$(BUILD)/%.o,$(CORE_C) $(CORE_CXX) $(APP_C) $(APP_CXX))
+# KONSOL flash diet (MANUAL.md "Building"): the lab Shell draws only with the
+# FT81x ROM fonts, so the device image leaves out OpenTracker's 31 KB packed
+# UI font image; src/ws/device_fonts.cpp hands the driver a 12-byte stand-in
+# (its CRC check then keeps the ROM fonts). Simulator and host tests unchanged.
+APP_CXX   := $(filter-out src/core/ui/fonts/fonts.cpp,$(APP_CXX))
+$(BUILD)/src/ws/device_fonts.cpp.o: CXXFLAGS += -DKONSOL_FONT_STUB=1
+OBJS      :=$(patsubst %,$(BUILD)/%.o,$(CORE_C) $(CORE_CXX) $(APP_C) $(APP_CXX))
 
 # Size optimization per directory (docs/OPTIMIZATION_2X.md OP-4): UI, app,
 # HAL, games, formats and FatFs build with -Os; everything on the audio /

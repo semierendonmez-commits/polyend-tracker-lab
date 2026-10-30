@@ -914,6 +914,8 @@ void Konsol::drawWave(Canvas& g, int slot, uint32_t a, uint32_t e, int x, int y,
 // ---------------------------------------------------------------------------
 // SAMPLE: file, tempo, stretch
 // ---------------------------------------------------------------------------
+static bool sl0Streamed(const SamplePool& p, int s) { return p.streamed(s); }
+
 void Konsol::drawSample(Canvas& g) {
     const TrackSample& ts = ts_[selT_];
     const Rgb pc = pageColor(kPgSample);
@@ -924,7 +926,29 @@ void Konsol::drawSample(Canvas& g) {
     rv(g, kPanel, 4, kTop + 158, 388, 214);
     rv(g, kPanel, 398, kTop + 158, 398, 214);
     g.endBatch();
-    if (ok) {
+    if (ok && sl0Streamed(pool_, ts.slot)) {   // SD streaming: no wave of the whole file (only its head is in memory)
+        const SampleSlot& sl = pool_.slot(ts.slot);
+        const uint32_t len = sl.sframes;
+        g.beginRects();
+        rv(g, scale(tc, 0.25f), 12, kTop + 60, 776, 56);
+        rv(g, scale(tc, 0.85f), 12, kTop + 60, int(uint64_t(776) * sl.frames / (len ? len : 1)) + 2, 56);
+        if (ts.bars > 0) {
+            g.color(kFaint);
+            for (int b = 1; b < ts.bars && b < 64; ++b) rv2(g, 12 + 776 * b / ts.bars, kTop + 26, 2, 4);
+        }
+        g.endBatch();
+        g.color(kText);
+        g.text(400, kTop + 88, font::kBody, "STREAMS FROM THE CARD", Canvas::kCenter);
+        g.color(kText);
+        g.textf(14, kTop + 16, font::kSmall, Canvas::kCenterY, "%.48s", sl.path);
+        g.color(kDim);
+        g.textf(786, kTop + 16, font::kTiny, Canvas::kCenterY | Canvas::kRight, "%s  STREAM  %lu:%02lu  underruns %lu",
+                sl.ch == 2 ? "STEREO" : "MONO", static_cast<unsigned long>(len / 44100 / 60),
+                static_cast<unsigned long>((len / 44100) % 60),
+                static_cast<unsigned long>(streams_ ? streams_->underruns() : 0));
+        g.text(14, kTop + 136, font::kTiny, "SAMPLER One-shot / Loop / Equal slices, Warp Off; the bright part is in memory",
+               Canvas::kCenterY);
+    } else if (ok) {
         const SampleSlot& sl = pool_.slot(ts.slot);
         drawWave(g, ts.slot, 0, sl.frames, 12, kTop + 30, 776, 116, scale(tc, 0.85f), 5);
         // slice markers (the playing version's onsets)
@@ -955,24 +979,30 @@ void Konsol::drawSample(Canvas& g) {
     g.text(16, kTop + 174, font::kTiny, "TEMPO", Canvas::kCenterY);
     std::snprintf(v, sizeof v, ts.bars ? "%d bars" : "detect", ts.bars);
     barRow(g, 10, kTop + 186, 376, "Length", v, float(ts.bars) / 32.0f, pc, smpRow_ == 0);
+    {   // SD streaming switch (Auto streams files of 30 s and more, or what does not fit)
+        const float cp = convProgress(selT_);
+        if (cp >= 0.0f) std::snprintf(v, sizeof v, "preparing %d%%", int(cp * 100.0f));
+        else std::snprintf(v, sizeof v, "%s: %s", streamModeName(ts.stream), sl0Streamed(pool_, ts.src) ? "card" : "memory");
+        barRow(g, 10, kTop + 216, 376, "Stream", v, float(ts.stream) / 2.0f, pc, smpRow_ == 1);
+    }
     g.color(kText);
-    g.textf(20, kTop + 244, font::kLarge, Canvas::kCenterY, "%.1f", double(ts.srcBpm));
+    g.textf(20, kTop + 254, font::kLarge, Canvas::kCenterY, "%.1f", double(ts.srcBpm));
     g.color(kDim);
-    g.text(110, kTop + 248, font::kTiny, "BPM (file)", Canvas::kCenterY);
+    g.text(110, kTop + 258, font::kTiny, "BPM (file)", Canvas::kCenterY);
     g.color(kAmber);
-    g.textf(200, kTop + 244, font::kLarge, Canvas::kCenterY, "%.1f", double(ctx_->bpm()));
+    g.textf(200, kTop + 254, font::kLarge, Canvas::kCenterY, "%.1f", double(ctx_->bpm()));
     g.color(kDim);
-    g.text(290, kTop + 248, font::kTiny, "BPM (project)", Canvas::kCenterY);
-    g.textf(20, kTop + 280, font::kTiny, Canvas::kCenterY, "Plays at %.1f BPM: %s", double(ts.outBpm),
+    g.text(290, kTop + 258, font::kTiny, "BPM (project)", Canvas::kCenterY);
+    g.textf(20, kTop + 286, font::kTiny, Canvas::kCenterY, "Plays at %.1f BPM: %s", double(ts.outBpm),
             ts.stretched ? "the stretched copy" : "the original file");
-    g.text(20, kTop + 300, font::kTiny, "SAMPLER Warp (Sound page) follows the tempo live;", Canvas::kCenterY);
-    g.text(20, kTop + 316, font::kTiny, "F5 renders a high-quality copy at the tempo.", Canvas::kCenterY);
+    g.text(20, kTop + 304, font::kTiny, "SAMPLER Warp (Sound page) follows the tempo live;", Canvas::kCenterY);
+    g.text(20, kTop + 320, font::kTiny, "F5 renders a high-quality copy at the tempo.", Canvas::kCenterY);
     // stretch card
     g.color(pc);
     g.text(410, kTop + 174, font::kTiny, "TIME-STRETCH", Canvas::kCenterY);
-    barRow(g, 404, kTop + 186, 386, "Mode", stretchModeName(ts.mode), float(ts.mode) / 2.0f, pc, smpRow_ == 1);
+    barRow(g, 404, kTop + 186, 386, "Mode", stretchModeName(ts.mode), float(ts.mode) / 2.0f, pc, smpRow_ == 2);
     std::snprintf(v, sizeof v, "%+d st", ts.pitch);
-    barRow(g, 404, kTop + 218, 386, "Pitch", v, (float(ts.pitch) + 24.0f) / 48.0f, pc, smpRow_ == 2);
+    barRow(g, 404, kTop + 218, 386, "Pitch", v, (float(ts.pitch) + 24.0f) / 48.0f, pc, smpRow_ == 3);
     static const char* const kModeInfo[3] = {"Beats: transient-locked WSOLA, hits stay crisp",
                                              "Tonal: phase vocoder, pads / melodies",
                                              "Repitch: tape-style, speed and pitch together"};

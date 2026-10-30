@@ -845,7 +845,7 @@ void Konsol::arrow(int id, bool shift) {
                 const int n = pool_.valid(s) ? pool_.slot(s).nOn : 0;
                 sliceSel_ = clampi(sliceSel_ + dx + dy * 8, 0, n > 0 ? n - 1 : 0);
             } else {
-                smpRow_ = clampi(smpRow_ + dy, 0, 2);
+                smpRow_ = clampi(smpRow_ + dy, 0, 3);
             }
             break;
         case kPgKit:
@@ -1011,7 +1011,20 @@ void Konsol::encoder(int d, bool shift) {
                     if (!ts.stretched) ts.outBpm = ts.srcBpm;
                     break;
                 }
-                case 1: ts.mode = uint8_t(clampi(ts.mode + d, 0, kStrModes - 1)); break;
+                case 2: ts.mode = uint8_t(clampi(ts.mode + d, 0, kStrModes - 1)); break;
+                case 1: {   // SD streaming switch: the file loads again (streamed or into memory)
+                    const int m = clampi(ts.stream + d, 0, kStreamModes - 1);
+                    if (m == ts.stream) break;
+                    ts.stream = uint8_t(m);
+                    const int s = ts.src;
+                    if (pool_.valid(s) && s != breakSlot_ && pool_.slot(s).path[0]) {
+                        char path[96];
+                        copyStr(path, sizeof path, pool_.slot(s).path);
+                        send(Cmd{Cmd::kPanic, 0, 0, 0});
+                        loadSample(selT_, path);
+                    }
+                    break;
+                }
                 default: ts.pitch = int8_t(clampi(ts.pitch + d, -24, 24)); break;
             }
             dirty_ = true;

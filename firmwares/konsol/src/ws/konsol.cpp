@@ -74,6 +74,14 @@ bool Konsol::init(Context& c) {
     reverb_->init(rmem);
     str_ = a.make<Stretcher>();
     if (!str_ || !str_->init(a)) return false;
+    // SD streaming: 8 rings (2 MB) and the conversion job before the pool
+    // takes the rest; without them (or without a card) nothing streams.
+    streams_ = a.make<Streams>();
+    if (streams_ && !streams_->init(a)) streams_ = nullptr;
+    conv_ = a.make<StreamConv>();
+    if (conv_ && !conv_->init(a)) conv_ = nullptr;
+    if (streams_) streams_->setReader(makeStreamReader(c));
+    pool_.setStreams(streams_);
     for (int t = 0; t < kTracks; ++t)
         if (!eng_[t].init(a, &pool_, &ts_[t], t)) return false;
     // LABKIT: the browser (listing + a 4 s preview) and the registry before the pool takes the rest
@@ -192,6 +200,9 @@ void Konsol::newProject(bool demo) {
     }
     songMode_ = false;
     songIdx_ = -1;
+    convPend_ = 0;   // SD streaming: conversions of the old project's files stop
+    convTrack_ = -1;
+    if (conv_) conv_->cancel();
     Project& p = *P_;
     // in place: a Project is ~330 KB, never a temporary on the (M4) stack
     static_assert(__has_trivial_destructor(Project), "Project must stay trivially destructible");
@@ -202,6 +213,7 @@ void Konsol::newProject(bool demo) {
         tc.mix.stem = uint8_t(t / 2);
         for (int k = 0; k < kEngCount; ++k) eng_[t].e[k]->preset(0);
         setTrackBreak(t);
+        ts_[t].stream = kStreamAuto;
         for (auto& p : *reinterpret_cast<KitPad(*)[kKitPads]>(kitPads(eng_[t].e[kEngKit]))) p = KitPad();
     }
     std::snprintf(p.name, sizeof p.name, demo ? "DEMO" : "SONG01");

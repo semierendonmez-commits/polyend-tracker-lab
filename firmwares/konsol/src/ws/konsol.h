@@ -13,6 +13,7 @@
 #include "ws/fx.h"
 #include "ws/model.h"
 #include "ws/samples.h"
+#include "ws/stream.h"
 
 namespace ot {
 struct Pattern;
@@ -191,6 +192,17 @@ public:
     TrackSample& trackSample(int t) { return ts_[t]; }
     void stretchService(uint32_t budgetFrames);
     void gcSamples();
+    // ---- SD streaming (sample_mgr.cpp, stream.h) ----
+    Streams* streams() { return streams_; }
+    // The stream reader (tests / bench: a fake one); nullptr turns streaming off.
+    void setStreamReader(ot::audio::IStreamReader* r) {
+        if (streams_) streams_->setReader(r);
+    }
+    void streamService();                      // main loop: read-ahead and the conversion job
+    float convProgress(int t) const;           // -1: track t has no conversion pending
+    // A streamed slot from a 16-bit 44.1 kHz WAV `file` (the head loaded, the
+    // file bound); `orig` names it in the project. -1: it cannot stream.
+    int streamOpen(const char* orig, const char* file, bool quiet = false);
     // ---- LABKIT (nav.cpp) ----
     int navPages(kit::PageInfo* out, int cap) override;
     int navPage() const override { return page_; }
@@ -210,7 +222,12 @@ private:
     static void fxSet(void* ctx, float v);
     void ensureBreak();
     void setTrackBreak(int t);
-    int poolFind(const char* path) const;
+    int poolFind(const char* path, bool streamed = false) const;
+    int wantStream(int t, const char* path, bool* direct, uint32_t* frames);
+    bool streamTrack(int t, const char* path, bool direct, uint32_t frames);
+    void assignStream(int t, int s);
+    void startConv();
+    void convPath(const char* src, uint32_t frames, char* out, int cap) const;
     int poolLoad(const char* path);
     bool slotUsed(int s) const;
     void compactPool();
@@ -248,6 +265,12 @@ private:
     SamplePool pool_;
     TrackSample ts_[kTracks];
     Stretcher* str_ = nullptr;
+    Streams* streams_ = nullptr;
+    StreamConv* conv_ = nullptr;
+    int convTrack_ = -1;               // the track the running conversion is for
+    uint8_t convPend_ = 0;             // tracks waiting for a conversion
+    char convSrc_[kTracks][96] = {};   // their source files
+    uint32_t convFrames_[kTracks] = {};
     int16_t breakSlot_ = -1;
     int strTrack_ = -1;
     float strTarget_ = 120.0f;
