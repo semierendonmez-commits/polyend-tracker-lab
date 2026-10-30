@@ -69,7 +69,7 @@ const char* genLabel(int gen, int which) {
 }
 
 const char* srcShort(int s) {
-    static const char* const k[kSrcCount] = {"INPUT", "OUTPUT", "SAMPLE", "GEN"};
+    static const char* const k[kSrcCount] = {"INPUT", "OUTPUT", "SAMPLE", "GEN", "TAPE"};
     return k[s < 0 || s >= kSrcCount ? 0 : s];
 }
 
@@ -167,6 +167,11 @@ void Bulut::drawFooter(Canvas& g) {
         {"LOAD", "NEW", "RESAMPLE", "", "", "", "", "SAVE"},
     };
     for (int i = 0; i < 8; ++i) keys[i] = kAct[page_][i];
+    if (page_ == kPgSource) {   // Shift + F5: TAPE FILE (its browser on a TAPE FILE channel), F8: its PLAY / STOP
+        const bool tape = par_[sel_].source == kSrcTape;
+        keys[4] = tape ? "BROWSE" : "TAPE";
+        if (tape) keys[7] = tapePlaying(sel_) ? "STOP" : "PLAY";
+    }
     lab::drawFKeyBar(g, theme_, keys, -1);
     g.color(theme_.accent2);
     g.fill(0, lab::kScreenH - 31, lab::kScreenW, 1);
@@ -363,6 +368,8 @@ void Bulut::drawLane(Canvas& g, int c, int x, int y, int w, int h, bool big) {
     char srcTxt[48];
     if (par_[c].source == kSrcSample)
         std::snprintf(srcTxt, sizeof srcTxt, "%.22s", src_[c].label[0] ? src_[c].label : "no sample");
+    else if (par_[c].source == kSrcTape)
+        tapeText(c, srcTxt, sizeof srcTxt);
     else if (par_[c].source == kSrcGen)
         std::snprintf(srcTxt, sizeof srcTxt, "GEN %s", genName(par_[c].genType));
     else
@@ -690,13 +697,41 @@ void Bulut::drawPageSource(Canvas& g) {
         g.text(wx + ww / 2, wy + wh / 2 - 10, font::kBody, "No sample in this channel", Canvas::kCenter);
         g.text(wx + ww / 2, wy + wh / 2 + 14, font::kSmall, "S.Load (or Insert) opens the browser", Canvas::kCenter);
     }
+    if (par_[c].source == kSrcTape) {
+        const TapeSlot& ts = tape_[c];
+        if (!tapeAvailable() || ts.state != kTapeOpen) {
+            const char* l1 = !tapeAvailable() ? "TAPE FILE: no card / not available here"
+                             : !ts.path[0]          ? "No tape file in this channel"
+                             : ts.state == kTapeConv ? "Preparing the tape (a 16-bit copy)..."
+                             : ts.state == kTapeFail ? "The tape file cannot be streamed"
+                                                     : "Opening the tape...";
+            const char* l2 = !tapeAvailable() ? "a long WAV plays from the SD card: insert a card"
+                             : !ts.path[0]    ? "Shift+F5 (or Insert, S.Load) picks a long WAV"
+                                              : "the grains keep what the buffer holds";
+            g.color(theme_.panel);
+            g.fill(wx + 150, wy + wh / 2 - 30, ww - 300, 56);
+            g.color(theme_.fg);
+            g.text(wx + ww / 2, wy + wh / 2 - 12, font::kBody, l1, Canvas::kCenter);
+            g.color(theme_.dim);
+            g.text(wx + ww / 2, wy + wh / 2 + 12, font::kSmall, l2, Canvas::kCenter);
+        }
+        drawTapeStrip(g, c, wx, wy + wh - 18, ww, 18);
+    }
     // the name line
     g.color(theme_.panel);
     g.fill(8, 208, 784, 28);
     char nm[64];
     if (par_[c].source == kSrcSample)
         std::snprintf(nm, sizeof nm, "%.40s   %.2f s", src_[c].label[0] ? src_[c].label : "(none)", double(float(r.sampleLen) / kSr));
-    else if (par_[c].source == kSrcGen)
+    else if (par_[c].source == kSrcTape) {
+        const TapeSlot& ts = tape_[c];
+        const uint32_t pos = uint32_t(tapePos(c) * float(ts.frames) / kSr), len = uint32_t(float(ts.frames) / kSr);
+        if (ts.path[0])
+            std::snprintf(nm, sizeof nm, "TAPE %.26s  %u:%02u / %u:%02u%s", ts.label, unsigned(pos / 60 % 1000), unsigned(pos % 60),
+                          unsigned(len / 60 % 1000), unsigned(len % 60), st_[c].hold ? " (HELD)" : "");
+        else
+            std::snprintf(nm, sizeof nm, "TAPE FILE - a long WAV as a live input");
+    } else if (par_[c].source == kSrcGen)
         std::snprintf(nm, sizeof nm, "GENERATOR %s - writes the buffer", genName(par_[c].genType));
     else if (par_[c].source == kSrcInput)
         std::snprintf(nm, sizeof nm, "LIVE INPUT - last 8 s%s", st_[c].hold ? " (HELD)" : "");
@@ -706,9 +741,10 @@ void Bulut::drawPageSource(Canvas& g) {
     g.text(16, 222, font::kSmall, nm, Canvas::kCenterY);
     g.color(theme_.dim);
     g.text(784, 222, font::kTiny, "Copy: next file  Shift+Copy: prev  S.Load: browse", Canvas::kCenterY | Canvas::kRight);
-    // the rows: two columns
-    for (int i = 0; i < 9; ++i) {
-        const int x = i < 5 ? 8 : 404, y = 242 + (i < 5 ? i : i - 5) * 41;
+    // the rows: two columns (a TAPE FILE channel: PLAY SPEED FROM LOOP POSITION on the right)
+    const bool tapeR = par_[c].source == kSrcTape;
+    for (int i = 0; i < (tapeR ? 10 : 9); ++i) {
+        const int x = i < 5 ? 8 : 404, y = 242 + (i < 5 ? i : i - 5) * 41;   // the right column has room for 5
         const bool cur = cur_[kPgSource] == i;
         g.color(cur ? mix(theme_.panel, col, 0.28f) : theme_.panel);
         g.fill(x, y, 388, 37);
@@ -718,7 +754,28 @@ void Bulut::drawPageSource(Canvas& g) {
         }
         const char* label;
         char v[40];
-        if (i < 8) {
+        if (tapeR && i >= 5) {
+            static const char* const kTapeRow[5] = {"PLAY", "SPEED", "FROM", "LOOP", "POSITION"};
+            const TapeSlot& ts = tape_[c];
+            label = kTapeRow[i - 5];
+            switch (i) {
+                case 5:
+                    std::snprintf(v, sizeof v, "%s", tapePlaying(c) ? "PLAYING" : (ts.ended ? "END" : "STOPPED"));
+                    break;
+                case 6: ctx_->params().format(tapePid_[c][kTpSpeed], v, sizeof v, true); break;
+                case 7: {
+                    const uint32_t f = uint32_t(ctx_->params().get(tapePid_[c][kTpFrom]) * float(ts.frames) / kSr);
+                    std::snprintf(v, sizeof v, "%d %%  %u:%02u", int(ctx_->params().get(tapePid_[c][kTpFrom]) * 100.0f + 0.5f),
+                                  unsigned(f / 60), unsigned(f % 60));
+                    break;
+                }
+                case 8: ctx_->params().format(tapePid_[c][kTpLoop], v, sizeof v); break;
+                default:
+                    if (ts.jumpTo >= 0.0f) std::snprintf(v, sizeof v, "-> %.1f %%", double(ts.jumpTo * 100.0f));
+                    else std::snprintf(v, sizeof v, "%.1f %%", double(tapePos(c) * 100.0f));
+                    break;
+            }
+        } else if (i < 8) {
             const int idx = (i == 0 ? CP::Source : i == 1 ? CP::Gain : i == 2 ? CP::Start : i == 3 ? CP::End :
                              i == 4 ? CP::Bed : i == 5 ? CP::GenType : i == 6 ? CP::GenA : CP::GenB);
             label = idx == CP::GenA ? genLabel(par_[c].genType, 0) : (idx == CP::GenB ? genLabel(par_[c].genType, 1) : paramName(c, idx));
@@ -740,6 +797,35 @@ void Bulut::drawPageSource(Canvas& g) {
         g.color(cur ? kWhite : theme_.fg);
         g.text(x + 376, y + 18, font::kBody, v, Canvas::kCenterY | Canvas::kRight);
     }
+}
+
+// The TAPE FILE position strip: the whole file, what has played, the read-ahead
+// in the ring, FROM (pink tick), the playhead (white) and a pending jump.
+void Bulut::drawTapeStrip(Canvas& g, int c, int x, int y, int w, int h) {
+    const TapeSlot& ts = tape_[c];
+    const Rgb col = chColor(c);
+    g.color(mix(theme_.bg, col, 0.10f));
+    g.fill(x, y, w, h);
+    if (!tapes_ || ts.state != kTapeOpen || ts.frames == 0) return;
+    const float pos = tapePos(c);
+    const int px = x + int(pos * float(w - 2));
+    g.color(mix(theme_.bg, col, 0.40f));
+    g.fill(x, y + 4, px - x, h - 8);
+    if (tapePlaying(c)) {   // the read-ahead (resident head included)
+        const uint32_t ld = tapes_->lead(c);
+        const uint32_t ahead = ld == 0xFFFFFFFFu ? ts.frames : (ld > kRingSamples ? kRingSamples : ld);
+        int aw = int(float(ahead) / float(ts.frames) * float(w));
+        if (px + aw > x + w) aw = x + w - px;
+        g.color(mix(theme_.bg, col, 0.75f));
+        g.fill(px, y + 6, aw < 2 ? 2 : aw, h - 12);
+    }
+    g.color(theme_.accent2);
+    g.fill(x + int(float(ts.fromFrame) / float(ts.frames) * float(w - 2)), y, 2, h);
+    if (ts.jumpTo >= 0.0f) {
+        g.frame(x + int(ts.jumpTo * float(w - 2)) - 3, y + 1, 8, h - 2);
+    }
+    g.color(kWhite);
+    g.fill(px, y, 2, h);
 }
 
 // ---- FX: drive, filter, FX mode, LFO, routes -------------------------------------------------------

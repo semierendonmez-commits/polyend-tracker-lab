@@ -9,6 +9,7 @@
 #include "ws/engine.h"
 #include "ws/project.h"
 #include "ws/spectral.h"
+#include "ws/stream.h"
 
 namespace bulut {
 
@@ -16,7 +17,8 @@ namespace bulut {
 enum Page : uint8_t { kPgClouds = 0, kPgSound, kPgSource, kPgFx, kPgMotion, kPgFreeze, kPgFile, kPages };
 // LABKIT pages (the registry's pages; PARAM pads / MAP / HELP): CLOUDS, one
 // page per channel (its 36 params), MOTION, FREEZE, FILE.
-enum NavPage : uint8_t { kNavClouds = 0, kNavCh1 = 1, kNavMotion = 5, kNavFreeze = 6, kNavFile = 7, kNavPages = 8 };
+// TAPE: the four channels' TAPE FILE speed / FROM / LOOP.
+enum NavPage : uint8_t { kNavClouds = 0, kNavCh1 = 1, kNavMotion = 5, kNavFreeze = 6, kNavFile = 7, kNavTape = 8, kNavPages = 9 };
 
 // Channel param indices (pad order on the channel's PARAM-pads page).
 namespace CP {
@@ -26,6 +28,35 @@ enum : uint8_t {
     Drive = 24, Flt, Cutoff, Reso, FxMode, FxTime, FxAmt, FxFb, GestSpeed, Engine, Source, GenType,
 };
 }
+static_assert(CP::Source == kChParams - 2, "project.cpp maps the scenes' SOURCE at kChParams - 2");
+// TAPE FILE params per channel (registry page TAPE).
+enum TapeParam : uint8_t { kTpSpeed = 0, kTpFrom, kTpLoop, kTapeParams };
+
+// A channel's TAPE FILE, main loop side (the audio side is Tapes, stream.h).
+enum TapeState : uint8_t { kTapeNone = 0, kTapeWant, kTapeConv, kTapeOpen, kTapeFail };
+struct TapeSlot {
+    char path[128];        // the user's WAV ("" = none); saved with the project
+    char label[40];
+    char file[128];        // what streams: the path itself or its 16-bit copy in /Lab/BULUT/Stream
+    uint8_t state;         // TapeState
+    uint8_t wantPlay;      // play once the file is open
+    uint8_t ended;         // a LOOP-off run reached the end
+    uint8_t reserved;
+    uint32_t frames;       // length at 44.1 kHz
+    uint32_t cue;          // where Play continues (file frame) while stopped
+    uint32_t headFrom;     // FROM of the resident head (0xFFFFFFFF = none)
+    uint32_t fromFrame;    // FROM the tape plays with now
+    float jumpTo;          // a pending jump / scrub (0..1), < 0 = none
+    uint32_t jumpMs;       // when it was last moved (applied after a short rest)
+    uint32_t seenFrom;     // FROM as last seen (a change applies after a short rest)
+    uint32_t fromMs;       // when FROM last changed
+    uint8_t loopNow;       // LOOP the tape plays with now
+};
+
+// The next / previous WAV next to `path` in its folder (sorted by name): its
+// path into out, its index and the count. False: none / no card.
+bool neighbourWav(ot::IStorage& fs, const char* path, int dir, char* out, int cap, int* index, int* count);
+
 enum MasterIdx : uint8_t { kMDlyDiv = 0, kMDlyFb, kMDlyTone, kMDlyRet, kMRevSize, kMRevDamp, kMRevRet, kMMorph };
 
 // One drawn particle (main loop): born from an audio Spark.
@@ -54,7 +85,7 @@ public:
     void onTransport(bool playing) override;
     int settings(lab::SettingRow* rows, int cap) override;
     void save() override;
-    int benchScenarios() const override { return 11; }
+    int benchScenarios() const override { return 13; }
     const char* benchName(int i) const override;
     void benchSetup(int i) override;
     // LABKIT
@@ -97,6 +128,18 @@ public:
     void regionPad(int pad);
     bool regionMode() const { return regionMode_; }
     void tick(uint32_t ms) { update(ms); }
+    // TAPE FILE (tape.cpp)
+    Tapes* tapes() { return tapes_; }
+    bool tapeAvailable() const;
+    bool loadTape(int c, const char* path);     // the channel's tape file (converted first when needed)
+    void tapePlay(int c, bool on);
+    bool tapePlaying(int c) const;
+    void tapeJump(int c, float pos, bool now);   // 0..1 of the file (now: no scrub delay)
+    float tapePos(int c) const;                  // 0..1 of the file
+    float tapeConvProgress(int c) const;         // < 0: no conversion for this channel
+    const TapeSlot& tapeSlot(int c) const { return tape_[c]; }
+    lab::kit::ParamId tapePid(int c, int k) const { return tapePid_[c][k]; }
+    void setTapeReader(ot::audio::IStreamReader* r);   // tests / bench
 
 private:
     // registration (params.cpp)
@@ -131,6 +174,23 @@ private:
     void newProject();
     void firstBoot();
     void addRoute(int c);
+    // TAPE FILE (tape.cpp)
+    void initTapes(lab::Context& c);
+    void pumpTapes(uint32_t ms);
+    bool tapeOpen(int c);                // bind tape_[c].file, load the head, play if wanted
+    void tapeConvPath(const char* src, uint32_t frames, char* out, int cap) const;
+    void startConv();
+    void openTapeBrowser(int c);
+    bool swapTape(int c, int dir);
+    uint32_t tapeFromFrame(int c) const;
+    void tapeSaveState(TapeSave* out);
+    void tapeLoadState(const TapeSave* in);
+    void tapeEncoder(int row, int d, bool fine);   // SOURCE page tape rows 5..9
+    void tapeDelete(int row);
+    void drawTapeStrip(lab::Canvas& g, int c, int x, int y, int w, int h);
+    void tapeText(int c, char* out, int cap) const;   // "name  1:23 / 5:40" for the lanes
+    bool tapeRows() const { return par_[sel_].source == kSrcTape; }   // SOURCE page: 10 rows
+    void benchTapes(bool mixed);         // bench: 4 TAPE FILE channels on a synthetic reader
     // draw (draw.cpp)
     void drawLane(lab::Canvas& g, int c, int x, int y, int w, int h, bool big);
     void drawField(lab::Canvas& g, int c, int x, int y, int w, int h, bool big);
@@ -239,6 +299,18 @@ private:
     char rsPath_[64] = {};
     char rsLabel_[40] = {};
     int rsTarget_ = 1;
+
+    // TAPE FILE
+    Tapes* tapes_ = nullptr;
+    StreamConv* conv_ = nullptr;
+    TapeSlot tape_[kCh] = {};
+    TapeSave* tapeSave_ = nullptr;     // project chunk scratch (kCh)
+    lab::kit::ParamId tapePid_[kCh][kTapeParams] = {};
+    uint8_t convPend_ = 0;             // channels waiting for a conversion
+    int convCh_ = -1;                  // the channel being converted
+    char convSrc_[kCh][128] = {};
+    uint32_t convFrames_[kCh] = {};
+    bool pendingTape_ = false;         // the browser pick is a tape file
 };
 
 }  // namespace bulut

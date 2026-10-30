@@ -116,7 +116,7 @@ ProjResult saveProject(ot::IStorage* fs, const char* path, const ProjectRefs& p)
     w.pos = 0;
     w.put("BLUT", 4);
     w.u16(kProjectVersion);
-    w.u16(0);
+    w.u16(kProjectMinor);
     auto chunk = [&](const char* t, uint32_t len) {
         w.u32(tag(t));
         w.u32(len);
@@ -151,6 +151,10 @@ ProjResult saveProject(ot::IStorage* fs, const char* path, const ProjectRefs& p)
         w.put(sc.master, sizeof sc.master);
         w.put(sc.st, sizeof sc.st);
         for (int c = 0; c < kCh; ++c) putGest(w, sc.gest[c]);
+    }
+    if (p.tapes) {
+        chunk("TAPE", sizeof(TapeSave) * kCh);
+        w.put(p.tapes, sizeof(TapeSave) * kCh);
     }
     chunk("TIME", 4 + sizeof(TimeEntry) * kTimeline);
     w.u32(uint32_t(*p.timelineLen));
@@ -198,6 +202,7 @@ ProjResult loadProject(ot::IStorage* fs, const char* path, const ProjectRefs& p)
     for (int s = 0; s < kScenes; ++s) p.scenes[s].used = 0;
     for (int f = 0; f < kFreezeSlots; ++f) p.freezes[f].used = 0;
     *p.timelineLen = 0;
+    if (p.tapes) std::memset(p.tapes, 0, sizeof(TapeSave) * kCh);
     bool ok = true;
     while (ok && r.pos + 8 <= r.size) {
         uint32_t t = 0, len = 0;
@@ -231,6 +236,13 @@ ProjResult loadProject(ot::IStorage* fs, const char* path, const ProjectRefs& p)
                 for (int c = 0; c < kCh && ok; ++c) ok = getGest(r, sc.gest[c]);
                 sc.used = ok ? 1 : 0;
             }
+        } else if (t == tag("TAPE") && p.tapes && len == sizeof(TapeSave) * kCh) {
+            ok = r.get(p.tapes, len);
+            for (int c = 0; c < kCh && ok; ++c) {
+                p.tapes[c].path[sizeof p.tapes[c].path - 1] = 0;
+                p.tapes[c].label[sizeof p.tapes[c].label - 1] = 0;
+                p.tapes[c].playing = p.tapes[c].playing ? 1 : 0;
+            }
         } else if (t == tag("TIME") && len == 4 + sizeof(TimeEntry) * kTimeline) {
             uint32_t n = 0;
             ok = r.get(&n, 4) && r.get(p.timeline, sizeof(TimeEntry) * kTimeline);
@@ -262,6 +274,10 @@ ProjResult loadProject(ot::IStorage* fs, const char* path, const ProjectRefs& p)
                 if (!(sc.norm[c][i] >= 0.0f && sc.norm[c][i] <= 1.0f)) sc.norm[c][i] = 0.5f;
         for (int i = 0; i < kMasterParams; ++i)
             if (!(sc.master[i] >= 0.0f && sc.master[i] <= 1.0f)) sc.master[i] = 0.5f;
+        // before TAPE FILE a scene's SOURCE was one of 4 (its normalized value counts them)
+        if (minor < 1)
+            for (int c = 0; c < kCh; ++c)
+                sc.norm[c][kChParams - 2] = enumValue(enumIndex(sc.norm[c][kChParams - 2], kSrcCountV1), kSrcCount);
     }
     for (int i = 0; i < *p.timelineLen; ++i) {
         if (p.timeline[i].scene >= kScenes) p.timeline[i].scene = 0;

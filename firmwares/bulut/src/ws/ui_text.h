@@ -16,7 +16,7 @@ inline const char* engineShort(int e) {
     return k[e < 0 ? 0 : (e >= kEngines ? kEngines - 1 : e)];
 }
 inline const char* srcName(int s) {
-    static const char* const k[kSrcCount] = {"INPUT", "OUTPUT", "SAMPLE", "GENERATOR"};
+    static const char* const k[kSrcCount] = {"INPUT", "OUTPUT", "SAMPLE", "GENERATOR", "TAPE FILE"};
     return k[s < 0 ? 0 : (s >= kSrcCount ? kSrcCount - 1 : s)];
 }
 inline const char* genName(int g) {

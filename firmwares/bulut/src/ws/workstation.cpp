@@ -93,6 +93,7 @@ bool Bulut::init(lab::Context& c) {
     firstBoot();
     if (!eng_->init(a, par_, st_, src_, gest_, &fx_)) return false;
     if (!spec_.init(a)) return false;
+    initTapes(c);   // TAPE FILE: rings and heads (1.3 MB) when there is a stream reader
     for (int i = 0; i < kParticles; ++i) part_[i].life = 0.0f;
     registerParams();
     // BULUT's own modulation sources (LABKIT routes / macros can use them)
@@ -165,8 +166,9 @@ const char* Bulut::benchName(int i) const {
     }
 #endif
     static const char* const k[] = {"idle-live",  "granular-max", "quanta-max", "beads-tape", "tape-max",   "fx-texture",
-                                    "fx-modes",   "gen-rete",     "freeze-max", "everything", "fx-gen-mix"};
-    return k[i < 0 ? 0 : (i > 10 ? 10 : i)];
+                                    "fx-modes",   "gen-rete",     "freeze-max", "everything", "fx-gen-mix", "tape-file4",
+                                    "tape-gran4"};
+    return k[i < 0 ? 0 : (i > 12 ? 12 : i)];
 }
 
 // Bench: every channel busy, the grain budget full, the heavy paths on.
@@ -199,7 +201,8 @@ void Bulut::benchSetup(int i) {
         set(3, CP::GenType, float(kGenRete));
         return;
     }
-    static const int kEng[11] = {kGranular, kGranular, kQuanta, kBeads, kTape, kGranular, kGranular, kGranular, kGranular, -1, -1};
+    static const int kEng[13] = {kGranular, kGranular, kQuanta, kBeads, kTape, kGranular, kGranular, kGranular, kGranular, -1, -1,
+                                 -1, kGranular};
     for (int c = 0; c < kCh; ++c) {
         const int e = kEng[i] >= 0 ? kEng[i] : c;   // everything: one of each engine
         set(c, CP::Engine, float(e));
@@ -298,6 +301,7 @@ void Bulut::benchSetup(int i) {
         set(2, CP::Source, float(kSrcGen));
         set(2, CP::GenType, float(kGenNoise));
     }
+    if (i >= 11) benchTapes(i == 11);
     if (i == 9) {
         // one of each engine, a different FX on each, a generator, a freeze,
         // gestures at 4 x with parameter moves, capture, 32 LABKIT routes
@@ -395,6 +399,10 @@ void Bulut::setSource(int c, int s) {
         else openBrowser(c);
     }
     srcNow_[c] = s;
+    if (s == kSrcTape) {   // TAPE FILE: its file opens now (or the browser, or a message)
+        if (tape_[c].state == kTapeWant) tapeOpen(c);
+        else if (tape_[c].state == kTapeNone || !tapeAvailable()) openTapeBrowser(c);
+    }
 }
 
 // ---- gestures -------------------------------------------------------------------
@@ -777,16 +785,12 @@ bool Bulut::loadSample(int c, const char* path) {
     return true;
 }
 
-// The next / previous WAV in the folder of the channel's sample (Copy / Shift + Copy).
-bool Bulut::swapSample(int c, int dir) {
-    if (!ctx_->fs || !src_[c].path[0]) {
-        openBrowser(c);
-        return false;
-    }
+// The next / previous WAV next to `path` (sorted by name).
+bool neighbourWav(ot::IStorage& fs, const char* path, int dir, char* out, int cap, int* index, int* count) {
     char folder[128];
-    lab::copyStr(folder, sizeof folder, src_[c].path);
+    lab::copyStr(folder, sizeof folder, path);
     char* slash = std::strrchr(folder, '/');
-    const char* cur = slash ? slash + 1 : src_[c].path;
+    const char* cur = slash ? slash + 1 : path;
     if (slash) *slash = 0;
     else folder[0] = 0;
     struct List {
@@ -795,15 +799,15 @@ bool Bulut::swapSample(int c, int dir) {
     };
     static List list;
     list.n = 0;
-    ctx_->fs->listDir(folder[0] ? folder : "/",
-                      [](const ot::IStorage::DirEntry& e, void* p) {
-                          List* l = static_cast<List*>(p);
-                          if (e.isDir || e.name[0] == '.' || !lab::endsWithCi(e.name, ".wav")) return true;
-                          if (std::strlen(e.name) >= sizeof l->names[0] || l->n >= 96) return l->n < 96;
-                          lab::copyStr(l->names[l->n++], sizeof l->names[0], e.name);
-                          return true;
-                      },
-                      &list);
+    fs.listDir(folder[0] ? folder : "/",
+               [](const ot::IStorage::DirEntry& e, void* p) {
+                   List* l = static_cast<List*>(p);
+                   if (e.isDir || e.name[0] == '.' || !lab::endsWithCi(e.name, ".wav")) return true;
+                   if (std::strlen(e.name) >= sizeof l->names[0] || l->n >= 96) return l->n < 96;
+                   lab::copyStr(l->names[l->n++], sizeof l->names[0], e.name);
+                   return true;
+               },
+               &list);
     if (list.n == 0) return false;
     // sort by name (insertion: small lists)
     for (int i = 1; i < list.n; ++i)
@@ -817,22 +821,43 @@ bool Bulut::swapSample(int c, int dir) {
     for (int i = 0; i < list.n; ++i)
         if (std::strcmp(list.names[i], cur) == 0) idx = i;
     const int next = idx < 0 ? 0 : ((idx + dir) % list.n + list.n) % list.n;
+    if (folder[0]) std::snprintf(out, size_t(cap), "%s/%s", folder, list.names[next]);
+    else lab::copyStr(out, uint32_t(cap), list.names[next]);
+    *index = next;
+    *count = list.n;
+    return true;
+}
+
+// The next / previous WAV in the folder of the channel's sample (Copy / Shift + Copy);
+// on a TAPE FILE channel: of its tape file.
+bool Bulut::swapSample(int c, int dir) {
+    if (par_[c].source == kSrcTape) return swapTape(c, dir);
+    if (!ctx_->fs || !src_[c].path[0]) {
+        openBrowser(c);
+        return false;
+    }
     char p[176];
-    if (folder[0]) std::snprintf(p, sizeof p, "%s/%s", folder, list.names[next]);
-    else lab::copyStr(p, sizeof p, list.names[next]);
+    int next = 0, n = 0;
+    if (!neighbourWav(*ctx_->fs, src_[c].path, dir, p, sizeof p, &next, &n)) return false;
     if (std::strlen(p) >= sizeof src_[c].path) return false;
     if (!loadSample(c, p)) return false;
+    const char* b = std::strrchr(p, '/');
     char m[96];
-    std::snprintf(m, sizeof m, "CH %d: %.36s  (%d/%d)", c + 1, list.names[next], next + 1, list.n);
+    std::snprintf(m, sizeof m, "CH %d: %.36s  (%d/%d)", c + 1, b ? b + 1 : p, next + 1, n);
     ctx_->toast(m);
     return true;
 }
 
 void Bulut::openBrowser(int c) {
+    if (par_[c].source == kSrcTape) {   // a TAPE FILE channel: its tape file
+        openTapeBrowser(c);
+        return;
+    }
     if (!ctx_->fs) {
         ctx_->toast("No SD card");
         return;
     }
+    pendingTape_ = false;
     kit::BrowserRequest q;
     static char title[48];
     std::snprintf(title, sizeof title, "Load a sample into CH %d", c + 1);
@@ -916,6 +941,10 @@ bool Bulut::saveProjectTo(const char* path) {
     bpmSave_ = ctx_->bpm();
     r.bpm = &bpmSave_;
     r.songMode = &songMode_;
+    if (tapeSave_) {
+        tapeSaveState(tapeSave_);
+        r.tapes = tapeSave_;
+    }
     return saveProject(ctx_->fs, path, r) == ProjResult::kOk;
 }
 
@@ -940,6 +969,7 @@ bool Bulut::loadProjectFrom(const char* path) {
     r.freezes = frz_;
     r.bpm = &bpmSave_;
     r.songMode = &songMode_;
+    r.tapes = tapeSave_;
     // the registry chunk sets the engine params: park nothing on the way (the
     // file's engMem holds every engine's knobs, the chunk the active ones)
     const ProjResult res = loadProject(ctx_->fs, path, r);
@@ -960,6 +990,7 @@ bool Bulut::loadProjectFrom(const char* path) {
     ctx_->setBpm(bpmSave_);
     ctx_->mod().update(false);
     reloadSources();
+    tapeLoadState(tapeSave_);   // after applyNow: the channels' sources are the project's
     return res == ProjResult::kOk;
 }
 
@@ -981,6 +1012,9 @@ void Bulut::newProject() {
         eng_->postGesture(c);
     }
     for (int i = 0; i < kMasterParams; ++i) P.reset(mid_[i], false);
+    for (int c = 0; c < kCh; ++c)
+        for (int k = 0; k < kTapeParams; ++k) P.reset(tapePid_[c][k], false);
+    tapeLoadState(nullptr);   // no tapes
     ctx_->mod().clearRoutes();
     for (int s = 0; s < kScenes; ++s) scenes_[s].used = 0;
     for (int f = 0; f < kFreezeSlots; ++f) frz_[f].used = 0;
@@ -1233,10 +1267,18 @@ void Bulut::action(int k, bool shift) {
                 return;
             }
             if (k < 4) setSource(c, k);
-            if (k == 4) openBrowser(c);
+            if (k == 4) {   // TAPE FILE (on a TAPE FILE channel: its browser)
+                if (par_[c].source == kSrcTape) openTapeBrowser(c);
+                else setSource(c, kSrcTape);
+            }
             if (k == 5) swapSample(c, -1);
             if (k == 6) swapSample(c, 1);
             if (k == 7) {
+                if (par_[c].source == kSrcTape) {   // a TAPE FILE channel: play / stop the tape
+                    tapePlay(c, !tapePlaying(c));
+                    ctx_->toast(tapePlaying(c) ? "Tape plays" : "Tape stopped (the buffer holds)");
+                    return;
+                }
                 st_[c].hold ^= 1;
                 ctx_->toast(st_[c].hold ? "Buffer held" : "Buffer recording");
             }
@@ -1349,7 +1391,9 @@ void Bulut::addRoute(int c) {
 int Bulut::cursorParam() const {
     switch (page_) {
         case kPgSound: return cur_[kPgSound] < kKnobs ? cur_[kPgSound] : -1;
-        case kPgSource: return cur_[kPgSource] < 8 ? kSrcRows[cur_[kPgSource]] : -1;
+        case kPgSource:
+            if (tapeRows() && cur_[kPgSource] >= 5) return -1;   // the TAPE FILE rows are not channel params
+            return cur_[kPgSource] < 8 ? kSrcRows[cur_[kPgSource]] : -1;
         case kPgFx: return cur_[kPgFx] < 10 ? kFxRows[cur_[kPgFx]] : -1;
         case kPgClouds: {
             static const uint8_t kCol[4] = {CP::Level, CP::Pan, CP::Dly, CP::Rev};
@@ -1375,10 +1419,13 @@ void Bulut::arrows(int id) {
             if (dx) cur = (cur + dx + kKnobs) % kKnobs;
             if (dy) cur = (cur + dy * 4 + kKnobs) % kKnobs;
             break;
-        case kPgSource:
-            if (dy) cur = (cur + dy + 9) % 9;
+        case kPgSource: {
+            const int rows = tapeRows() ? 10 : 9;   // TAPE FILE: PLAY SPEED FROM LOOP POSITION on the right
+            if (cur >= rows) cur = rows - 1;
+            if (dy) cur = (cur + dy + rows) % rows;
             if (dx) encoder(dx, false);
             break;
+        }
         case kPgFx: {
             const int n = 10 + ctx_->mod().routeCount();
             if (dy) cur = (cur + dy + n) % n;
@@ -1444,7 +1491,10 @@ void Bulut::encoder(int d, bool fine) {
             break;
         case kPgSound: nudge(cur_[kPgSound] % kKnobs); break;
         case kPgSource:
-            if (cur_[kPgSource] < 8) {
+            if (cur_[kPgSource] >= (tapeRows() ? 10 : 9)) cur_[kPgSource] = tapeRows() ? 9 : 8;
+            if (tapeRows() && cur_[kPgSource] >= 5) {
+                tapeEncoder(cur_[kPgSource], d, fine);
+            } else if (cur_[kPgSource] < 8) {
                 const int idx = kSrcRows[cur_[kPgSource]];
                 if (idx == CP::Source) setSource(c, par_[c].source + d);
                 else nudge(idx);
@@ -1513,7 +1563,11 @@ void Bulut::encoder(int d, bool fine) {
 // Insert: confirm / use (stands in for the encoder push the Tracker does not have).
 void Bulut::insertKey() {
     switch (page_) {
-        case kPgSource: openBrowser(sel_); break;
+        case kPgSource:
+            if (tapeRows() && cur_[kPgSource] == 5) tapePlay(sel_, !tapePlaying(sel_));
+            else if (tapeRows() && cur_[kPgSource] == 9 && tape_[sel_].jumpTo >= 0.0f) tapeJump(sel_, tape_[sel_].jumpTo, true);
+            else openBrowser(sel_);
+            break;
         case kPgFx: addRoute(sel_); break;
         case kPgMotion:
             if (motionFocus_ == 2) {
@@ -1587,6 +1641,12 @@ void Bulut::deleteKey(bool shift) {
             }
             break;
         case kPgFile: return;
+        case kPgSource:
+            if (tapeRows() && cur_[kPgSource] >= 5) {
+                tapeDelete(cur_[kPgSource]);
+                return;
+            }
+            break;
         default: break;
     }
     // the param under the cursor back to its default; Shift: also no modulation on it
@@ -1637,12 +1697,21 @@ void Bulut::update(uint32_t ms) {
         pendingCh_ = -1;
         char m[64];
         const char* b = std::strrchr(p, '/');
-        if (std::strlen(p) < sizeof src_[c].path && loadSample(c, p))
-            std::snprintf(m, sizeof m, "%.40s -> CH %d", b ? b + 1 : p, c + 1);
-        else
-            std::snprintf(m, sizeof m, "Cannot load %.40s", b ? b + 1 : p);
-        ctx_->toast(m);
+        if (pendingTape_) {
+            pendingTape_ = false;
+            if (loadTape(c, p) && tape_[c].state != kTapeConv) {   // (a conversion says so itself)
+                std::snprintf(m, sizeof m, "%.36s -> CH %d tape", b ? b + 1 : p, c + 1);
+                ctx_->toast(m);
+            }
+        } else {
+            if (std::strlen(p) < sizeof src_[c].path && loadSample(c, p))
+                std::snprintf(m, sizeof m, "%.40s -> CH %d", b ? b + 1 : p, c + 1);
+            else
+                std::snprintf(m, sizeof m, "Cannot load %.40s", b ? b + 1 : p);
+            ctx_->toast(m);
+        }
     }
+    pumpTapes(ms);
     pumpParamEvents();
     pumpMorph(dt > 2.0f ? 2.0f : dt);   // wall clock (frames are ~16 ms)
     pumpTimeline();

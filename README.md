@@ -16,6 +16,8 @@ finished WAV (sound sources, sequencing, arrangement, mixing, stems).
 | [TILT](#tilt) | Pinball 2 Markov sequencer: 17x17 matrix, 8 sample/synth channels | [`PolyendTrackerTILTPB.ptf`](firmwares/tilt/release/PolyendTrackerTILTPB.ptf) | [MANUAL](firmwares/tilt/MANUAL.md) |
 | [PLATFORM](#platform) | Lua scripts and native apps from the SD card (norns-style, params/mod API); hosts all seven as apps | [`PolyendTrackerPLATFM.ptf`](firmwares/platform/release/PolyendTrackerPLATFM.ptf) | [MANUAL](firmwares/platform/MANUAL.md) |
 
+> **Built on OpenTracker v2 `1c8a529` (Apache-2.0).** To pull a newer upstream into every firmware: `tools/upstream_merge.py` ([LAB.md](LAB.md#updating-to-a-newer-upstream)).
+>
 > **Status: v0.1, not yet tested on a real Tracker.** Every image passed the
 > lab gate (below) in the simulator and under QEMU. Keep a stock image in
 > `/Firmware` when you try one.
@@ -200,6 +202,12 @@ Engines (what sounds) and players (what plays) are chosen separately per track.
   - **Warp** follows the tempo live (Beats / Texture).
   - **Offline time-stretch:** WSOLA, phase vocoder or repitch.
   - **Slice editor:** onset detection with a zoom view.
+- **Streaming from the card:**
+  - Long WAVs (whole tracks, stems, long loops) play straight from the SD card.
+  - A short head stays in memory; the rest is read ahead while playing.
+  - Late card reads fade instead of clicking.
+  - Per track: Auto / On / Off.
+  - Limits: 8 streamed voices, warp off, up to +12 semitones (MANUAL "Streaming from the card").
 - **Kit builder:** turn a break's slices into a 16-pad kit. Slices are
   sorted kick / snare / hat by onset classification. Each pad has tune,
   decay, filter, choke and reverse.

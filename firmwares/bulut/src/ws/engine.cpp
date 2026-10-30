@@ -1169,7 +1169,7 @@ void Engine::render(const lab::Transport& t, const lab::AudioIn& in, float* outL
     static float cl[kCh][kBlock], cr[kCh][kBlock];
     static float sendD[kBlock], sendR[kBlock], wetL[kBlock], wetR[kBlock];
     static float stemL[kStemCount][kBlock], stemR[kStemCount][kBlock];
-    static int16_t inS16[kBlock], mixS16[kBlock], genS16[kBlock];
+    static int16_t inS16[kBlock], mixS16[kBlock], genS16[kBlock], tapeS16[kBlock];
     PROF_BEGIN();
     if (t.startedThisBlock) resetGestures();
     spawnsLeft_ = kSpawnsPerBlock;
@@ -1201,7 +1201,8 @@ void Engine::render(const lab::Transport& t, const lab::AudioIn& in, float* outL
     for (int c = 0; c < kCh; ++c) {
         const ChParams& p = p_[c];
         const bool beadsTape = p.engine == kBeads && enumIndex(p.k[K::Mode], kMedias) == kMediaDirtyTape;
-        base[c] = baseUnits(p, beadsTape) + kMixUnits + (st_[c].freeze && rt[c].frzReady && p.bed > 0.01f ? kBedUnits : 0.0f);
+        base[c] = baseUnits(p, beadsTape) + kMixUnits + (st_[c].freeze && rt[c].frzReady && p.bed > 0.01f ? kBedUnits : 0.0f) +
+                  (p.source == kSrcTape && tapes ? kTapeUnits : 0.0f);
         cfg += base[c];
     }
     uint8_t bypass = 0, hold = 0;
@@ -1299,7 +1300,12 @@ void Engine::render(const lab::Transport& t, const lab::AudioIn& in, float* outL
         ChRt& r = rt[c];
         const ChParams& p = p_[c];
         const ChState& s = st_[c];
-        if (!r.busy && p.source != kSrcSample && !s.hold && !((hold >> c) & 1)) {
+        if (p.source == kSrcTape) {
+            // TAPE FILE: the tape runs like a live input (HOLD stops writing, not the tape)
+            const bool wrote = !r.busy && tapes && tapes->render(c, p.tapeSpeed, tapeS16);
+            if (wrote && !s.hold) writeBuffer(c, tapeS16);
+            else r.bufLevel *= 0.97f;
+        } else if (!r.busy && p.source != kSrcSample && !s.hold && !((hold >> c) & 1)) {
             PROF_MARK(2);
             if (p.source == kSrcInput) writeBuffer(c, inS16);
             else if (p.source == kSrcOutput) writeBuffer(c, mixS16);

@@ -16,6 +16,7 @@
 #include "lab/lab.h"
 #include "ws/bulut.h"
 #include "ws/fx.h"
+#include "ws/stream.h"
 
 namespace bulut {
 
@@ -190,6 +191,7 @@ public:
     volatile uint32_t sampleClock = 0;     // samples rendered
     volatile uint8_t soloMask = 0;
     volatile uint8_t playing = 0;
+    Tapes* tapes = nullptr;                // TAPE FILE sources (null: not available)
 
     ChRt rt[kCh];
     ChannelChain chain[kCh];
